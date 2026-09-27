@@ -1,4 +1,4 @@
-# CRAFT: Active Directory Kerberos Tickets for Linux
+# CRAFT: Certificate Request Agent for Tickets
 
 CRAFT obtains Kerberos credentials on behalf of an approved user, noninteractively, from a trusted and administrator-managed Linux endpoint. It supports unattended scripts and Kerberos-aware applications that need to access Active Directory resources as that user, even when the Linux host is not domain-joined. A short-lived certificate provides the authentication path, so automation does not need to collect, store, or replay the user's AD password.
 
