@@ -1,0 +1,46 @@
+# /etc/craft/config - root:craft 0640; protected root-owned parents.
+# Full-line comments only. Shipped disabled; review all placeholders.
+enabled=no
+
+domain=domain.local
+realm=DOMAIN.LOCAL
+netbios=DOMAIN
+
+# Use the actual template msPKI-Cert-Template-OID, not its display name.
+template_oid=1.3.6.1.4.1.311.21.8.999.1
+
+# CUSTOMIZE REQUESTED CERTIFICATE CN HERE: {user}, {upn}, {domain} supported.
+# {upn} uses the resolved AD UPN, including an alternate suffix.
+# Final CN must be 1-64 printable ASCII characters; the CA may override it.
+# This does not change UPN/SID binding or authorize enrollee-supplied identities.
+certificate_cn={user}
+
+# AD CS CES endpoint, not legacy /certsrv. Replace with the real endpoint.
+ces_url=https://ces.domain.local/IssuingCA_CES_Kerberos/service.svc/CES
+ces_auth=negotiate
+# Both CES modes require this principal and submitter.keytab for LDAP/GSSAPI.
+service_principal=svc-linux-enroll@DOMAIN.LOCAL
+
+# Alternative: ces_auth=mtls and a CES client-certificate endpoint, with
+# separate https-client.pem/.key in addition to the directory keytab.
+#
+# Active Directory Global Catalog lookup configuration (optional).
+# Defaults: gc_url=ldap://<domain>:3268, gc_base_dn derived from domain (e.g. DC=domain,DC=local).
+# gc_url=ldap://domain.local:3268
+# gc_base_dn=DC=domain,DC=local
+
+# Ticket and renewal lifetimes match the most permissive DISA STIG options:
+# DISA STIG limits user ticket lifetime (MaxTicketAge) to 10 hours (36000s) and
+# user ticket renewal (MaxRenewAge) to 7 days (604800s).
+# Note: RFC 4556 constrains initial ticket lifetime by client certificate validity,
+# so cert_remaining_max_seconds and cert_total_max_seconds also default to 10 hours.
+tgt_seconds=36000
+renew_seconds=604800
+require_full_tgt_lifetime=yes
+
+# CA/template must issue certificates no longer than 10 hours TOTAL.
+# These are acceptance caps, not a request to change CA validity policy.
+# CA backdating consumes part of the 10-hour total; it is not an extra allowance.
+cert_remaining_max_seconds=36000
+cert_total_max_seconds=36000
+minimum_interval_seconds=60

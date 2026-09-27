@@ -1,0 +1,13 @@
+#!/bin/sh
+# Ordinary optional wrapper. NEVER setuid this shell script.
+# Usage: with-craft command [argument ...]
+# Runs a command with a new user TGT selected in its environment.
+set -eu
+if [ "$#" -eq 0 ]; then
+    printf '%s\n' 'Usage: with-craft command [argument ...]' >&2
+    exit 2
+fi
+cache=$(/usr/local/bin/craft) || exit "$?"
+KRB5CCNAME=$cache
+export KRB5CCNAME
+exec "$@"

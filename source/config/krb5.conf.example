@@ -1,0 +1,33 @@
+# /etc/craft/krb5.conf — root:craft 0640
+# Do not include user-writable configuration or plugin paths.
+# API calls also restrict initial requests to AES256/AES128.
+# ticket_lifetime (10h) and renew_lifetime (7d) match DISA STIG DC limits.
+[libdefaults]
+    default_realm = DOMAIN.LOCAL
+    dns_lookup_realm = false
+    dns_lookup_kdc = false
+    dns_canonicalize_hostname = false
+    rdns = false
+    allow_weak_crypto = false
+    forwardable = false
+    proxiable = false
+    ticket_lifetime = 10h
+    renew_lifetime = 7d
+    kdc_default_options = 0
+    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+    udp_preference_limit = 1
+
+[realms]
+    DOMAIN.LOCAL = {
+        kdc = dc01.domain.local
+        pkinit_anchors = FILE:/etc/craft/kdc-trust.pem
+        pkinit_pool = FILE:/etc/craft/ca-trust.pem
+        pkinit_revoke = FILE:/etc/craft/kdc-crls.pem
+        pkinit_require_crl_checking = true
+        pkinit_eku_checking = kpKDC
+        pkinit_kdc_hostname = dc01.domain.local
+    }
+
+[domain_realm]
+    .domain.local = DOMAIN.LOCAL
+    domain.local = DOMAIN.LOCAL
