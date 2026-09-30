@@ -3,38 +3,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <iostream>
-#include <regex>
 using namespace craft;
-
-// Publish a private cache atomically only after dropping to the caller.
-static void publish(const Account &caller, ByteView cache)
-{
-    // Verify caller home directory format and path characters.
-    const static std::regex home_re(R"(^/(?:[^/\x00-\x1f\x7f]+/)*[^/\x00-\x1f\x7f]+$)");
-    need(std::regex_match(caller.home, home_re), "invalid home directory");
-
-    // Verify caller home directory ownership and restrictive file permissions.
-    const Fd home(open(caller.home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-    sysneed(home.get() >= 0, "open caller home after privilege drop");
-    struct stat st{};
-    sysneed(fstat(home.get(), &st) == 0, "stat home");
-    need(st.st_uid == caller.uid && !(st.st_mode & 0022),
-         "home must belong to caller and not be group/world-writable");
-
-    // Open temporary cache file with exclusive creation flags in caller home.
-    const auto temporary = std::format("{}.tmp.{}", CACHE_NAME, random_hex());
-    const Fd out(
-        openat(home.get(), temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
-    sysneed(out.get() >= 0, "create cache");
-    ScopeExit cleanup([&]() noexcept { unlinkat(home.get(), temporary.c_str(), 0); });
-
-    // Write cache payload, synchronize to disk, and rename atomically into place.
-    write_all(out.get(), cache);
-    sysneed(fsync(out.get()) == 0, "sync cache");
-    sysneed(renameat(home.get(), temporary.c_str(), home.get(), CACHE_NAME) == 0, "publish cache");
-    cleanup.release();
-    sysneed(fsync(home.get()) == 0, "sync home directory");
-}
 
 int main(int argc, char **)
 {
@@ -142,7 +111,8 @@ int main(int argc, char **)
         // Validate ticket cache format and publish to caller's home directory.
         need(cache.size() > 4 && cache[0] == 5 && cache[1] == 4,
              "worker returned no valid FILE-cache header");
-        publish(caller, cache);
+        const Fd home = caller_home(caller), lock = cache_lock(home.get(), CACHE_LOCK);
+        publish_cache(caller, cache);
         std::cout << std::format("FILE:{}/{}\n", caller.home, CACHE_NAME);
         return 0;
     }

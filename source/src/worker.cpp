@@ -749,31 +749,6 @@ inline Cert parse_response(const std::string &body, EVP_PKEY *expected_key)
     return result;
 }
 
-// Restrict both transport and user initial credentials to interoperable AES enctypes.
-inline constexpr std::array AES_TYPES{ENCTYPE_AES256_CTS_HMAC_SHA1_96, ENCTYPE_AES128_CTS_HMAC_SHA1_96};
-
-inline constexpr bool is_aes(krb5_enctype type) noexcept
-{
-    return std::ranges::find(AES_TYPES, type) != AES_TYPES.end();
-}
-
-inline void require_aes_key(const krb5_keyblock &key)
-{
-    need(is_aes(key.enctype) && key.contents &&
-             key.length == (key.enctype == ENCTYPE_AES256_CTS_HMAC_SHA1_96 ? 32U : 16U),
-         "KDC session key is not a valid AES128/AES256 key");
-}
-
-inline krb5_enctype ticket_enctype(krb5_context ctx, const krb5_data &encoded)
-{
-    auto ticket = krb_owner<krb5_ticket, krb5_free_ticket>(ctx);
-    const auto code = krb5_decode_ticket(&encoded, out(ticket));
-    need(code == 0 && ticket, "decode returned TGT envelope");
-    need(is_aes(ticket->enc_part.enctype),
-         "KDC encrypted the TGT with a non-AES key; review krbtgt keys/policy");
-    return ticket->enc_part.enctype;
-}
-
 // Keep the context alive longer than every context-dependent RAII resource.
 class Kerberos
 {
@@ -953,44 +928,6 @@ inline Fd memory_file(const char *name, ByteView b)
     sysneed(fcntl(f.get(), F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL) == 0,
             "seal memfd");
     return f;
-}
-
-inline void u32(Bytes &b, uint32_t n)
-{
-    b.push_back(static_cast<unsigned char>(n >> 24));
-    b.push_back(static_cast<unsigned char>(n >> 16));
-    b.push_back(static_cast<unsigned char>(n >> 8));
-    b.push_back(static_cast<unsigned char>(n));
-}
-
-inline void counted(Bytes &b, const krb5_data &d)
-{
-    u32(b, d.length);
-    b.insert(b.end(), d.data, d.data + d.length);
-}
-
-inline Bytes file_cache(krb5_context ctx, krb5_creds &cred)
-{
-    // Write the v4 FILE header and principal; let MIT serialize the credential record.
-    Bytes b{5, 4, 0, 0};
-    krb5_principal p = cred.client;
-    u32(b, static_cast<uint32_t>(krb5_princ_type(ctx, p)));
-    u32(b, static_cast<uint32_t>(krb5_princ_size(ctx, p)));
-    counted(b, *krb5_princ_realm(ctx, p));
-    for (int i = 0; i < krb5_princ_size(ctx, p); ++i)
-        counted(b, *krb5_princ_component(ctx, p, i));
-    krb5_data *marshaled = nullptr;
-    ScopeExit free_marshaled([&]() noexcept
-    {
-        // Securely erase and release Kerberos data buffer.
-        if (!marshaled) return;
-        if (marshaled->data) OPENSSL_cleanse(marshaled->data, marshaled->length);
-        krb5_free_data(ctx, marshaled);
-    });
-    need(krb5_marshal_credentials(ctx, &cred, &marshaled) == 0, "serialize TGT failed");
-    need(b.size() + marshaled->length <= MAX_BLOB, "TGT cache exceeds size limit");
-    b.insert(b.end(), marshaled->data, marshaled->data + marshaled->length);
-    return b;
 }
 
 inline krb5_error_code refuse_prompt(krb5_context, void *, const char *, const char *, int, krb5_prompt[])

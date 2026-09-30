@@ -12,6 +12,7 @@ The synthetic fixtures cover:
 - Ten-hour requested/granted initial lifetime, seven-day renewal lifetime checks, strict short-grant refusal and explicit shorter-grant warnings; renewable and non-renewable validation; ticket flags, principal, key length and AES128/AES256 session/envelope validation; RC4 rejection.
 - Exception-safe C output adoption, resource ownership, secret-buffer erasure, bounded I/O, sealed memfd behavior, WSTEP parsing and malformed/DTD/oversized responses.
 - Version-4 FILE cache serialization read back by MIT Kerberos.
+- Maintainer options/scheduling, renewal validation, service-ticket preservation, atomic publication, locking and job-exit tracking.
 
 The test tickets use the literal marker `NOT-A-REAL-TICKET` as ciphertext. These are local parser/policy fixtures, not forged working tickets, authenticated Kerberos exchanges or proof that a Windows KDC grants the requested lifetime. No real user credentials, CA enrollment or domain-controller traffic was used.
 
@@ -39,6 +40,39 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 ./build-sanitize/craft-tests
 ```
+
+## Detached-maintainer integration checks
+
+The native `craft-maintain-tests` harness uses synthetic caches and an issuer copied from `craft-tests`.
+Run it separately from CTest in a disposable Linux container; it refuses ordinary accounts or mismatched issuers.
+After building, prepare and run it inside that container:
+
+```sh
+useradd --create-home --shell /bin/sh craft-maintain-test
+chmod 0700 /home/craft-maintain-test
+install -o root -g root -m 0755 build/craft-tests /usr/local/bin/craft
+printf '[libdefaults]\n dns_lookup_kdc = false\n udp_preference_limit = 1\n[realms]\n DOMAIN.LOCAL = {\n  kdc = 127.0.0.1:9\n }\n' > /etc/krb5.conf
+runuser -u craft-maintain-test -- build/craft-maintain-tests build/craft-maintain build/craft-tests
+```
+
+Checks cover startup/closed pipes, status, job-exit/duration cleanup, credential expiry/rollover, concurrent starts,
+shared backoff, cancellation and unsafe caches. The KDC address intentionally refuses connections to verify renewal
+failures preserve credentials without enrollment. These checks establish lifecycle behavior, not live renewal success.
+
+## Maintainer Validation — September 30, 2026
+
+Validated the uncommitted working tree based on `c1f857c` in a disposable Ubuntu 24.04 container with GCC 13.3,
+MIT Kerberos 1.20.1, OpenSSL 3.0.13, libcurl 8.5.0, libxml2 2.9.14, OpenLDAP 2.6.10 and Cyrus SASL 2.1.28.
+
+- Release/CTest: 78 offline checks passed; AddressSanitizer passed with leak detection.
+- Native harness: 15 checks and account/issuer guards passed with address/undefined-behavior sanitizers
+  and only the documented build dependencies.
+- MIT KDC: a ten-second AES256 TGT with a sixty-second renewal window renewed twice, retaining the deadline and
+  a usable service ticket after the bootstrap keytab was removed. The disabled issuer was never called;
+  job exit stopped maintenance.
+
+AD CS/PKINIT renewal after certificate expiry, full renewal-window rollover and the actual scheduler/application
+still require live acceptance testing.
 
 ## Windows Helper Checks
 
@@ -77,6 +111,7 @@ Tested source commit `514b851` and updated DISA STIG configuration on the two-no
 6. Invoke the installed launcher directly as the approved user. Inspect ownership/mode and run `klist -ef -c FILE:/actual/home/.krb5cc_craft`. Check actual start/end time, renewable/nonforwardable/nonproxiable flags, renewal expiry, AES session key and ticket encryption. Confirm a real application obtains a service ticket.
 7. Verify unknown AD users, CLI overrides, forged environment values, service/root UID invocation, changed UID/name mappings, wrong SID/template/key, missing EKUs, expired CRLs, RC4 and excessive certificate validity fail without replacing a valid cache.
 8. Exercise the installed setuid/fexecve/drop boundary, concurrent calls, process termination, timeouts, network failure, caller-home symlinks and writable/renamed homes. Confirm other UIDs cannot read the cache.
-9. Review AUTHPRIV/CA/CES/KDC logs. Document CRL refresh, credential rotation, account lifecycle, CA capacity, cache exclusions from backups, ticket expiry, operational disable and incident-response procedures.
+9. Test `craft-maintain` with the actual scheduler/application: renewal after certificate expiry, renewal-window rollover, KDC/CES outages, concurrent jobs and reconnects. Confirm maintenance lasts for the job and stops with its watched PID; check status and certificate issuance counts.
+10. Review AUTHPRIV/CA/CES/KDC logs. Document CRL refresh, credential rotation, account lifecycle, CA capacity, cache exclusions from backups, ticket expiry, operational disable and incident-response procedures.
 
 Do not keep increasing lifetime caps simply to accommodate an unexpectedly long-lived default template. Review and fix the CA-side short-lived issuance policy.

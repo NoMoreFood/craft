@@ -18,6 +18,7 @@ After enrollment and authentication, the user selects the resulting credential c
 ## Features
 
 - Noninteractive user ticket acquisition from trusted Linux endpoints, with no stored user AD password.
+- Detached TGT renewal and periodic fresh enrollment for long-running jobs.
 - AD CS enrollment-on-behalf-of using an administrator-provisioned enrollment-agent certificate.
 - HTTP Negotiate or mutual TLS for CES transport, with LDAP/GSSAPI directory lookup.
 - Active Directory SID and UPN checks against the issued certificate.
@@ -38,6 +39,20 @@ ctest --test-dir build --output-on-failure
 ```
 
 Continue with the [deployment overview](README-FIRST.md) and [configuration and installation guide](source/README.md). Configuration ships disabled; deployment requires administrator setup of both the Linux host and the AD CS environment.
+
+## Long-running jobs
+
+Start once from the batch script as the approved user:
+
+```sh
+job_pid=$$
+cache=$(/usr/local/bin/craft-maintain --watch-pid "$job_pid") || exit "$?"
+export KRB5CCNAME="$cache"
+```
+
+`craft-maintain` renews TGTs without certificates, obtains fresh credentials near the absolute renewal deadline,
+and stops with the watched process. Use the job controller PID if the startup shell exits early. No cron entry or
+job wrapper is needed. See the [usage guide](source/README.md#long-running-jobs) for setup, status and limits.
 
 ## Documentation
 

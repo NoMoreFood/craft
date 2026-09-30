@@ -10,6 +10,8 @@ Restrict the enrollment agent at the CA to a dedicated template and approved rec
 
 The default ten-hour initial user TGT with seven-day renewal matches the most permissive DISA STIG guidance for domain controllers. A ten-hour certificate does not revoke an already-issued ticket, and destroying its private key does not destroy a cached TGT. A stolen mode-0600 cache still carries an independent session key. Do not treat certificate expiry, local deletion, or changing a file permission as ticket revocation.
 
+`craft-maintain` renews cached tickets, obtains fresh credentials near the absolute renewal deadline, and stops with its watched job. It retains no user certificate/key and leaves the shared cache in place. Refresh failures preserve the cache; enrollment retries share backoff.
+
 The worker does not forge or extend a KDC-issued ticket. RFC 4556 key/certificate-lifetime rules bind the initial ticket to the certificate validity. Strict mode rejects shortened initial grants and shortened renewable windows. AES128/256 checks cover session and outer ticket encryption, but do not compensate for excessive validity or host compromise.
 
 Manage trusted NSS and account lifecycle centrally so that Linux usernames strictly match their corresponding Active Directory sAMAccountName. The actual AD SID is resolved directly from Active Directory and verified against the CA-issued certificate; the client never inserts a chosen SID into its CSR. A custom CSR CN cannot change the authenticated identity.
@@ -17,6 +19,8 @@ Manage trusted NSS and account lifecycle centrally so that Linux usernames stric
 ## Privilege Separation
 
 `craft` is the only intended setuid executable. It uses the real UID, accepts no arguments, clears the environment, opens a fixed root-controlled worker executable, and drops every real/effective/saved UID/GID before processing the returned cache or opening the caller's home. The worker runs under a dedicated non-root account; neither program invokes a shell. Credentials travel from worker to parent through a pipe; user keys use sealed memfd objects.
+
+Run `craft-maintain` without setuid/setgid. It uses system Kerberos configuration, invokes the fixed `craft` launcher, and coordinates cache publication through private locks. Watched PIDs must belong to the caller; status files are private.
 
 Only the service account should belong to the `craft` service group. The separately named `craft-users` group controls who may execute the launcher, in addition to Active Directory user account validation and runtime UID revalidation. Never give ordinary users the ability to run arbitrary commands as the service account.
 
@@ -51,4 +55,4 @@ Follow [TESTING.md](TESTING.md). A successful build or synthetic cryptographic t
 
 ## Immediate Disable
 
-As an administrator, remove the launcher's setuid bit/execute permission, set `enabled=no`, and revoke affected enrollment-agent/transport credentials if compromise is suspected. Already-issued Kerberos tickets can remain usable until expiry; file deletion alone is not revocation. Investigate CA, CES, KDC and local AUTHPRIV logs, and follow your organization's incident-response process.
+Remove the launcher's setuid/execute permission and set `enabled=no` to disable fresh enrollment. Stop renewal by sending SIGTERM to active maintainers' recorded `maintainer_pid`. Revoke affected enrollment-agent/transport credentials if compromise is suspected. Issued tickets can remain valid until expiry; deleting a cache is not revocation. Review CA/CES/KDC/AUTHPRIV logs and follow your incident-response process.

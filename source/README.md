@@ -40,7 +40,7 @@ The TGT stays in the user's cache after CRAFT exits. Applications can request se
 
 Each enrollment attempt generates a fresh user private key. The issued certificate and key stay in process memory and temporary memory-backed files during PKINIT. CRAFT does not save them as persistent PEM/PFX files, install them in a certificate store, or place them in the caller's home, `/etc/craft`, `/run/craft`, or a temporary directory. The temporary files close after authentication, and the worker releases its certificate and key when it exits. The user private key is generated locally and is not submitted to the CA.
 
-The persistent user credential is `.krb5cc_craft` in the caller's actual home. It contains the Kerberos TGT and session key, not the issued certificate or private key. Applications use the cache to obtain service tickets, and eligible TGT renewal uses the cache without the discarded certificate/key. CRAFT has no background renewal service and does not remove an expired cache automatically. A new successful run replaces the cache using a fresh enrollment.
+The persistent `.krb5cc_craft` cache in the caller's home contains the TGT and session key, without the user certificate or private key. Applications use it for service tickets; renewal needs no certificate/key. `craft-maintain` automates renewal and fresh enrollment for a watched job. Successful enrollment replaces the cache; expired caches are not deleted automatically.
 
 Administrator-provisioned enrollment-agent and transport credentials remain under `/etc/craft`; they are separate from the temporary user identity. `/run/craft` holds per-user lock and timing information. The CA may retain the issued public certificate, request, and audit records even after a failed run; CRAFT does not automatically cancel issuance or revoke it.
 
@@ -79,7 +79,7 @@ The program requests **36000 seconds (10 hours) of initial TGT validity and 6048
 
 **PKINIT constraint:** RFC 4556 section 3.2.3 binds initial ticket lifetime to the client key-pair lifetime, which defaults to certificate validity unless configured otherwise. Thus, the client certificate template validity and acceptance caps are set to 10 hours to permit the full 10-hour initial grant. This package does not establish a Windows-specific override or bypass the KDC. Validate actual behavior in your isolated lab. [12]
 
-`require_full_tgt_lifetime=yes` makes a shorter initial grant or shortened renewable window fail without replacing an existing cache. A five-second comparison tolerance covers timestamp rounding. An administrator may set `no` to explicitly accept a shorter grant with a stderr warning. Returned times and encrypted ticket bytes are never rewritten. There is no automatic renewal or re-enrollment daemon; user tickets may be renewed up to the 7-day limit using standard Kerberos tools (e.g., `kinit -R`).
+`require_full_tgt_lifetime=yes` makes a shorter initial grant or shortened renewable window fail without replacing an existing cache. A five-second comparison tolerance covers timestamp rounding. An administrator may set `no` to explicitly accept a shorter grant with a stderr warning. Returned times and encrypted ticket bytes are never rewritten. `craft-maintain` automates renewal and fresh enrollment; `kinit -R` supports manual renewal.
 
 ### Editable Certificate Common Name
 
@@ -149,6 +149,8 @@ sudo install -o root -g craft -m 0750 \
     build/craft-worker /usr/local/libexec/craft-worker
 sudo install -o root -g craft-users -m 0750 \
     build/craft /usr/local/bin/craft
+sudo install -o root -g craft-users -m 0750 \
+    build/craft-maintain /usr/local/bin/craft-maintain
 
 sudo install -o root -g craft -m 0640 \
     config/config.example /etc/craft/config
@@ -222,6 +224,46 @@ The optional ordinary wrapper `scripts/with-craft` runs any command with the new
 ```
 
 The executable cannot modify a parent shell's environment. The cache belongs to the caller and contains that caller's TGT and session key. Treat it as a sensitive credential; exclude it from backups, sync and indexing where practicable. Existing content at the fixed cache name is intentionally replaced only after successful enrollment/PKINIT and file publication. Nothing automatically removes an expired cache.
+
+### Long-running jobs
+
+Start once from the batch script as the approved user:
+
+```sh
+job_pid=$$
+cache=$(/usr/local/bin/craft-maintain --watch-pid "$job_pid") || exit "$?"
+export KRB5CCNAME="$cache"
+```
+
+The command returns when usable credentials and detached maintenance are ready. It renews TGTs without certificates
+and reenrolls near the absolute renewal deadline. Ten-hour/seven-day grants normally renew at eight hours and reenroll
+around day six; actual ticket times set the schedule. No cron entry or job wrapper is needed.
+
+Install `craft-maintain` without setuid/setgid on Linux 5.3+ with `/proc`. Configure the administrator-controlled
+system `/etc/krb5.conf` for the enrollment realm, KDC and AES settings. Renewal ignores user Kerberos overrides.
+The scheduler must retain background processes in the job cgroup and permit later setuid `craft` calls;
+inherited `no_new_privs` blocks those calls.
+
+The watched PID must belong to the caller and last for the job: keep the shell alive, `exec` the job from it,
+or watch its controller. Maintenance stops with that PID; optional `--max-duration 21d` adds a cutoff.
+Jobs for one UID coordinate changes to the shared cache, which remains after maintenance stops.
+Applications must reload refreshed credentials when authenticating again.
+
+Inspect as the same user, using the original watched PID:
+
+```sh
+/usr/local/bin/craft-maintain --status --watch-pid "$job_pid"
+klist -ef -c "$KRB5CCNAME"
+```
+
+Status reports `ready`, `retrying`, `expired`, `stopped`, or `failed`, Unix ticket times and the last error;
+`next_check=0` means stopped. A successful read does not prove credential health.
+Private `.krb5cc_craft.maintain.PID.status` files remain after exit; events use the `craft-maintain` AUTHPRIV log identity.
+
+Refresh requests follow ticket deadlines. Renewal failures preserve the cache and retry without immediate enrollment.
+Fresh enrollment is needed for missing/expired TGTs, nonrenewable TGTs near expiry, or renewal-window rollover.
+Failed enrollments share a cooldown from one minute to one hour. Startup requires a usable TGT; later failures
+appear in status/logs and never stop the job. Keep CRLs, enrollment credentials and KDC connectivity current.
 
 ## Limits and Failure Behavior
 

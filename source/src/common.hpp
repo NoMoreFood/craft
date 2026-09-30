@@ -2,6 +2,7 @@
 
 // CRAFT: Certificate Request Agent For Tickets.
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <sys/types.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
@@ -23,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <ranges>
+#include <regex>
 #include <set>
 #include <span>
 #include <sstream>
@@ -36,6 +38,9 @@
 namespace craft
 {
 inline constexpr char CONFIG_DIR[] = "/etc/craft";
+inline constexpr char LAUNCHER[] = "/usr/local/bin/craft";
+inline constexpr char CACHE_LOCK[] = ".krb5cc_craft.lock";
+inline constexpr char MAINTAIN_LOCK[] = ".krb5cc_craft.maintain.lock";
 inline constexpr char WORKER[] = "/usr/local/libexec/craft-worker";
 inline constexpr char SERVICE_USER[] = "craft";
 inline constexpr char CACHE_NAME[] = ".krb5cc_craft";
@@ -431,4 +436,57 @@ inline std::string random_hex(size_t count = 16)
     }
     return result;
 }
+
+// Open the caller-owned cache directory after privilege has been relinquished.
+inline Fd caller_home(const Account &caller)
+{
+    // Verify caller home directory format and path characters.
+    const static std::regex home_re(R"(^/(?:[^/\x00-\x1f\x7f]+/)*[^/\x00-\x1f\x7f]+$)");
+    need(std::regex_match(caller.home, home_re), "invalid home directory");
+
+    // Verify caller home directory ownership and restrictive file permissions.
+    Fd home(open(caller.home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    sysneed(home.get() >= 0, "open caller home after privilege drop");
+    struct stat st{};
+    sysneed(fstat(home.get(), &st) == 0, "stat home");
+    need(st.st_uid == caller.uid && !(st.st_mode & 0022),
+         "home must belong to caller and not be group/world-writable");
+
+    return home;
+}
+
+// Serialize cache changes using a private, stable lock file.
+inline Fd cache_lock(int home, const char *name)
+{
+    Fd lock(openat(home, name, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0600));
+    sysneed(lock.get() >= 0, "open cache lock");
+    struct stat st{};
+    sysneed(fstat(lock.get(), &st) == 0, "stat cache lock");
+    need(S_ISREG(st.st_mode) && st.st_uid == getuid() && st.st_nlink == 1 && !(st.st_mode & 0077),
+         "cache lock must be caller-owned, regular and private");
+    while (flock(lock.get(), LOCK_EX) != 0)
+        if (errno != EINTR) fail("lock credential cache");
+    return lock;
+}
+
+// Publish a private cache atomically only after dropping to the caller.
+inline void publish_cache(const Account &caller, ByteView cache)
+{
+    const Fd home = caller_home(caller);
+
+    // Open temporary cache file with exclusive creation flags in caller home.
+    const auto temporary = std::format("{}.tmp.{}", CACHE_NAME, random_hex());
+    const Fd out(
+        openat(home.get(), temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+    sysneed(out.get() >= 0, "create cache");
+    ScopeExit cleanup([&]() noexcept { unlinkat(home.get(), temporary.c_str(), 0); });
+
+    // Write cache payload, synchronize to disk, and rename atomically into place.
+    write_all(out.get(), cache);
+    sysneed(fsync(out.get()) == 0, "sync cache");
+    sysneed(renameat(home.get(), temporary.c_str(), home.get(), CACHE_NAME) == 0, "publish cache");
+    cleanup.release();
+    sysneed(fsync(home.get()) == 0, "sync home directory");
+}
+
 } // namespace craft

@@ -19,11 +19,17 @@ After enrollment and authentication, the user selects the resulting credential c
 
 | Component | Path / Value |
 | --- | --- |
-| Launcher / worker | `craft` / `craft-worker` |
+| Launcher / worker / maintainer | `craft` / `craft-worker` / `craft-maintain` |
 | Configuration / runtime | `/etc/craft/` / `/run/craft/` |
 | Service account/group / caller group | `craft` / `craft-users` |
 | Credential cache | `.krb5cc_craft` in the caller's trusted home |
 | Optional wrapper | `with-craft` |
+
+## Long-running jobs
+
+Start `craft-maintain` once as the batch user to renew TGTs and obtain fresh credentials near the renewal deadline.
+It runs in the background and stops with the watched job; no cron entry or wrapper is needed.
+Follow the [usage guide](source/README.md#long-running-jobs) for startup, host setup and status.
 
 ## Certificate and Ticket Storage
 

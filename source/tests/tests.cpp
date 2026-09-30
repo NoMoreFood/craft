@@ -1,6 +1,7 @@
 // Offline tests use synthetic identities and tickets; no CA or KDC is contacted.
 #define CRAFT_TEST
 #include "../src/worker.cpp"
+#include "../src/maintain.cpp"
 using namespace craft;
 
 static int passed = 0, failed = 0;
@@ -660,8 +661,275 @@ static void revision_tests(const Config &cfg, const Mapping &map, EVP_PKEY *key,
     });
 }
 
-int main()
+static void maintenance_tests()
 {
+    using namespace craft::maintain;
+    test("maintenance options require an explicit job and bounded durations", [] {
+        auto parse = [](std::initializer_list<const char *> values)
+        {
+            std::vector<char *> args;
+            for (auto value : values) args.push_back(const_cast<char *>(value));
+            return options(static_cast<int>(args.size()), args.data());
+        };
+        auto normal = parse({"craft-maintain", "--watch-pid", "123", "--max-duration", "21d"});
+        need(normal.watch == 123 && normal.maximum == 1814400 && !normal.status, "duration parsing");
+        need(parse({"craft-maintain", "--status", "--watch-pid", "123"}).status, "status parsing");
+        need(parse({"craft-maintain", "--help"}).help, "help parsing");
+        rejects([&] { parse({"craft-maintain"}); });
+        rejects([&] { parse({"craft-maintain", "--watch-pid", "0"}); });
+        rejects([&] { parse({"craft-maintain", "--watch-pid", "1", "--watch-pid", "2"}); });
+        rejects([&] { parse({"craft-maintain", "--watch-pid", "1", "--max-duration", "0d"}); });
+        rejects([&] { parse({"craft-maintain", "--watch-pid", "1", "--max-duration", "2w"}); });
+        rejects([&] { parse({"craft-maintain", "--watch-pid", "1", "--max-duration", "999999999d"}); });
+    });
+
+    const auto now = static_cast<krb5_timestamp>(time(nullptr));
+    KrbContext context;
+    need(krb5_init_context(out(context)) == 0, "maintenance test context");
+    const auto ctx = context.get();
+    auto client = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+    auto server = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+    need(krb5_parse_name(ctx, "alice@DOMAIN.LOCAL", out(client)) == 0 &&
+             krb5_parse_name(ctx, "krbtgt/DOMAIN.LOCAL@DOMAIN.LOCAL", out(server)) == 0,
+         "maintenance fixture principals");
+    std::array<unsigned char, 32> key{};
+    auto ticket = ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96);
+    auto tgt = make_test_creds(client.get(), server.get(), key, now);
+    tgt.ticket = {.magic = 0, .length = static_cast<unsigned int>(ticket.size()),
+                  .data = reinterpret_cast<char *>(ticket.data())};
+
+    test("maintenance schedules renewal and weekly enrollment from actual deadlines", [&] {
+        need(schedule(nullptr, now).action == Action::Enroll, "missing cache did not enroll");
+        need(schedule(&tgt, now).action == Action::Idle && schedule(&tgt, now).delay == 900,
+             "healthy cache contacted the KDC");
+        need(schedule(&tgt, now + 28800).action == Action::Renew, "eight-hour renewal threshold");
+        need(schedule(&tgt, now + 36000).action == Action::Enroll, "expired ticket did not enroll");
+        auto near_window = tgt;
+        near_window.times.authtime = now - 6 * 86400;
+        near_window.times.renew_till = now + 86400;
+        need(schedule(&near_window, now).action == Action::Enroll, "renewal deadline did not enroll");
+        auto shorter = tgt;
+        shorter.times.endtime = now + 120;
+        shorter.times.renew_till = now + 600;
+        need(schedule(&shorter, now).action == Action::Idle && schedule(&shorter, now).delay == 96,
+             "short grants caused immediate enrollment");
+        need(schedule(&shorter, now + 96).action == Action::Renew, "short grant renewal threshold");
+        auto nonrenewable = tgt;
+        nonrenewable.ticket_flags &= ~TKT_FLG_RENEWABLE;
+        nonrenewable.times.renew_till = 0;
+        need(schedule(&nonrenewable, now).action == Action::Idle, "healthy nonrenewable ticket re-enrolled");
+        need(schedule(&nonrenewable, now + 28800).action == Action::Enroll,
+             "nonrenewable ticket did not refresh near expiry");
+    });
+
+    auto old = tgt;
+    old.times.authtime = now - 28800;
+    old.times.starttime = old.times.authtime;
+    old.times.endtime = now + 7200;
+    old.times.renew_till = old.times.authtime + 604800;
+    auto renewed = old;
+    renewed.times.starttime = now;
+    renewed.times.endtime = now + 36000;
+    renewed.ticket_flags &= ~TKT_FLG_INITIAL;
+    test("renewal accepts original authentication time and an unchanged absolute renewal window", [&] {
+        validate_renewed_tgt(ctx, old, renewed, now);
+        auto shorter = renewed;
+        shorter.times.renew_till -= 3600;
+        validate_renewed_tgt(ctx, old, shorter, now);
+    });
+    test("renewal rejects new windows, changed identities, excessive grants and prohibited flags", [&] {
+        auto reject = [&](auto mutation)
+        {
+            auto bad = renewed;
+            mutation(bad);
+            rejects([&] { validate_renewed_tgt(ctx, old, bad, now); });
+        };
+        reject([](auto &c) { c.times.renew_till += 1; });
+        reject([](auto &c) { c.times.authtime += 1; });
+        reject([](auto &c) { c.times.endtime += 6; });
+        reject([&](auto &c) { c.times.endtime = old.times.endtime; });
+        reject([](auto &c) { c.ticket_flags |= TKT_FLG_FORWARDABLE; });
+        reject([](auto &c) { c.ticket_flags &= ~TKT_FLG_PRE_AUTH; });
+        reject([](auto &c) { c.keyblock.enctype = ENCTYPE_ARCFOUR_HMAC; });
+        reject([&](auto &c) { c.client = server.get(); });
+    });
+
+    char directory[] = "/tmp/craft-maintain-test-XXXXXX";
+    need(mkdtemp(directory) != nullptr, "maintenance test directory");
+    const Account caller{.uid = getuid(), .gid = getgid(), .name = "alice", .home = directory};
+    ScopeExit cleanup([&]() noexcept
+    {
+        for (auto name : {CACHE_NAME, CACHE_LOCK, "outside", "source", "lock", "target"})
+            unlink((caller.home + "/" + name).c_str());
+        rmdir(directory);
+    });
+    test("atomic cache publication retains private ownership and leaves the old inode readable", [&] {
+        auto bytes = file_cache(ctx, old);
+        publish_cache(caller, bytes);
+        Fd previous(open((caller.home + "/" + CACHE_NAME).c_str(), O_RDONLY | O_CLOEXEC));
+        auto fresh = file_cache(ctx, renewed);
+        publish_cache(caller, fresh);
+        const Fd current(open((caller.home + "/" + CACHE_NAME).c_str(), O_RDONLY | O_CLOEXEC));
+        struct stat st{};
+        need(fstat(current.get(), &st) == 0 && st.st_uid == caller.uid && (st.st_mode & 0777) == 0600,
+             "cache publication permissions");
+        need(read_all(previous.get()) == bytes && read_all(current.get()) == fresh, "publication lost an inode");
+        wipe(bytes);
+        wipe(fresh);
+        need(chmod(directory, 0777) == 0, "make unsafe home fixture");
+        rejects([&] { caller_home(caller); });
+        need(chmod(directory, 0700) == 0, "restore home permissions");
+    });
+    test("cache locking refuses symlinks and serializes different processes", [&] {
+        const Fd home = caller_home(caller);
+        need(symlink("outside", (caller.home + "/lock").c_str()) == 0, "test lock symlink");
+        rejects([&] { cache_lock(home.get(), "lock"); });
+        unlink((caller.home + "/lock").c_str());
+        Fd locked = cache_lock(home.get(), CACHE_LOCK);
+        std::array<int, 2> descriptors{};
+        need(pipe2(descriptors.data(), O_CLOEXEC) == 0, "lock test pipe");
+        Fd reader(descriptors[0]), writer(descriptors[1]);
+        const auto child = fork();
+        need(child >= 0, "lock test fork");
+        if (child == 0)
+        {
+            locked = Fd();
+            reader = Fd();
+            const auto acquired = cache_lock(home.get(), CACHE_LOCK);
+            const unsigned char value = 1;
+            _exit(write(writer.get(), &value, 1) == 1 ? 0 : 1);
+        }
+        writer = Fd();
+        ScopeExit reap([&]() noexcept { kill(child, SIGKILL); waitpid(child, nullptr, 0); });
+        pollfd ready{reader.get(), POLLIN, 0};
+        need(poll(&ready, 1, 100) == 0, "second process acquired held lock");
+        locked = Fd();
+        need(poll(&ready, 1, 2000) > 0, "second process did not acquire released lock");
+        int status{};
+        need(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+             "lock test child failed");
+        reap.release();
+    });
+    test("renewed cache preserves usable service tickets and removes the old TGT and expired services", [&] {
+        auto source = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
+        const auto filename = caller.home + "/source";
+        need(krb5_cc_resolve(ctx, ("FILE:" + filename).c_str(), out(source)) == 0, "resolve source cache fixture");
+        need(krb5_cc_initialize(ctx, source.get(), client.get()) == 0 &&
+                 krb5_cc_store_cred(ctx, source.get(), &old) == 0, "source cache fixture");
+        auto service = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+        auto expired = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+        need(krb5_parse_name(ctx, "ldap/host@DOMAIN.LOCAL", out(service)) == 0 &&
+                 krb5_parse_name(ctx, "cifs/host@DOMAIN.LOCAL", out(expired)) == 0, "service fixture");
+        char service_ticket[] = "SYNTHETIC SERVICE";
+        auto extra = old;
+        extra.server = service.get();
+        extra.ticket = {.magic = 0, .length = sizeof(service_ticket) - 1, .data = service_ticket};
+        need(krb5_cc_store_cred(ctx, source.get(), &extra) == 0, "store service fixture");
+        extra.server = expired.get();
+        extra.times.endtime = now - 1;
+        need(krb5_cc_store_cred(ctx, source.get(), &extra) == 0, "store expired fixture");
+        auto bytes = renewed_cache(ctx, source.get(), renewed, now);
+        publish_cache(caller, bytes);
+        wipe(bytes);
+        auto target = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
+        need(krb5_cc_resolve(ctx, ("FILE:" + caller.home + "/" + CACHE_NAME).c_str(), out(target)) == 0,
+             "open renewed cache");
+        krb5_cc_cursor cursor{};
+        need(krb5_cc_start_seq_get(ctx, target.get(), &cursor) == 0, "iterate renewed fixture");
+        ScopeExit end([&]() noexcept { krb5_cc_end_seq_get(ctx, target.get(), &cursor); });
+        int count = 0;
+        for (;;)
+        {
+            krb5_creds found{};
+            ScopeExit free([&]() noexcept { krb5_free_cred_contents(ctx, &found); });
+            const auto code = krb5_cc_next_cred(ctx, target.get(), &cursor, &found);
+            if (code == KRB5_CC_END) break;
+            need(code == 0, "read renewed fixture");
+            if (krb5_principal_compare(ctx, found.server, server.get()))
+                need(found.times.endtime == renewed.times.endtime, "retained old TGT");
+            else need(krb5_principal_compare(ctx, found.server, service.get()), "retained expired service");
+            ++count;
+        }
+        need(count == 2, "renewed cache dropped or duplicated credentials");
+    });
+    test("pidfd observes job termination and refuses other Linux identities", [] {
+        const auto child = fork();
+        need(child >= 0, "watch test fork");
+        if (child == 0) { poll(nullptr, 0, 2000); _exit(0); }
+        ScopeExit reap([&]() noexcept { kill(child, SIGKILL); waitpid(child, nullptr, 0); });
+        auto descriptor = watch_process(child, getuid());
+        need(!exited(descriptor.get()), "watcher ended prematurely");
+        rejects([&] { watch_process(child, getuid() + 1); });
+        kill(child, SIGTERM);
+        need(waitpid(child, nullptr, 0) == child && exited(descriptor.get()), "job exit was not observed");
+        reap.release();
+    });
+}
+
+// The integration harness uses this synthetic issuer only inside a disposable test container.
+static void maintenance_fixture(std::string_view mode)
+{
+    const Account caller = lookup_uid(getuid());
+    need(caller.name == "craft-maintain-test" && caller.home == "/home/craft-maintain-test",
+         "maintenance fixtures require the isolated craft-maintain-test account");
+    KrbContext context;
+    need(krb5_init_context(out(context)) == 0, "fixture Kerberos context");
+    const auto ctx = context.get();
+    auto client = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+    auto server = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+    need(krb5_parse_name(ctx, "craft-maintain-test@DOMAIN.LOCAL", out(client)) == 0 &&
+             krb5_parse_name(ctx, "krbtgt/DOMAIN.LOCAL@DOMAIN.LOCAL", out(server)) == 0, "fixture identity");
+    std::array<unsigned char, 32> key{};
+    const auto now = static_cast<krb5_timestamp>(time(nullptr));
+    auto tgt = make_test_creds(client.get(), server.get(), key, now);
+    if (mode == "renew" || mode == "nonrenewable")
+    {
+        tgt.times.authtime = tgt.times.starttime = now - 32400;
+        tgt.times.endtime = now + 3600;
+        tgt.times.renew_till = tgt.times.authtime + 604800;
+        if (mode == "nonrenewable") { tgt.ticket_flags &= ~TKT_FLG_RENEWABLE; tgt.times.renew_till = 0; }
+    }
+    else if (mode == "expired")
+    {
+        tgt.times.authtime = tgt.times.starttime = now - 36001;
+        tgt.times.endtime = now - 1;
+        tgt.times.renew_till = tgt.times.authtime + 604800;
+    }
+    else if (mode == "rollover")
+    {
+        tgt.times.authtime = now - 6 * 86400 - 3600;
+        tgt.times.renew_till = tgt.times.authtime + 604800;
+    }
+    else need(mode == "healthy", "unknown maintenance fixture");
+    auto encoded = ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96);
+    tgt.ticket = {.magic = 0, .length = static_cast<unsigned int>(encoded.size()),
+                  .data = reinterpret_cast<char *>(encoded.data())};
+    auto bytes = file_cache(ctx, tgt);
+    publish_cache(caller, bytes);
+    wipe(bytes);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 3 && std::string_view(argv[1]) == "--maintain-fixture")
+    {
+        maintenance_fixture(argv[2]);
+        return 0;
+    }
+    if (std::string_view(argv[0]) == LAUNCHER)
+    {
+        const Account caller = lookup_uid(getuid());
+        const Fd home = caller_home(caller);
+        const Fd count(openat(home.get(), ".maintain-test-issuance", O_WRONLY | O_APPEND | O_CREAT, 0600));
+        write_all(count.get(), byte_view("issue\n"));
+        const Fd mode(openat(home.get(), ".maintain-test-mode", O_RDONLY));
+        const auto bytes = read_all(mode.get());
+        const std::string value(bytes.begin(), bytes.end());
+        if (value == "deny") { std::cerr << "synthetic enrollment denied\n"; return 1; }
+        if (value == "delay") poll(nullptr, 0, 30000);
+        maintenance_fixture("healthy");
+        return 0;
+    }
     helper_tests();
 
     Key key = generate_key(), other = generate_key();
@@ -921,6 +1189,7 @@ int main()
     });
 
     revision_tests(cfg, map, key.get(), req.get(), leaf.get());
+    maintenance_tests();
 
     std::cout << passed << " passed; " << failed << " failed. No live CA/DC tests performed.\n";
     return failed ? 1 : 0;
