@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     This lab helper configures a CA template and exports starter files for CRAFT.
-    CES, CA-level agent restrictions, full trust/CRL bundles and live validation remain manual:
+    CES, configuring CA agent restrictions, full trust/CRL bundles and live validation remain manual:
     1. Creates a Schema Version 2 Certificate Template (default: 'CRAFTUser') with:
        - Extended Key Usages: Smart Card Logon, Client Auth, and PKINIT Client Auth
        - Basic Constraints: CA:FALSE explicitly enabled via msPKI-Enrollment-Flag
@@ -15,7 +15,7 @@
        - RSA-3072 minimum key size
        - Template Security ACL: Adds agent Read/Enroll and removes explicit Authenticated Users Enroll
     2. Registers and assigns a unique template OID in the Active Directory Configuration partition.
-    3. Publishes both the CRAFT user template and the EnrollmentAgent template on the CA.
+    3. Verifies narrow agent/template permissions and CA restrictions before publishing or exporting credentials.
     4. Checks/enrolls a KDC certificate only when run on the selected Domain Controller.
     5. Exports an agent certificate only when running as that agent, or preserves a supplied PFX.
     6. Generates a submitter keytab, CA certificate/CRL, and disabled client configuration.
@@ -43,7 +43,7 @@
     Target user account to create or inspect for lab validation (default: 'alice').
 
 .PARAMETER AllowedTargetGroup
-    Existing, narrowly scoped security group for the manual CA enrollment-agent restrictions.
+    Existing, narrowly scoped security group required in the verified CA enrollment-agent restrictions.
 
 .PARAMETER CAName
     Name of the Enterprise CA (auto-detected only when exactly one is registered).
@@ -271,7 +271,10 @@ function Initialize-CRAFTAccount([string]$Identity, [string]$DnsRoot)
 
 function Export-SubmitterKeytab([string]$Principal, [string]$Account, [string]$Path)
 {
-    if (Test-Path -LiteralPath $Path) { throw "Refusing to replace an existing submitter keytab or rotate its account key." }
+    if (Test-Path -LiteralPath $Path)
+    {
+        throw "Refusing to replace an existing submitter keytab or rotate its account key."
+    }
     $arguments = @(
         "/princ", $Principal,
         "/mapuser", $Account,
@@ -286,6 +289,181 @@ function Export-SubmitterKeytab([string]$Principal, [string]$Account, [string]$P
     {
         throw "Failed to generate submitter.keytab via ktpass.exe"
     }
+}
+
+function Assert-EnrollmentTemplateAcl($Acl, [string]$AgentSid, [string[]]$AdministratorSids, [string]$Name)
+{
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    $descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new($Acl.GetSecurityDescriptorBinaryForm(), 0)
+    if (-not $descriptor.DiscretionaryAcl -or $Acl.GetOwner($sidType).Value -notin $AdministratorSids)
+    {
+        throw "Template '$Name' must have an administrator owner and an explicit security descriptor."
+    }
+    $unsafeWrite = [int][System.DirectoryServices.ActiveDirectoryRights]('WriteDacl,WriteOwner,WriteProperty,' +
+        'Self,CreateChild,DeleteChild,Delete,DeleteTree') -bor 0x50000000
+    $enrollmentRights = @([Guid]::Empty, [Guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55',
+        [Guid]'a05b8cc2-17bc-4802-a710-e7c15ab866a2')
+    foreach ($rule in $Acl.GetAccessRules($true, $true, $sidType))
+    {
+        if ($rule.AccessControlType -ne 'Allow' -or
+            ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
+        $sid = $rule.IdentityReference.Value
+        $rights = [int]$rule.ActiveDirectoryRights
+        $canEnroll = ($rights -band 256) -and $rule.ObjectType -in $enrollmentRights
+        if ($sid -notin $AdministratorSids -and
+            (($rights -band $unsafeWrite) -or ($canEnroll -and $sid -ne $AgentSid)))
+        {
+            throw "Template '$Name' grants enrollment or modification to '$sid'; restrict it before continuing."
+        }
+    }
+}
+
+function Set-EnrollmentTemplatePermissions([string]$DistinguishedName, [string[]]$AdministratorSids,
+    [System.Security.Principal.SecurityIdentifier]$AgentSid, [bool]$RemoveAuthenticatedEnroll)
+{
+    $path = "AD:$DistinguishedName"
+    $acl = Get-Acl -LiteralPath $path
+    $enroll = [Guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55'
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    if ($RemoveAuthenticatedEnroll)
+    {
+        foreach ($rule in @($acl.GetAccessRules($true, $true, $sidType)))
+        {
+            if ($rule.IdentityReference.Value -eq 'S-1-5-11' -and $rule.AccessControlType -eq 'Allow' -and
+                $rule.ObjectType -eq $enroll)
+            {
+                if ($rule.IsInherited) { throw "Remove inherited enrollment rights before continuing." }
+                $acl.RemoveAccessRuleSpecific($rule)
+            }
+        }
+    }
+    Assert-EnrollmentTemplateAcl $acl $AgentSid.Value $AdministratorSids $DistinguishedName
+    $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new(
+        $AgentSid, 'ExtendedRight', 'Allow', $enroll))
+    $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new($AgentSid, 'GenericRead', 'Allow'))
+    Set-Acl -LiteralPath $path -AclObject $acl
+    Assert-EnrollmentTemplateAcl (Get-Acl -LiteralPath $path) $AgentSid.Value $AdministratorSids $DistinguishedName
+}
+
+function Assert-EnrollmentAgentRestrictions([byte[]]$Descriptor, [string]$AgentSid, [string]$TargetSid,
+    [string[]]$TemplateIdentifiers, [string[]]$OtherAgentSids = @())
+{
+    if (-not $Descriptor -or $Descriptor.Length -lt 20) { throw "CA enrollment-agent restrictions are absent." }
+    $security = [System.Security.AccessControl.RawSecurityDescriptor]::new($Descriptor, 0)
+    if (-not $security.DiscretionaryAcl -or $security.DiscretionaryAcl.Count -eq 0)
+    {
+        throw "CA enrollment-agent restrictions must explicitly allow the CRAFT agent."
+    }
+    $hasAgentRule = $false
+    $unicode = [System.Text.UnicodeEncoding]::new($false, $false, $true)
+    foreach ($ace in $security.DiscretionaryAcl)
+    {
+        if ($ace -isnot [System.Security.AccessControl.CommonAce] -or -not $ace.IsCallback -or
+            $ace.AccessMask -ne 0x10000 -or $ace.AceFlags -ne 'None' -or
+            $ace.AceQualifier -notin @('AccessAllowed', 'AccessDenied'))
+        {
+            throw "CA enrollment-agent restrictions contain an unsupported access rule."
+        }
+
+        # Decode the MS-CSRA callback payload: SID count, target SIDs and null-terminated UTF-16 template.
+        $opaque = $ace.GetOpaque()
+        if ($opaque.Length -lt 6 -or ($opaque.Length % 2)) { throw "Invalid enrollment-agent restriction payload." }
+        $count = [BitConverter]::ToUInt32($opaque, 0)
+        if ($count -gt [Math]::Floor(($opaque.Length - 6) / 8)) { throw "Invalid enrollment-agent target count." }
+        $offset = 4
+        $targets = [System.Collections.Generic.List[string]]::new()
+        for ($index = 0; $index -lt $count; $index++)
+        {
+            if ($offset + 8 -gt $opaque.Length) { throw "Truncated enrollment-agent target SID." }
+            $length = 8 + 4 * $opaque[$offset + 1]
+            if ($opaque[$offset] -ne 1 -or $opaque[$offset + 1] -gt 15 -or $offset + $length -gt $opaque.Length - 2)
+            {
+                throw "Invalid enrollment-agent target SID."
+            }
+            $target = [System.Security.Principal.SecurityIdentifier]::new($opaque, $offset)
+            $targets.Add($target.Value)
+            $offset += $length
+        }
+        $template = $unicode.GetString($opaque, $offset, $opaque.Length - $offset)
+        $terminator = $template.IndexOf([char]0)
+        if ($terminator -lt 0 -or $template.Substring($terminator).Trim([char]0).Length)
+        {
+            throw "Invalid enrollment-agent template name."
+        }
+        $template = $template.Substring(0, $terminator)
+        if ($ace.AceQualifier -ne 'AccessAllowed') { continue }
+        $trustee = $ace.SecurityIdentifier.Value
+        if ($trustee -ne $AgentSid -and $trustee -in $OtherAgentSids) { continue }
+
+        # Group rules can also authorize the agent; require the same narrow scope for every such grant.
+        if ($template -notin $TemplateIdentifiers -or $targets.Count -ne 1 -or $targets[0] -ne $TargetSid)
+        {
+            throw "CA agent Allow rules must specify only the CRAFT template and AllowedTargetGroup."
+        }
+        if ($trustee -eq $AgentSid) { $hasAgentRule = $true }
+    }
+    if (-not $hasAgentRule) { throw "CA restrictions must explicitly name the CRAFT agent, template and target group." }
+}
+
+function Assert-CAEnrollmentPolicy([string]$Configuration, [string]$AgentSid, [string]$TargetSid,
+    [string]$Template, [string]$TemplateOid)
+{
+    $admin = $null
+    try
+    {
+        $admin = New-Object -ComObject CertificateAuthority.Admin
+        [byte[]]$descriptor = $admin.GetConfigEntry($Configuration, '', 'EnrollmentAgentRights')
+        $security = [System.Security.AccessControl.RawSecurityDescriptor]::new($descriptor, 0)
+        $account = Get-ADUser -Identity $AgentSid -Properties tokenGroups, sIDHistory -ErrorAction Stop
+        if (-not $account.tokenGroups) { throw "The agent's transitive authorization groups could not be read." }
+        $agentSids = @($AgentSid)
+        foreach ($sid in @($account.tokenGroups) + @($account.sIDHistory))
+        {
+            if ($sid -is [byte[]]) { $agentSids += [System.Security.Principal.SecurityIdentifier]::new($sid, 0).Value }
+            elseif ($sid) { $agentSids += ([System.Security.Principal.SecurityIdentifier]$sid).Value }
+        }
+        $otherAgentSids = @()
+        $trustees = @($security.DiscretionaryAcl | ForEach-Object {
+            $_.SecurityIdentifier.Value
+        } | Select-Object -Unique)
+        foreach ($sid in $trustees)
+        {
+            if ($sid -in $agentSids) { continue }
+            try { $account = Get-ADUser -Identity $sid -ErrorAction Stop }
+            catch
+            {
+                $missingIdentity = 'Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException'
+                if ($_.Exception.GetType().FullName -ne $missingIdentity) { throw }
+                continue
+            }
+            if ($account.SID.Value -eq $sid -and $account.SID.Value -ne $AgentSid) { $otherAgentSids += $sid }
+        }
+        $identifiers = @($Template)
+        if ($TemplateOid) { $identifiers += $TemplateOid }
+        Assert-EnrollmentAgentRestrictions $descriptor $AgentSid $TargetSid $identifiers $otherAgentSids
+    }
+    catch
+    {
+        throw "Could not verify restrictions on '$Configuration': $_ Configure the CA Enrollment Agents tab and rerun."
+    }
+    finally
+    {
+        if ($admin -and [System.Runtime.InteropServices.Marshal]::IsComObject($admin))
+        {
+            [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($admin) | Out-Null
+        }
+    }
+}
+
+function Publish-CRAFTTemplates($CA, [string]$Configuration, [string]$Template, [string]$TemplateOid,
+    [string]$AgentSid, [string]$TargetSid, [string]$AgentTemplateDN, [string[]]$AdministratorSids)
+{
+    Assert-CAEnrollmentPolicy $Configuration $AgentSid $TargetSid $Template $TemplateOid
+    $identity = [System.Security.Principal.SecurityIdentifier]::new($AgentSid)
+    Set-EnrollmentTemplatePermissions $AgentTemplateDN $AdministratorSids $identity $false
+    $current = Get-ADObject -Identity $CA.DistinguishedName -Properties certificateTemplates
+    $toAdd = [string[]]@(@('EnrollmentAgent', $Template) | Where-Object { $_ -notin $current.certificateTemplates })
+    if ($toAdd.Length -gt 0) { Set-ADObject -Identity $CA.DistinguishedName -Add @{ certificateTemplates = $toAdd } }
 }
 
 function Get-UsableCertificate([string]$Store, [string]$Eku, [string]$DnsName = "")
@@ -309,7 +487,10 @@ Write-Host @"
 # -----------------------------------------------------------------------------
 Write-Step "Validating environment prerequisites..."
 
-if ($EnrollmentAgentIdentity -ieq $TargetUser) { throw "The service account and target user must be different accounts." }
+if ($EnrollmentAgentIdentity -ieq $TargetUser)
+{
+    throw "The service account and target user must be different accounts."
+}
 Import-Module ActiveDirectory -ErrorAction Stop
 $domain = Get-ADDomain -ErrorAction Stop
 $rootDse = Get-ADRootDSE -ErrorAction Stop
@@ -364,16 +545,7 @@ $userObj = Initialize-CRAFTAccount $TargetUser $domain.DNSRoot
 Write-Info "Target Demo User            : $($userObj.UserPrincipalName) (SID: $($userObj.SID))"
 
 # -----------------------------------------------------------------------------
-# 3. Export Submitter Kerberos Keytab
-# -----------------------------------------------------------------------------
-Write-Step "Generating Kerberos keytab for $EnrollmentAgentIdentity..."
-
-$realmUpper = $domain.DNSRoot.ToUpperInvariant()
-Export-SubmitterKeytab "$EnrollmentAgentIdentity@$realmUpper" "$($domain.NetBIOSName)\$EnrollmentAgentIdentity" $keytabPath
-Write-Info "Keytab generated successfully at $keytabPath"
-
-# -----------------------------------------------------------------------------
-# 4. Create and Configure Schema V2 CRAFT Certificate Template
+# 3. Create and Configure Schema V2 CRAFT Certificate Template
 # -----------------------------------------------------------------------------
 Write-Step "Configuring Certificate Template '$TemplateName'..."
 
@@ -381,11 +553,27 @@ $templatesDN = "CN=Certificate Templates,CN=Public Key Services,CN=Services,$con
 $templateContainer = [ADSI]"LDAP://$templatesDN"
 $templateLdapPath = "LDAP://CN=$TemplateName,$templatesDN"
 
+$agentSid = $agentUser.SID
+$forestRoot = Get-ADDomain -Identity (Get-ADForest).RootDomain
+$administratorSids = @('S-1-5-18', 'S-1-5-32-544', "$($domain.DomainSID.Value)-512",
+    "$($forestRoot.DomainSID.Value)-512", "$($forestRoot.DomainSID.Value)-518", "$($forestRoot.DomainSID.Value)-519")
+$caller = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+if (@($caller.Groups.Value | Where-Object { $_ -in $administratorSids -and $_ -like 'S-1-5-21-*' }).Count)
+{
+    $administratorSids += $caller.User.Value
+}
+$agentTemplateDN = "CN=EnrollmentAgent,$templatesDN"
+$agentTemplateAcl = Get-Acl -LiteralPath "AD:$agentTemplateDN"
+Assert-EnrollmentTemplateAcl $agentTemplateAcl $agentSid.Value $administratorSids 'EnrollmentAgent'
+
 $templateExists = [ADSI]::Exists($templateLdapPath)
 if ($templateExists)
 {
     Write-Info "Existing template '$TemplateName' found; updating configuration..."
     $tmpl = [ADSI]$templateLdapPath
+    Assert-CAEnrollmentPolicy $caConfig $agentSid.Value $targetGroup.SID.Value $TemplateName `
+        $tmpl.Properties['msPKI-Cert-Template-OID'].Value
+    Set-EnrollmentTemplatePermissions "CN=$TemplateName,$templatesDN" $administratorSids $agentSid $true
 }
 else
 {
@@ -505,73 +693,30 @@ Write-Info "Template '$TemplateName' saved to Active Directory."
 $newOid | Set-Content -Path (Join-Path $ExportPath "template_oid.txt") -Encoding ASCII
 
 # -----------------------------------------------------------------------------
-# 5. Configure Security Permissions (ACL) on Template
+# 4. Configure Security Permissions (ACL) on Templates
 # -----------------------------------------------------------------------------
-Write-Step "Configuring Access Control List (ACL) on '$TemplateName'..."
+Write-Step "Configuring narrow template permissions for '$EnrollmentAgentIdentity'..."
 
-# Grant Enroll and Read permissions to the Enrollment Agent identity
-try
-{
-    $tmplAdObj = Get-ADObject -Identity "CN=$TemplateName,$templatesDN"
-    $acl = Get-Acl "AD:$($tmplAdObj.DistinguishedName)"
-
-    # Remove generic Authenticated Users Enroll rights to prevent direct self-enrollment
-    $authUsersSid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-11") # Authenticated Users
-    $extendedEnrollGuid = New-Object Guid("0e10c968-78fb-11d2-90d4-00c04f79dc55") # Extended Right: Enroll
-
-    foreach ($access in @($acl.Access))
-    {
-        if ($access.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]) -eq $authUsersSid -and
-            $access.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
-            $access.ObjectType -eq $extendedEnrollGuid)
-        {
-            if ($access.IsInherited) { throw "Remove inherited enrollment rights before continuing." }
-            $acl.RemoveAccessRuleSpecific($access)
-        }
-    }
-
-    # Grant Read + Enroll to the Enrollment Agent identity
-    $agentSid = $agentUser.SID
-    $allowEnrollAce = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
-        $agentSid,
-        [System.DirectoryServices.ActiveDirectoryRights]::ExtendedRight,
-        [System.Security.AccessControl.AccessControlType]::Allow,
-        $extendedEnrollGuid
-    )
-    $allowReadAce = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
-        $agentSid,
-        [System.DirectoryServices.ActiveDirectoryRights]::GenericRead,
-        [System.Security.AccessControl.AccessControlType]::Allow
-    )
-
-    $acl.AddAccessRule($allowEnrollAce)
-    $acl.AddAccessRule($allowReadAce)
-    Set-Acl -Path "AD:$($tmplAdObj.DistinguishedName)" -AclObject $acl
-    Write-Info "Granted 'Enroll' and 'Read' permissions on template to '$EnrollmentAgentIdentity'."
-}
-catch
-{
-    throw "Could not configure template enrollment permissions: $_"
-}
+Set-EnrollmentTemplatePermissions "CN=$TemplateName,$templatesDN" $administratorSids $agentSid $true
 
 # -----------------------------------------------------------------------------
-# 6. Publish Templates on Certification Authority
+# 5. Verify CA Restrictions and Publish Templates
 # -----------------------------------------------------------------------------
-Write-Step "Publishing templates on CA '$CAName'..."
+Write-Step "Verifying CA restrictions before publishing templates on '$CAName'..."
 
-$caDN = $caObj.DistinguishedName
-$currentTemplates = @($caObj.certificateTemplates)
-$toAdd = [string[]]@(@("EnrollmentAgent", $TemplateName) | Where-Object { $_ -notin $currentTemplates })
+Publish-CRAFTTemplates $caObj $caConfig $TemplateName $newOid $agentSid.Value $targetGroup.SID.Value `
+    $agentTemplateDN $administratorSids
+Write-Info "Verified restrictions for '$EnrollmentAgentIdentity', '$TemplateName' and '$AllowedTargetGroup'."
 
-if ($toAdd -and $toAdd.Length -gt 0)
-{
-    Set-ADObject -Identity $caDN -Add @{ certificateTemplates = $toAdd }
-    Write-Info "Added template(s) to CA: $($toAdd -join ', ')"
-}
-else
-{
-    Write-Info "Templates are already published on CA."
-}
+# -----------------------------------------------------------------------------
+# 6. Export Submitter Kerberos Keytab
+# -----------------------------------------------------------------------------
+Write-Step "Generating Kerberos keytab for $EnrollmentAgentIdentity..."
+
+$realmUpper = $domain.DNSRoot.ToUpperInvariant()
+Export-SubmitterKeytab "$EnrollmentAgentIdentity@$realmUpper" `
+    "$($domain.NetBIOSName)\$EnrollmentAgentIdentity" $keytabPath
+Write-Info "Keytab generated successfully at $keytabPath"
 
 # -----------------------------------------------------------------------------
 # 7. Ensure KDC Certificate for Kerberos PKINIT
@@ -762,7 +907,7 @@ Write-Info "Exported krb5.conf to $krb5ConfPath"
 Write-Host @"
 
 ======================================================================
-  CONFIGURATION SUMMARY & CA RESTRICTION INSTRUCTIONS
+  CONFIGURATION SUMMARY & VERIFIED CA RESTRICTIONS
 ======================================================================
 Active Directory Template : $TemplateName
 Template OID              : $newOid
@@ -774,15 +919,11 @@ Enrollment Agent Account  : $EnrollmentAgentIdentity@$($domain.DNSRoot)
 Demo Target User          : $TargetUser@$($domain.DNSRoot)
 Export Directory          : $ExportPath
 
-TO ENFORCE CA-LEVEL RESTRICTED ENROLLMENT AGENTS (certsrv.msc):
-1. Open Certification Authority (certsrv.msc).
-2. Right-click the CA '$CAName' -> Properties -> 'Enrollment Agents' tab.
-3. Select 'Restrict enrollment agents'.
-4. Click 'Add':
-   - Enrollment Agent : Select '$EnrollmentAgentIdentity'
-   - Templates        : Select ONLY '$TemplateName'
-   - Target Users     : Select '$AllowedTargetGroup' (Exclude Domain Admins)
-5. Click Apply.
+Verified CA enrollment-agent configuration:
+   Enrollment Agent : '$EnrollmentAgentIdentity'
+   Templates        : '$TemplateName' only
+   Target Users     : '$AllowedTargetGroup' only
+Keep target-group membership narrowly scoped and exclude privileged accounts.
 
 Starter files have been written to '$ExportPath'; client enrollment remains disabled.
 Confirm agent.pfx belongs to the restricted agent, and provision full PEM trust/CRL bundles.

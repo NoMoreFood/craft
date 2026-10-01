@@ -1,4 +1,4 @@
-# Offline checks only: extract pure helpers without executing provisioning commands.
+# Offline checks only: extract helpers without executing top-level provisioning commands.
 $ErrorActionPreference = "Stop"
 $scriptPath = Join-Path $PSScriptRoot "Configure-CRAFT-CA.ps1"
 $tokens = $null
@@ -7,7 +7,9 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [r
 if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
 
 foreach ($name in @("Invoke-CheckedCommand", "Get-UsableCertificate", "Initialize-ExportDirectory",
-    "New-AccountPassword", "Initialize-CRAFTAccount", "Export-SubmitterKeytab"))
+    "New-AccountPassword", "Initialize-CRAFTAccount", "Export-SubmitterKeytab", "Assert-EnrollmentTemplateAcl",
+    "Set-EnrollmentTemplatePermissions", "Assert-EnrollmentAgentRestrictions", "Assert-CAEnrollmentPolicy",
+    "Publish-CRAFTTemplates"))
 {
     $definition = $ast.Find({ param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -187,6 +189,282 @@ Write-Host "PASS: independently generated account passwords and existing account
     }
 }
 Write-Host "PASS: secret-free keytab invocation, overwrite prevention and empty-output rejection"
+
+& {
+    $agent = 'S-1-5-21-1-2-3-1001'
+    $target = 'S-1-5-21-1-2-3-1002'
+    $other = 'S-1-5-21-1-2-3-1003'
+    function New-RestrictionAce([string]$Trustee = $agent, [string[]]$Targets = @($target),
+        [string]$Template = 'CRAFTUser', [int]$Mask = 0x10000, [bool]$Callback = $true)
+    {
+        $bytes = [System.Collections.Generic.List[byte]]::new()
+        $bytes.AddRange([BitConverter]::GetBytes([uint32]$Targets.Count))
+        foreach ($sid in $Targets)
+        {
+            $identity = [System.Security.Principal.SecurityIdentifier]::new($sid)
+            $binary = [byte[]]::new($identity.BinaryLength)
+            $identity.GetBinaryForm($binary, 0)
+            $bytes.AddRange($binary)
+        }
+        $bytes.AddRange([System.Text.Encoding]::Unicode.GetBytes($Template + [char]0))
+        while ($bytes.Count % 4) { $bytes.Add(0) }
+        $opaque = $(if ($Callback) { $bytes.ToArray() } else { $null })
+        [System.Security.AccessControl.CommonAce]::new('None', 'AccessAllowed', $Mask,
+            [System.Security.Principal.SecurityIdentifier]::new($Trustee), $Callback, $opaque)
+    }
+    function New-RestrictionDescriptor([System.Security.AccessControl.GenericAce[]]$Rules)
+    {
+        $dacl = [System.Security.AccessControl.RawAcl]::new(2, $Rules.Count)
+        foreach ($rule in $Rules) { $dacl.InsertAce($dacl.Count, $rule) }
+        $identity = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+        $security = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+            'SelfRelative,DiscretionaryAclPresent', $identity, $identity, $null, $dacl)
+        $bytes = [byte[]]::new($security.BinaryLength)
+        $security.GetBinaryForm($bytes, 0)
+        return ,$bytes
+    }
+    $good = New-RestrictionDescriptor @(New-RestrictionAce)
+    Assert-EnrollmentAgentRestrictions $good $agent $target @('CRAFTUser', '1.2.3')
+    Assert-EnrollmentAgentRestrictions (New-RestrictionDescriptor @(New-RestrictionAce -Template '1.2.3')) `
+        $agent $target @('CRAFTUser', '1.2.3')
+    $unrelated = New-RestrictionAce -Trustee $other -Targets @('S-1-1-0') -Template ''
+    Assert-EnrollmentAgentRestrictions (New-RestrictionDescriptor @((New-RestrictionAce), $unrelated)) `
+        $agent $target @('CRAFTUser') @($other)
+    $invalid = @(
+        (New-RestrictionDescriptor @()),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Template 'OtherTemplate')),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Template '')),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Targets @())),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Targets @('S-1-1-0'))),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Targets @($target, $other))),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Mask 1)),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Callback $false)),
+        (New-RestrictionDescriptor @(New-RestrictionAce -Trustee $other)),
+        (New-RestrictionDescriptor @((New-RestrictionAce), $unrelated)),
+        (New-RestrictionDescriptor @((New-RestrictionAce),
+            (New-RestrictionAce -Trustee 'S-1-5-11' -Template '' -Targets @('S-1-1-0')))),
+        [byte[]]@(1, 2, 3)
+    )
+    $malformed = New-RestrictionAce
+    $opaque = $malformed.GetOpaque()
+    [BitConverter]::GetBytes([uint32]::MaxValue).CopyTo($opaque, 0)
+    $malformed.SetOpaque($opaque)
+    $invalid += ,(New-RestrictionDescriptor @($malformed))
+    $malformed = New-RestrictionAce
+    $opaque = $malformed.GetOpaque()
+    $opaque[4] = 2
+    $malformed.SetOpaque($opaque)
+    $invalid += ,(New-RestrictionDescriptor @($malformed))
+    $malformed = New-RestrictionAce
+    $opaque = $malformed.GetOpaque()
+    $opaque[$opaque.Length - 2] = 1
+    $malformed.SetOpaque($opaque)
+    $invalid += ,(New-RestrictionDescriptor @($malformed))
+    $nullDacl = [System.Security.AccessControl.RawSecurityDescriptor]::new('O:SYG:SYD:NO_ACCESS_CONTROL')
+    $bytes = [byte[]]::new($nullDacl.BinaryLength)
+    $nullDacl.GetBinaryForm($bytes, 0)
+    $invalid += ,$bytes
+    foreach ($bytes in $invalid)
+    {
+        $rejected = $false
+        try { Assert-EnrollmentAgentRestrictions $bytes $agent $target @('CRAFTUser') }
+        catch { $rejected = $true }
+        Assert $rejected "Missing, broad or malformed enrollment-agent restrictions were accepted."
+    }
+
+    & {
+        $history = @()
+        $group = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-21-1-2-3-513')
+        $groupBytes = [byte[]]::new($group.BinaryLength)
+        $group.GetBinaryForm($groupBytes, 0)
+        $tokenGroups = ,$groupBytes
+        $mockAdmin = [pscustomobject]@{ Bytes = $good; Fail = $false }
+        function Get-ADUser([string]$Identity, [string[]]$Properties, [string]$ErrorAction)
+        {
+            if ($Identity -eq $agent)
+            {
+                return [pscustomobject]@{
+                    SID = [System.Security.Principal.SecurityIdentifier]::new($agent)
+                    tokenGroups = $tokenGroups
+                    sIDHistory = $history
+                }
+            }
+            Assert ($Identity -eq $other) "Policy lookup queried an unexpected account."
+            [pscustomobject]@{ SID = [System.Security.Principal.SecurityIdentifier]::new($other) }
+        }
+        $mockAdmin | Add-Member ScriptMethod GetConfigEntry {
+            param($Configuration, $Node, $Entry)
+            Assert ($Configuration -eq 'ca.example.com\TestCA' -and $Node -eq '' -and
+                $Entry -eq 'EnrollmentAgentRights') "CA policy lookup changed its scope."
+            if ($this.Fail) { throw 'Synthetic CA read failure.' }
+            return ,$this.Bytes
+        }
+        function New-Object([string]$ComObject)
+        {
+            Assert ($ComObject -eq 'CertificateAuthority.Admin') "Unexpected CA policy interface."
+            return $mockAdmin
+        }
+        Assert-CAEnrollmentPolicy 'ca.example.com\TestCA' $agent $target 'CRAFTUser' '1.2.3'
+        $mockAdmin.Bytes = New-RestrictionDescriptor @((New-RestrictionAce), $unrelated)
+        Assert-CAEnrollmentPolicy 'ca.example.com\TestCA' $agent $target 'CRAFTUser' '1.2.3'
+        $history = @([System.Security.Principal.SecurityIdentifier]::new($other))
+        $rejected = $false
+        try { Assert-CAEnrollmentPolicy 'ca.example.com\TestCA' $agent $target 'CRAFTUser' '1.2.3' }
+        catch { $rejected = $true }
+        Assert $rejected "Agent SID history bypassed the enrollment restriction check."
+        $history = @()
+        $tokenGroups = @([System.Security.Principal.SecurityIdentifier]::new($other))
+        $rejected = $false
+        try { Assert-CAEnrollmentPolicy 'ca.example.com\TestCA' $agent $target 'CRAFTUser' '1.2.3' }
+        catch { $rejected = $true }
+        Assert $rejected "Agent authorization groups bypassed the enrollment restriction check."
+        $mockAdmin.Fail = $true
+        $rejected = $false
+        try { Assert-CAEnrollmentPolicy 'ca.example.com\TestCA' $agent $target 'CRAFTUser' '1.2.3' }
+        catch { $rejected = $_.Exception.Message -like '*Could not verify restrictions*' }
+        Assert $rejected "A failed CA policy read was accepted."
+    }
+
+    & {
+        $events = [System.Collections.Generic.List[string]]::new()
+        $policy = New-RestrictionDescriptor @(New-RestrictionAce -Template '')
+        $published = @('EnrollmentAgent', 'UnrelatedTemplate')
+        $added = [System.Collections.Generic.List[string]]::new()
+        $badTemplate = $false
+        function Assert-CAEnrollmentPolicy([string]$Configuration, [string]$AgentSid, [string]$TargetSid,
+            [string]$Template, [string]$TemplateOid)
+        {
+            $events.Add('policy')
+            Assert-EnrollmentAgentRestrictions $policy $AgentSid $TargetSid @($Template, $TemplateOid)
+        }
+        function Set-EnrollmentTemplatePermissions([string]$DistinguishedName, [string[]]$AdministratorSids,
+            [System.Security.Principal.SecurityIdentifier]$AgentSid,
+            [bool]$RemoveAuthenticatedEnroll)
+        {
+            $events.Add('template-acl')
+            Assert ($DistinguishedName -eq 'CN=EnrollmentAgent,offline' -and -not $RemoveAuthenticatedEnroll) `
+                "Publication changed an unrelated template."
+            if ($badTemplate) { throw 'Synthetic unsafe template ACL.' }
+        }
+        function Get-ADObject([string]$Identity, [string[]]$Properties)
+        {
+            $events.Add('read')
+            Assert ($Identity -eq 'CN=TestCA,offline') "Publication queried another CA."
+            [pscustomobject]@{ certificateTemplates = $published }
+        }
+        function Set-ADObject([string]$Identity, [hashtable]$Add)
+        {
+            $events.Add('publish')
+            $added.AddRange([string[]]$Add.certificateTemplates)
+        }
+        $ca = [pscustomobject]@{ DistinguishedName = 'CN=TestCA,offline' }
+        $rejected = $false
+        try { Publish-CRAFTTemplates $ca 'TestCA' 'CRAFTUser' '1.2.3' $agent $target 'CN=EnrollmentAgent,offline' @() }
+        catch { $rejected = $true }
+        Assert ($rejected -and ($events -join ',') -eq 'policy') "Publication changed state before verifying CA policy."
+        $events.Clear()
+        $policy = $good
+        $badTemplate = $true
+        $rejected = $false
+        try { Publish-CRAFTTemplates $ca 'TestCA' 'CRAFTUser' '1.2.3' $agent $target 'CN=EnrollmentAgent,offline' @() }
+        catch { $rejected = $true }
+        Assert ($rejected -and ($events -join ',') -eq 'policy,template-acl') "Unsafe agent template was published."
+        $events.Clear()
+        $badTemplate = $false
+        Publish-CRAFTTemplates $ca 'TestCA' 'CRAFTUser' '1.2.3' $agent $target 'CN=EnrollmentAgent,offline' @()
+        Assert (($events -join ',') -eq 'policy,template-acl,read,publish') "Publication bypassed a policy check."
+        Assert ($added.Count -eq 1 -and $added[0] -eq 'CRAFTUser') "Publication changed unrelated or existing templates."
+        $events.Clear()
+        $published += 'CRAFTUser'
+        Publish-CRAFTTemplates $ca 'TestCA' 'CRAFTUser' '1.2.3' $agent $target 'CN=EnrollmentAgent,offline' @()
+        Assert (($events -join ',') -eq 'policy,template-acl,read') "Published templates were unnecessarily changed."
+    }
+}
+Write-Host "PASS: scoped CA restrictions, malformed policy rejection and fail-closed publication"
+
+& {
+    $agent = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-21-1-2-3-1001')
+    $administrator = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $users = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-11')
+    $enroll = [Guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55'
+    function New-TemplateAcl
+    {
+        $acl = [System.DirectoryServices.ActiveDirectorySecurity]::new()
+        $acl.SetOwner($administrator)
+        $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new(
+            $administrator, 'GenericAll', 'Allow'))
+        $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new($users, 'GenericRead', 'Allow'))
+        return $acl
+    }
+    $currentAcl = New-TemplateAcl
+    Assert-EnrollmentTemplateAcl $currentAcl $agent.Value @($administrator.Value) 'EnrollmentAgent'
+    foreach ($case in @(
+        @{ Rights = 'ExtendedRight'; ObjectType = $enroll },
+        @{ Rights = 'ExtendedRight'; ObjectType = [Guid]::Empty },
+        @{ Rights = 'ExtendedRight'; ObjectType = [Guid]'a05b8cc2-17bc-4802-a710-e7c15ab866a2' },
+        @{ Rights = 'GenericAll'; ObjectType = [Guid]::Empty },
+        @{ Rights = 'WriteProperty'; ObjectType = [Guid]::Empty },
+        @{ Rights = 'WriteDacl'; ObjectType = [Guid]::Empty }
+    ))
+    {
+        $acl = New-TemplateAcl
+        $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new(
+            $users, $case.Rights, 'Allow', $case.ObjectType))
+        $rejected = $false
+        try { Assert-EnrollmentTemplateAcl $acl $agent.Value @($administrator.Value) 'EnrollmentAgent' }
+        catch { $rejected = $true }
+        Assert $rejected "Unsafe enrollment or template-modification permissions were accepted."
+    }
+    $acl = New-TemplateAcl
+    $acl.SetOwner($users)
+    $rejected = $false
+    try { Assert-EnrollmentTemplateAcl $acl $agent.Value @($administrator.Value) 'EnrollmentAgent' }
+    catch { $rejected = $true }
+    Assert $rejected "An untrusted template owner was accepted."
+    $acl = New-TemplateAcl
+    $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new($agent, 'WriteDacl', 'Allow'))
+    $rejected = $false
+    try { Assert-EnrollmentTemplateAcl $acl $agent.Value @($administrator.Value) 'EnrollmentAgent' }
+    catch { $rejected = $true }
+    Assert $rejected "The agent was allowed to change its own template permissions."
+    $writes = [System.Collections.Generic.List[object]]::new()
+    function Get-Acl([string]$LiteralPath)
+    {
+        Assert ($LiteralPath -eq 'AD:offline-template') "ACL test accessed a real template."
+        return $currentAcl
+    }
+    function Set-Acl([string]$LiteralPath, $AclObject) { $writes.Add($AclObject) }
+    Set-EnrollmentTemplatePermissions 'offline-template' @($administrator.Value) $agent $false
+    $rules = @($currentAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    Assert (@($rules | Where-Object { $_.IdentityReference -eq $agent -and $_.ObjectType -eq $enroll }).Count -eq 1) `
+        "The agent was not granted scoped enrollment permission."
+    $currentAcl = New-TemplateAcl
+    $currentAcl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new(
+        $users, 'ExtendedRight', 'Allow', $enroll))
+    $writes.Clear()
+    $rejected = $false
+    try { Set-EnrollmentTemplatePermissions 'offline-template' @($administrator.Value) $agent $false }
+    catch { $rejected = $true }
+    Assert ($rejected -and $writes.Count -eq 0) "Unsafe EnrollmentAgent permissions were silently changed or accepted."
+    Set-EnrollmentTemplatePermissions 'offline-template' @($administrator.Value) $agent $true
+    Assert ($writes.Count -eq 1) "Explicit Authenticated Users enrollment was not removed from the CRAFT template."
+    $currentAcl = New-TemplateAcl
+    $inherited = 'O:SYG:SYD:(A;;GA;;;SY)(OA;ID;CR;0e10c968-78fb-11d2-90d4-00c04f79dc55;;AU)'
+    $currentAcl.SetSecurityDescriptorSddlForm($inherited)
+    $writes.Clear()
+    $rejected = $false
+    try { Set-EnrollmentTemplatePermissions 'offline-template' @($administrator.Value) $agent $true }
+    catch { $rejected = $true }
+    Assert ($rejected -and $writes.Count -eq 0) "Inherited broad enrollment permissions were accepted."
+}
+Write-Host "PASS: template enrollment/write permissions, owner validation and scoped agent grants"
+
+$topCommands = @($ast.EndBlock.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -in @('Publish-CRAFTTemplates', 'Export-SubmitterKeytab')
+}, $false))
+Assert ($topCommands.Count -eq 2 -and $topCommands[0].GetCommandName() -eq 'Publish-CRAFTTemplates') `
+    "Submitter credentials can be exported before the CA policy check."
 
 $powerShell = (Get-Process -Id $PID).Path
 Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command", "exit 0")
