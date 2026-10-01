@@ -131,6 +131,111 @@ function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments)
     }
 }
 
+function Initialize-ExportDirectory([string]$Directory)
+{
+    if ($Directory -notmatch '^[A-Za-z]:\\') { throw "ExportPath must be an absolute local filesystem path." }
+    $fullPath = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    if ($fullPath.Length -le 3) { throw "ExportPath must be a dedicated directory, not a drive root." }
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    $callerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $allowed = @($callerSid.Value, 'S-1-5-18', 'S-1-5-32-544')
+    $trusted = $allowed + 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    $unsafeRights = [int][System.Security.AccessControl.FileSystemRights]('WriteData,WriteAttributes,' +
+        'WriteExtendedAttributes,DeleteSubdirectoriesAndFiles,Delete,ChangePermissions,TakeOwnership') -bor 0x50000000
+    $inheritOnly = [System.Security.AccessControl.PropagationFlags]::InheritOnly
+
+    $directoryAcl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $fileAcl = [System.Security.AccessControl.FileSecurity]::new()
+    $directoryAcl.SetAccessRuleProtection($true, $false)
+    $fileAcl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in $allowed | Select-Object -Unique)
+    {
+        $identity = [System.Security.Principal.SecurityIdentifier]::new($sid)
+        $directoryAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+            $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+        $fileAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+            $identity, 'FullControl', 'Allow'))
+    }
+    $missing = [System.Collections.Generic.List[string]]::new()
+
+    # Reject paths that another user can replace or redirect before securing their contents.
+    for ($parent = [System.IO.DirectoryInfo]::new($fullPath); $null -ne $parent; $parent = $parent.Parent)
+    {
+        if (-not (Test-Path -LiteralPath $parent.FullName)) { $missing.Add($parent.FullName); continue }
+        $item = Get-Item -LiteralPath $parent.FullName -Force
+        if (-not $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint))
+        {
+            throw "ExportPath and its existing parents must be ordinary directories."
+        }
+        $acl = Get-Acl -LiteralPath $parent.FullName
+        if ($acl.GetOwner($sidType).Value -notin $trusted) { throw "ExportPath has an untrusted directory owner." }
+        foreach ($rule in $acl.GetAccessRules($true, $true, $sidType))
+        {
+            if ($rule.AccessControlType -eq 'Allow' -and -not ($rule.PropagationFlags -band $inheritOnly) -and
+                $rule.IdentityReference.Value -notin $trusted -and ([int]$rule.FileSystemRights -band $unsafeRights))
+            {
+                throw "ExportPath has a directory writable or replaceable by another user."
+            }
+        }
+    }
+    # Apply private permissions atomically to every newly created path component.
+    $missing.Reverse()
+    foreach ($directoryPath in $missing)
+    {
+        if ($PSVersionTable.PSEdition -eq 'Core')
+        {
+            [System.IO.FileSystemAclExtensions]::CreateDirectory($directoryAcl, $directoryPath) | Out-Null
+        }
+        else { [System.IO.Directory]::CreateDirectory($directoryPath, $directoryAcl) | Out-Null }
+        $item = Get-Item -LiteralPath $directoryPath -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+            (Get-Acl -LiteralPath $directoryPath).GetOwner($sidType).Value -notin $allowed)
+        {
+            throw "ExportPath changed while its directories were being created."
+        }
+    }
+    $files = @(Get-ChildItem -LiteralPath $fullPath -Force)
+    $names = @('agent.pfx', 'submitter.keytab', 'ca.crt', 'ca.crl', 'config', 'krb5.conf', 'template_oid.txt')
+    foreach ($file in $files)
+    {
+        $acl = Get-Acl -LiteralPath $file.FullName
+        if ($file.PSIsContainer -or $file.Name -notin $names -or
+            ($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+            $acl.GetOwner($sidType).Value -notin $allowed)
+        {
+            throw "ExportPath must contain only ordinary, trusted CRAFT export files."
+        }
+        foreach ($rule in $acl.GetAccessRules($true, $true, $sidType))
+        {
+            if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $allowed -and
+                ([int]$rule.FileSystemRights -band $unsafeRights))
+            {
+                throw "Existing export files must not be writable by another user."
+            }
+        }
+    }
+
+    # Protect existing exports as well as files subsequently created by native tools.
+    $acl = Get-Acl -LiteralPath $fullPath
+    $acl.SetSecurityDescriptorBinaryForm($directoryAcl.GetSecurityDescriptorBinaryForm(), 'Access')
+    if ($PSVersionTable.PSEdition -eq 'Core')
+    {
+        [System.IO.FileSystemAclExtensions]::SetAccessControl([System.IO.DirectoryInfo]::new($fullPath), $acl)
+    }
+    else { [System.IO.DirectoryInfo]::new($fullPath).SetAccessControl($acl) }
+    foreach ($file in $files)
+    {
+        $acl = Get-Acl -LiteralPath $file.FullName
+        $acl.SetSecurityDescriptorBinaryForm($fileAcl.GetSecurityDescriptorBinaryForm(), 'Access')
+        if ($PSVersionTable.PSEdition -eq 'Core')
+        {
+            [System.IO.FileSystemAclExtensions]::SetAccessControl([System.IO.FileInfo]::new($file.FullName), $acl)
+        }
+        else { [System.IO.FileInfo]::new($file.FullName).SetAccessControl($acl) }
+    }
+    return $fullPath
+}
+
 function Get-UsableCertificate([string]$Store, [string]$Eku, [string]$DnsName = "")
 {
     $now = Get-Date
@@ -190,10 +295,7 @@ if (Test-Path -LiteralPath $keytabPath)
 }
 Write-Info "Certification Authority     : $CAName ($caConfig)"
 
-if (-not (Test-Path $ExportPath))
-{
-    New-Item -ItemType Directory -Path $ExportPath -Force | Out-Null
-}
+$ExportPath = Initialize-ExportDirectory $ExportPath
 
 # -----------------------------------------------------------------------------
 # 2. Ensure Service Account & Target User Exist
