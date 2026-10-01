@@ -58,12 +58,12 @@
     Directory to store exported configuration, certificates, keytabs, and client configuration.
 
 .PARAMETER ExportPassword
-    Required password for the exported agent PFX and lab accounts; also passed to ktpass.
+    Required SecureString password for the exported agent PFX only; account passwords are generated independently.
 
 .EXAMPLE
     .\Configure-CRAFT-CA.ps1 -AllowedTargetGroup "CRAFT Approved Users" `
         -CesUrl "https://ces.example.com/IssuingCA_CES_Kerberos/service.svc/CES"
-    Prompts for ExportPassword. Review account password resets and manual setup before use.
+    Prompts securely for ExportPassword. Review account password resets and manual setup before use.
 #>
 
 [CmdletBinding()]
@@ -91,8 +91,8 @@ param(
     [uri]$CesUrl,
     [string]$ExportPath = "C:\Setup\Export",
     [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$ExportPassword
+    [ValidateScript({ $_.Length -gt 0 })]
+    [System.Security.SecureString]$ExportPassword
 )
 
 $ErrorActionPreference = "Stop"
@@ -236,6 +236,39 @@ function Initialize-ExportDirectory([string]$Directory)
     return $fullPath
 }
 
+function New-AccountPassword
+{
+    $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = [byte[]]::new(48)
+    $password = [System.Security.SecureString]::new()
+    try
+    {
+        $random.GetBytes($bytes)
+        foreach ($character in 'Aa1!'.ToCharArray()) { $password.AppendChar($character) }
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+        foreach ($value in $bytes) { $password.AppendChar($alphabet[$value -band 63]) }
+        $password.MakeReadOnly()
+        return $password
+    }
+    catch { $password.Dispose(); throw }
+    finally { [Array]::Clear($bytes, 0, $bytes.Length); $random.Dispose() }
+}
+
+function Initialize-CRAFTAccount([string]$Identity, [string]$DnsRoot)
+{
+    $account = Get-ADUser -Filter { SamAccountName -eq $Identity }
+    if ($account) { return $account }
+    Write-Info "Creating account '$Identity' with an independent generated password..."
+    $password = New-AccountPassword
+    try
+    {
+        New-ADUser -Name $Identity -SamAccountName $Identity -UserPrincipalName "$Identity@$DnsRoot" `
+            -AccountPassword $password -Enabled $true -PasswordNeverExpires $true
+    }
+    finally { $password.Dispose() }
+    return Get-ADUser -Identity $Identity
+}
+
 function Get-UsableCertificate([string]$Store, [string]$Eku, [string]$DnsName = "")
 {
     $now = Get-Date
@@ -257,6 +290,7 @@ Write-Host @"
 # -----------------------------------------------------------------------------
 Write-Step "Validating environment prerequisites..."
 
+if ($EnrollmentAgentIdentity -ieq $TargetUser) { throw "The service account and target user must be different accounts." }
 Import-Module ActiveDirectory -ErrorAction Stop
 $domain = Get-ADDomain -ErrorAction Stop
 $rootDse = Get-ADRootDSE -ErrorAction Stop
@@ -302,38 +336,13 @@ $ExportPath = Initialize-ExportDirectory $ExportPath
 # -----------------------------------------------------------------------------
 Write-Step "Configuring Active Directory accounts..."
 
-$secPass = ConvertTo-SecureString $ExportPassword -AsPlainText -Force
-
 # Submitter / Enrollment Agent service account
-$agentUser = Get-ADUser -Filter { SamAccountName -eq $EnrollmentAgentIdentity }
-if (-not $agentUser)
-{
-    Write-Info "Creating service account '$EnrollmentAgentIdentity'..."
-    New-ADUser -Name $EnrollmentAgentIdentity `
-               -SamAccountName $EnrollmentAgentIdentity `
-               -UserPrincipalName "$EnrollmentAgentIdentity@$($domain.DNSRoot)" `
-               -AccountPassword $secPass `
-               -Enabled $true `
-               -PasswordNeverExpires $true
-    $agentUser = Get-ADUser -Identity $EnrollmentAgentIdentity
-}
+$agentUser = Initialize-CRAFTAccount $EnrollmentAgentIdentity $domain.DNSRoot
 Write-Info "Enrollment Agent Account    : $($agentUser.UserPrincipalName) (SID: $($agentUser.SID))"
 
 # Target user for demonstration / testing
-$userObj = Get-ADUser -Filter { SamAccountName -eq $TargetUser }
-if (-not $userObj)
-{
-    Write-Info "Creating demo user account '$TargetUser'..."
-    New-ADUser -Name $TargetUser `
-               -SamAccountName $TargetUser `
-               -UserPrincipalName "$TargetUser@$($domain.DNSRoot)" `
-               -AccountPassword $secPass `
-               -Enabled $true `
-               -PasswordNeverExpires $true
-    $userObj = Get-ADUser -Identity $TargetUser
-}
+$userObj = Initialize-CRAFTAccount $TargetUser $domain.DNSRoot
 Write-Info "Target Demo User            : $($userObj.UserPrincipalName) (SID: $($userObj.SID))"
-
 
 # -----------------------------------------------------------------------------
 # 3. Export Submitter Kerberos Keytab
@@ -341,15 +350,27 @@ Write-Info "Target Demo User            : $($userObj.UserPrincipalName) (SID: $(
 Write-Step "Generating Kerberos keytab for $EnrollmentAgentIdentity..."
 
 $realmUpper = $domain.DNSRoot.ToUpperInvariant()
-$ktpassArgs = @(
-    "/princ", "$EnrollmentAgentIdentity@$realmUpper",
-    "/mapuser", "$($domain.NetBIOSName)\$EnrollmentAgentIdentity",
-    "/pass", $ExportPassword,
-    "/crypto", "AES256-SHA1",
-    "/ptype", "KRB5_NT_PRINCIPAL",
-    "/out", $keytabPath
-)
-Invoke-CheckedCommand "ktpass.exe" $ktpassArgs
+$servicePassword = New-AccountPassword
+$passwordPointer = [IntPtr]::Zero
+try
+{
+    $passwordPointer = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($servicePassword)
+    $ktpassArgs = @(
+        "/princ", "$EnrollmentAgentIdentity@$realmUpper",
+        "/mapuser", "$($domain.NetBIOSName)\$EnrollmentAgentIdentity",
+        "/pass", [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer),
+        "/crypto", "AES256-SHA1",
+        "/ptype", "KRB5_NT_PRINCIPAL",
+        "/out", $keytabPath
+    )
+    Invoke-CheckedCommand "ktpass.exe" $ktpassArgs
+}
+finally
+{
+    $ktpassArgs = $null
+    if ($passwordPointer -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer) }
+    $servicePassword.Dispose()
+}
 if (-not (Test-Path -LiteralPath $keytabPath) -or (Get-Item -LiteralPath $keytabPath).Length -eq 0)
 {
     throw "Failed to generate submitter.keytab via ktpass.exe"

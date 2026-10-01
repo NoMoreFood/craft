@@ -6,7 +6,8 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
 
-foreach ($name in @("Invoke-CheckedCommand", "Get-UsableCertificate", "Initialize-ExportDirectory"))
+foreach ($name in @("Invoke-CheckedCommand", "Get-UsableCertificate", "Initialize-ExportDirectory",
+    "New-AccountPassword", "Initialize-CRAFTAccount"))
 {
     $definition = $ast.Find({ param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -90,7 +91,7 @@ Write-Host "PASS: export ACL isolation, existing credentials and unsafe parent r
 
 $parameterCheck = [scriptblock]::Create($ast.ParamBlock.Extent.Text + "`n" +
     '[pscustomobject]@{ ValidityHours = $ValidityHours; KeySize = $KeySize; CesUrl = $CesUrl }')
-$valid = @{ AllowedTargetGroup = "CRAFT Test Users"; ExportPassword = "offline-test-only";
+$valid = @{ AllowedTargetGroup = "CRAFT Test Users"; ExportPassword = (ConvertTo-SecureString "offline-test-only" -AsPlainText -Force);
     CesUrl = "https://ces.example.com/service.svc/CES" }
 $defaults = & $parameterCheck @valid
 Assert ($defaults.ValidityHours -eq 10 -and $defaults.KeySize -eq 3072) "Unexpected certificate defaults."
@@ -100,7 +101,7 @@ foreach ($case in @(
     @{ TargetUser = "bad(user)" }, @{ EnrollmentAgentName = 'bad"name' },
     @{ CesUrl = "http://ces.example.com/" }, @{ CesUrl = "/relative" },
     @{ CesUrl = "https://user@ces.example.com/" }, @{ CesUrl = "https://ces.example.com/#fragment" },
-    @{ AllowedTargetGroup = "" }, @{ ExportPassword = "" }
+    @{ AllowedTargetGroup = "" }, @{ ExportPassword = [System.Security.SecureString]::new() }
 ))
 {
     $parameters = $valid.Clone()
@@ -111,6 +112,40 @@ foreach ($case in @(
     Assert $rejected "Invalid provisioning input was accepted: $($case.Keys -join ', ')."
 }
 Write-Host "PASS: provisioning parameter validation"
+
+& {
+    $accounts = @{}
+    $passwords = @{}
+    function Write-Info([string]$Message) {}
+    function Get-ADUser([scriptblock]$Filter, [Alias('Identity')][string]$LookupIdentity)
+    {
+        if ($Filter) { $LookupIdentity = (Get-Variable -Name Identity -Scope 1).Value }
+        $accounts[$LookupIdentity]
+    }
+    function New-ADUser([string]$Name, [string]$SamAccountName, [string]$UserPrincipalName,
+        [System.Security.SecureString]$AccountPassword, [bool]$Enabled, [bool]$PasswordNeverExpires)
+    {
+        Assert ($Name -eq $SamAccountName -and $Enabled) "Unexpected account creation parameters."
+        Assert ($AccountPassword.IsReadOnly() -and $AccountPassword.Length -ge 48) "Weak generated account password."
+        $passwords[$Name] = $AccountPassword.Copy()
+        $accounts[$Name] = [pscustomobject]@{ UserPrincipalName = $UserPrincipalName; SID = $Name }
+    }
+    try
+    {
+        $service = Initialize-CRAFTAccount 'svc-test' 'example.com'
+        $demo = Initialize-CRAFTAccount 'demo-test' 'example.com'
+        $serviceSecret = [System.Net.NetworkCredential]::new('', $passwords['svc-test']).Password
+        $demoSecret = [System.Net.NetworkCredential]::new('', $passwords['demo-test']).Password
+        Assert ($serviceSecret -match '^Aa1![A-Za-z0-9+/]{48}$') "Unexpected account password format."
+        Assert ($serviceSecret -ne $demoSecret -and $serviceSecret -ne 'offline-test-only' -and
+            $demoSecret -ne 'offline-test-only') "Service, demo and PFX credentials were reused."
+        $existing = Initialize-CRAFTAccount 'svc-test' 'example.com'
+        Assert ($existing -eq $service -and $passwords.Count -eq 2) "An existing account's password was reset."
+        Assert ($demo.UserPrincipalName -eq 'demo-test@example.com') "Demo account identity changed."
+    }
+    finally { foreach ($password in $passwords.Values) { $password.Dispose() } }
+}
+Write-Host "PASS: independently generated account passwords and existing account preservation"
 
 $powerShell = (Get-Process -Id $PID).Path
 Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command", "exit 0")
