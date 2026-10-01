@@ -269,6 +269,25 @@ function Initialize-CRAFTAccount([string]$Identity, [string]$DnsRoot)
     return Get-ADUser -Identity $Identity
 }
 
+function Export-SubmitterKeytab([string]$Principal, [string]$Account, [string]$Path)
+{
+    if (Test-Path -LiteralPath $Path) { throw "Refusing to replace an existing submitter keytab or rotate its account key." }
+    $arguments = @(
+        "/princ", $Principal,
+        "/mapuser", $Account,
+        "/pass", "+rndpass",
+        "/minpass", "64", "/maxpass", "64", "/answer", "+",
+        "/crypto", "AES256-SHA1",
+        "/ptype", "KRB5_NT_PRINCIPAL",
+        "/out", $Path
+    )
+    Invoke-CheckedCommand "ktpass.exe" $arguments
+    if (-not (Test-Path -LiteralPath $Path) -or (Get-Item -LiteralPath $Path).Length -eq 0)
+    {
+        throw "Failed to generate submitter.keytab via ktpass.exe"
+    }
+}
+
 function Get-UsableCertificate([string]$Store, [string]$Eku, [string]$DnsName = "")
 {
     $now = Get-Date
@@ -350,31 +369,7 @@ Write-Info "Target Demo User            : $($userObj.UserPrincipalName) (SID: $(
 Write-Step "Generating Kerberos keytab for $EnrollmentAgentIdentity..."
 
 $realmUpper = $domain.DNSRoot.ToUpperInvariant()
-$servicePassword = New-AccountPassword
-$passwordPointer = [IntPtr]::Zero
-try
-{
-    $passwordPointer = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($servicePassword)
-    $ktpassArgs = @(
-        "/princ", "$EnrollmentAgentIdentity@$realmUpper",
-        "/mapuser", "$($domain.NetBIOSName)\$EnrollmentAgentIdentity",
-        "/pass", [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer),
-        "/crypto", "AES256-SHA1",
-        "/ptype", "KRB5_NT_PRINCIPAL",
-        "/out", $keytabPath
-    )
-    Invoke-CheckedCommand "ktpass.exe" $ktpassArgs
-}
-finally
-{
-    $ktpassArgs = $null
-    if ($passwordPointer -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer) }
-    $servicePassword.Dispose()
-}
-if (-not (Test-Path -LiteralPath $keytabPath) -or (Get-Item -LiteralPath $keytabPath).Length -eq 0)
-{
-    throw "Failed to generate submitter.keytab via ktpass.exe"
-}
+Export-SubmitterKeytab "$EnrollmentAgentIdentity@$realmUpper" "$($domain.NetBIOSName)\$EnrollmentAgentIdentity" $keytabPath
 Write-Info "Keytab generated successfully at $keytabPath"
 
 # -----------------------------------------------------------------------------

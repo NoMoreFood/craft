@@ -7,7 +7,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [r
 if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
 
 foreach ($name in @("Invoke-CheckedCommand", "Get-UsableCertificate", "Initialize-ExportDirectory",
-    "New-AccountPassword", "Initialize-CRAFTAccount"))
+    "New-AccountPassword", "Initialize-CRAFTAccount", "Export-SubmitterKeytab"))
 {
     $definition = $ast.Find({ param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -146,6 +146,47 @@ Write-Host "PASS: provisioning parameter validation"
     finally { foreach ($password in $passwords.Values) { $password.Dispose() } }
 }
 Write-Host "PASS: independently generated account passwords and existing account preservation"
+
+& {
+    $root = Join-Path $env:USERPROFILE "CRAFT.Tests.$([Guid]::NewGuid().ToString('N'))"
+    Initialize-ExportDirectory $root | Out-Null
+    $path = Join-Path $root 'submitter.keytab'
+    $calls = [System.Collections.Generic.List[object]]::new()
+    $writeEmpty = $false
+    function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments)
+    {
+        Assert ($FilePath -eq 'ktpass.exe') "Unexpected keytab generator."
+        $calls.Add($Arguments)
+        $output = $Arguments[[Array]::IndexOf($Arguments, '/out') + 1]
+        [System.IO.File]::WriteAllText($output, $(if ($writeEmpty) { '' } else { 'SYNTHETIC-NO-CREDENTIALS' }))
+    }
+    try
+    {
+        Export-SubmitterKeytab 'svc-test@EXAMPLE.COM' 'EXAMPLE\svc-test' $path
+        $expected = @('/princ', 'svc-test@EXAMPLE.COM', '/mapuser', 'EXAMPLE\svc-test',
+            '/pass', '+rndpass', '/minpass', '64', '/maxpass', '64', '/answer', '+',
+            '/crypto', 'AES256-SHA1', '/ptype', 'KRB5_NT_PRINCIPAL', '/out', $path)
+        $matches = $calls.Count -eq 1 -and ($calls[0] -join '|') -ceq ($expected -join '|')
+        Assert $matches "Keytab generation exposed a password or changed its principal/encryption."
+        $rejected = $false
+        try { Export-SubmitterKeytab 'svc-test@EXAMPLE.COM' 'EXAMPLE\svc-test' $path }
+        catch { $rejected = $true }
+        Assert ($rejected -and $calls.Count -eq 1) "An existing keytab was overwritten or its password rotated."
+        Remove-Item -LiteralPath $path -Force
+        $writeEmpty = $true
+        $rejected = $false
+        try { Export-SubmitterKeytab 'svc-test@EXAMPLE.COM' 'EXAMPLE\svc-test' $path }
+        catch { $rejected = $true }
+        Assert $rejected "Empty keytab output was accepted."
+    }
+    finally
+    {
+        if ([System.IO.Path]::GetDirectoryName($root) -ne $env:USERPROFILE -or
+            [System.IO.Path]::GetFileName($root) -notlike 'CRAFT.Tests.*') { throw "Unexpected keytab fixture path." }
+        Remove-Item -LiteralPath $root -Recurse -Force
+    }
+}
+Write-Host "PASS: secret-free keytab invocation, overwrite prevention and empty-output rejection"
 
 $powerShell = (Get-Process -Id $PID).Path
 Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command", "exit 0")
