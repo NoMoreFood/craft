@@ -212,7 +212,7 @@ void test(std::string_view name, auto action)
 
 void checks()
 {
-    test("maintenance updates preserve renewal during enrollment outages", [] {
+    test("maintenance updates handle enrollment outages and shortened renewal grants", [] {
         const auto result = run({fixtures, "--maintain-update-tests"});
         need(result.code == 0, result.output + result.error);
     });

@@ -1020,6 +1020,43 @@ static void maintenance_update_tests()
         need(maintenance_renewals == 1 && exhausted.retry >= 45,
              "an exhausted renewal window caused renewal or busy polling");
     });
+    for (const bool near_expiry : {false, true})
+        test(near_expiry ? "a renewal grant already due for renewal is revisited promptly"
+                        : "a shortened renewal window triggers prompt enrollment", [&] {
+            for (const char *name : {".maintain-test-issuance", ".krb5cc_craft.maintain.retry"})
+                need(unlinkat(home.get(), name, 0) == 0 || errno == ENOENT, "reset shortened grant state");
+            const Fd mode(openat(home.get(), ".maintain-test-mode", O_WRONLY | O_CREAT | O_TRUNC, 0600));
+            need(mode.get() >= 0, "enable test enrollment");
+            write_all(mode.get(), byte_view("healthy"));
+            const auto now = static_cast<krb5_timestamp>(time(nullptr));
+            auto due = original;
+            due.times.starttime = now - 90;
+            due.times.endtime = now + 10;
+            publish(due);
+            auto grant = due;
+            grant.times.starttime = near_expiry ? now - 85 : now;
+            grant.times.endtime = now + (near_expiry ? 15 : 80);
+            if (!near_expiry) grant.times.renew_till = now + 90;
+            grant.ticket_flags &= ~TKT_FLG_INITIAL;
+            maintenance_grant = &grant;
+            maintenance_renewals = 0;
+            ScopeExit reset_grant([&]() noexcept { maintenance_grant = nullptr; });
+
+            // Accept and publish the shorter grant, then follow its immediate maintenance action.
+            Result shortened;
+            update(caller, {}, shortened);
+            need(shortened.success && shortened.end == grant.times.endtime && shortened.delay <= 1,
+                 "accepted renewal grant postponed a required action");
+            grant.times.starttime = now;
+            grant.times.endtime = now + 100;
+            if (!near_expiry) maintenance_grant = nullptr;
+            Result refreshed;
+            update(caller, {}, refreshed);
+            need(refreshed.success && refreshed.end > shortened.end, "follow-up did not extend the short grant");
+            if (near_expiry) need(maintenance_renewals == 2, "due renewal did not run again");
+            else need(maintenance_renewals == 1 && std::ranges::count(read(".maintain-test-issuance"), '\n') == 1,
+                      "shortened renewal window did not enroll once");
+        });
 }
 
 int main(int argc, char **argv)

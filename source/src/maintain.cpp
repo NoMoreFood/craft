@@ -340,7 +340,8 @@ inline void update(const Account &caller, const std::string &expected, Result &r
         publish_cache(caller, bytes);
         result.end = renewed.times.endtime;
         result.renew = renewed.times.renew_till;
-        result.delay = schedule(&renewed, time(nullptr)).delay;
+        const auto next = schedule(&renewed, time(nullptr));
+        result.delay = next.action == Action::Idle ? next.delay : 1;
         result.success = true;
         syslog(LOG_NOTICE, "renewed TGT for uid=%lu expiry=%lld",
                static_cast<unsigned long>(caller.uid), static_cast<long long>(result.end));
