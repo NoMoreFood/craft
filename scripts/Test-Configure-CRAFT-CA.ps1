@@ -116,6 +116,55 @@ foreach ($case in @(
 Write-Host "PASS: provisioning parameter validation"
 
 & {
+    # Execute only the client export block, with synthetic directory and domain data.
+    $start = $ast.EndBlock.Statements | Where-Object {
+        $_.Extent.Text -like 'Write-Step "Generating Linux client configuration*'
+    } | Select-Object -First 1
+    $end = $ast.EndBlock.Statements | Where-Object {
+        $_.Extent.Text -like 'Write-Info "Exported krb5.conf*'
+    } | Select-Object -First 1
+    Assert ($null -ne $start -and $null -ne $end) "Missing client configuration export block."
+    $export = [scriptblock]::Create($ast.Extent.Text.Substring(
+        $start.Extent.StartOffset, $end.Extent.EndOffset - $start.Extent.StartOffset))
+    function Write-Step([string]$Message) {}
+    function Write-Info([string]$Message) {}
+    $domain = [pscustomobject]@{ DNSRoot = 'example.com'; NetBIOSName = 'EXAMPLE' }
+    $realmUpper = 'EXAMPLE.COM'
+    $newOid = '1.3.6.1.4.1.311.21.8.999.1'
+    $EnrollmentAgentIdentity = 'svc-offline-test'
+    $CesUrl = [uri]'https://ces.example.com/service.svc/CES'
+    $KdcHost = 'dc.example.com'
+    $ExportPath = Join-Path $env:USERPROFILE "CRAFT.Tests.$([Guid]::NewGuid().ToString('N'))"
+    [System.IO.Directory]::CreateDirectory($ExportPath) | Out-Null
+    try
+    {
+        foreach ($case in @(@(1, 1), @(4, 4), @(9, 9), @(10, 10), @(11, 10), @(24, 10)))
+        {
+            $ValidityHours = $case[0]
+            & $export
+            $config = ConvertFrom-StringData ([System.IO.File]::ReadAllText((Join-Path $ExportPath 'config')))
+            $krb5 = [System.IO.File]::ReadAllText((Join-Path $ExportPath 'krb5.conf'))
+            $ticket = [regex]::Match($krb5, '(?m)^\s*ticket_lifetime\s*=\s*(\d+)h\s*$')
+            Assert ($ticket.Success -and [int]$ticket.Groups[1].Value -eq $case[1]) `
+                "Kerberos ticket lifetime is incompatible with a $ValidityHours-hour certificate."
+            Assert ([int]$config.tgt_seconds -eq $case[1] * 3600) "CRAFT and Kerberos ticket lifetimes differ."
+            Assert ([int]$config.cert_remaining_max_seconds -eq $ValidityHours * 3600 -and
+                [int]$config.cert_total_max_seconds -eq $ValidityHours * 3600) "Certificate validity caps differ."
+            Assert ($config.enabled -eq 'no' -and $config.require_full_tgt_lifetime -eq 'yes' -and
+                $config.renew_seconds -eq '604800' -and $krb5 -match '(?m)^\s*renew_lifetime\s*=\s*7d\s*$') `
+                "Generated client configuration lost its strict lifetime or renewal policy."
+        }
+    }
+    finally
+    {
+        if ([System.IO.Path]::GetDirectoryName($ExportPath) -ne $env:USERPROFILE -or
+            [System.IO.Path]::GetFileName($ExportPath) -notlike 'CRAFT.Tests.*') { throw "Unexpected export fixture path." }
+        Remove-Item -LiteralPath $ExportPath -Recurse -Force
+    }
+}
+Write-Host "PASS: exported client lifetimes match short and default certificate validity"
+
+& {
     $accounts = @{}
     $passwords = @{}
     function Write-Info([string]$Message) {}

@@ -841,6 +841,7 @@ Write-Info "Exported CA CRL         : $caCrlPath"
 # -----------------------------------------------------------------------------
 Write-Step "Generating Linux client configuration ($ExportPath\config)..."
 
+$tgtHours = [Math]::Min($ValidityHours, 10)
 $craftConfContent = @"
 enabled=no
 domain=$($domain.DNSRoot)
@@ -851,7 +852,7 @@ certificate_cn={user}
 ces_url=$($CesUrl.AbsoluteUri)
 ces_auth=negotiate
 service_principal=$EnrollmentAgentIdentity@$realmUpper
-tgt_seconds=36000
+tgt_seconds=$($tgtHours * 3600)
 renew_seconds=604800
 require_full_tgt_lifetime=yes
 cert_remaining_max_seconds=$($ValidityHours * 3600)
@@ -874,7 +875,7 @@ $krb5ConfContent = @"
     allow_weak_crypto = false
     forwardable = false
     proxiable = false
-    ticket_lifetime = 10h
+    ticket_lifetime = ${tgtHours}h
     renew_lifetime = 7d
     kdc_default_options = 0
     permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
