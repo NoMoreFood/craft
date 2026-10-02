@@ -1,0 +1,108 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="02-enrollment-sequence-title 02-enrollment-sequence-desc">
+  <title id="02-enrollment-sequence-title">From a Linux account to a validated user TGT.</title>
+  <desc id="02-enrollment-sequence-desc">Sequence: validate the real caller and drop privileges; obtain a separate short-lived transport TGT using the submission keytab; resolve UPN and SID in the Global Catalog; generate and sign an EOBO request; enroll through CES; validate the certificate; perform user PKINIT; validate the TGT; return cache bytes to the unprivileged caller and publish atomically. Solid arrows are requests; dashed arrows are responses. CES transport uses Negotiate or a separate TLS client identity.</desc>
+  <rect x="0" y="0" width="1600" height="1000" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <rect x="0" y="0" width="1600" height="181" rx="0" fill="#112D43" stroke="none" stroke-width="1" />
+  <rect x="64" y="40" width="5" height="26" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
+  <text x="84" y="55.82" font-size="22" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">CRAFT</text>
+  <text x="193" y="55.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">CERTIFICATE REQUEST AGENT FOR TICKETS</text>
+  <text x="1536" y="55.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="end">02 / 04</text>
+  <text x="64" y="114.78" font-size="38" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">From a Linux account to a validated user TGT.</text>
+  <text x="64" y="153.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">Successful exchange. Time flows downward; spacing represents order, not network latency.</text>
+  <rect x="105.0" y="213" width="270" height="64" rx="9" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <text x="240" y="243.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">craft / caller</text>
+  <text x="240" y="266.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">launch + cache writer</text>
+  <polyline points="240,284 240,833" fill="none" stroke="#D5E0E7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <rect x="445.0" y="213" width="250" height="64" rx="9" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <text x="570" y="243.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="600" text-anchor="middle">craft-worker</text>
+  <text x="570" y="266.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">craft service account</text>
+  <polyline points="570,284 570,833" fill="none" stroke="#D5E0E7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <rect x="770.0" y="213" width="190" height="64" rx="9" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <text x="865" y="243.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="600" text-anchor="middle">Global Catalog</text>
+  <text x="865" y="266.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">AD identity</text>
+  <polyline points="865,284 865,833" fill="none" stroke="#D5E0E7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <rect x="1000.0" y="213" width="240" height="64" rx="9" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <text x="1120" y="243.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="600" text-anchor="middle">CES + CA</text>
+  <text x="1120" y="266.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">certificate issuance</text>
+  <polyline points="1120,284 1120,833" fill="none" stroke="#D5E0E7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <rect x="1335.0" y="213" width="190" height="64" rx="9" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <text x="1430" y="243.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#315DC0" font-weight="600" text-anchor="middle">KDC</text>
+  <text x="1430" y="266.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">Kerberos authority</text>
+  <polyline points="1430,284 1430,833" fill="none" stroke="#D5E0E7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <rect x="565" y="319" width="10" height="499" rx="0" fill="#E2F2EF" stroke="none" stroke-width="1" />
+  <rect x="235" y="309" width="10" height="516" rx="0" fill="#E3EBFA" stroke="none" stroke-width="1" />
+  <circle cx="70" cy="319" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="324.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">1</text>
+  <polyline points="245,319 565,319" fill="none" stroke="#18334A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="565,319 557.0,314.6 557.0,323.4" fill="#18334A" />
+  <rect x="252" y="293" width="205.1181640625" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="257" y="308.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">UID / NSS; drop privileges</text>
+  <circle cx="70" cy="385" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="390.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">2</text>
+  <polyline points="575,369 1430,369" fill="none" stroke="#18334A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1430,369 1422.0,364.6 1422.0,373.4" fill="#18334A" />
+  <rect x="586" y="343" width="442.22167968750006" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="358.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Authenticate directory/CES account with submitter.keytab</text>
+  <polyline points="1430,401 575,401" fill="none" stroke="#18334A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <polygon points="575,401 583.0,405.4 583.0,396.6" fill="#18334A" />
+  <rect x="867" y="375" width="438.6171875" height="20" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="872" y="389.96" font-size="16" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Transport TGT: 5 min requested; held only in worker memory</text>
+  <circle cx="70" cy="453" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="458.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">3</text>
+  <polyline points="575,437 865,437" fill="none" stroke="#007F7C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="865,437 857.0,432.6 857.0,441.4" fill="#007F7C" />
+  <rect x="586" y="411" width="216.27441406250003" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="426.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">LDAP / GSSAPI: query caller</text>
+  <polyline points="865,469 575,469" fill="none" stroke="#007F7C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <polygon points="575,469 583.0,473.4 583.0,464.6" fill="#007F7C" />
+  <rect x="586" y="443" width="176.47216796875" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="458.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Unique AD UPN + SID</text>
+  <circle cx="70" cy="528" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="533.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">4</text>
+  <rect x="495" y="497" width="712" height="62" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
+  <text x="518" y="520.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Generate a fresh RSA-3072 key and CSR.</text>
+  <text x="518" y="545.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Enrollment-agent CMS signature binds DOMAIN\user.</text>
+  <circle cx="70" cy="605" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="610.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">5</text>
+  <polyline points="575,590 1120,590" fill="none" stroke="#007F7C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1120,590 1112.0,585.6 1112.0,594.4" fill="#007F7C" />
+  <rect x="586" y="564" width="362.75" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="579.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">HTTPS / MS-WSTEP: signed enrollment request</text>
+  <polyline points="1120,622 575,622" fill="none" stroke="#007F7C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <polygon points="575,622 583.0,626.4 583.0,617.6" fill="#007F7C" />
+  <rect x="586" y="596" width="334.90087890625" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="611.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">User certificate: CA supplies SID + template</text>
+  <text x="1246" y="581.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">CES transport:</text>
+  <text x="1246" y="603.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Negotiate or</text>
+  <text x="1246" y="625.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">separate mTLS identity</text>
+  <circle cx="70" cy="678" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="683.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">6</text>
+  <rect x="495" y="647" width="712" height="62" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
+  <text x="518" y="670.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Validate key, UPN, SID, template, EKUs and lifetime.</text>
+  <text x="518" y="695.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Verify certificate chain and configured CRLs.</text>
+  <circle cx="70" cy="753" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="758.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">7</text>
+  <polyline points="575,738 1430,738" fill="none" stroke="#315DC0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1430,738 1422.0,733.6 1422.0,742.4" fill="#315DC0" />
+  <rect x="586" y="712" width="369.4736328125" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="727.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">PKINIT using sealed in-memory certificate + key</text>
+  <polyline points="1430,770 575,770" fill="none" stroke="#315DC0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <polygon points="575,770 583.0,774.4 583.0,765.6" fill="#315DC0" />
+  <rect x="904" y="744" width="397.6796875" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="909" y="759.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">User TGT + session key; KDC sets actual ticket times</text>
+  <circle cx="70" cy="818" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="70" y="823.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">8</text>
+  <polyline points="565,818 245,818" fill="none" stroke="#315DC0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
+  <polygon points="245,818 253.0,822.4 253.0,813.6" fill="#315DC0" />
+  <rect x="253" y="792" width="251.20410156250003" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="258" y="807.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Validate TGT; return cache bytes</text>
+  <text x="621" y="812.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Principal / flags / AES / lifetime</text>
+  <text x="1100" y="812.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Strict default rejects shorter grants</text>
+  <rect x="105" y="853" width="1420" height="74" rx="10" fill="#E3EBFA" stroke="none" stroke-width="1" />
+  <text x="128" y="884.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Publish only after successful validation</text>
+  <text x="128" y="912.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Caller writes a mode-0600 staging file, then atomically replaces .krb5cc_craft. Output is the FILE: cache name.</text>
+  <polyline points="64,956 1536,956" fill="none" stroke="#D5E0E7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="64" y="981.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">SOURCE  launcher.cpp: main; worker.cpp: acquire_transport, main, validate_leaf, validate_tgt; common.hpp: publish_cache</text>
+  <text x="1536" y="980.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="end">CRAFT  /  02</text>
+</svg>

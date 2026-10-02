@@ -1,0 +1,84 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="04-job-maintenance-title 04-job-maintenance-desc">
+  <title id="04-job-maintenance-title">Keep a job authenticated, then stop with it.</title>
+  <desc id="04-job-maintenance-desc">The maintainer starts once for a watched job PID. A usable cache and detached loop are required before startup returns successfully. Due renewable TGTs renew at the KDC using the cached ticket and session key. Missing or expired TGTs, the rollover window, or nonextendible tickets near expiry trigger fresh enrollment through craft. Due renewal takes priority over rollover. Successful updates atomically replace the cache. Renewal retains usable service tickets; fresh enrollment replaces the cache. Failure keeps existing credentials and schedules retries. Job exit stops maintenance but leaves the cache. Applications need to reload refreshed credentials.</desc>
+  <rect x="0" y="0" width="1600" height="1000" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <rect x="0" y="0" width="1600" height="181" rx="0" fill="#112D43" stroke="none" stroke-width="1" />
+  <rect x="64" y="40" width="5" height="26" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
+  <text x="84" y="55.82" font-size="22" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">CRAFT</text>
+  <text x="193" y="55.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">CERTIFICATE REQUEST AGENT FOR TICKETS</text>
+  <text x="1536" y="55.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="end">04 / 04</text>
+  <text x="64" y="114.78" font-size="38" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">Keep a job authenticated, then stop with it.</text>
+  <text x="64" y="153.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">craft-maintain runs as the caller, coordinates one shared cache per UID, and watches a live process.</text>
+  <rect x="64" y="210" width="1472" height="104" rx="11" fill="#112D43" stroke="none" stroke-width="1" />
+  <text x="88" y="230.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="600" text-anchor="start">START ONCE / WATCH A SHELL THAT STAYS ALIVE FOR THE JOB</text>
+  <text x="88" y="258.58" font-size="18" font-family="Consolas, 'DejaVu Sans Mono', monospace" fill="#FFFFFF" font-weight="400" text-anchor="start">job_pid=$$</text>
+  <text x="88" y="279.58" font-size="18" font-family="Consolas, 'DejaVu Sans Mono', monospace" fill="#FFFFFF" font-weight="400" text-anchor="start">cache=$(/usr/local/bin/craft-maintain --watch-pid "$job_pid") || exit "$?"</text>
+  <text x="88" y="301.58" font-size="18" font-family="Consolas, 'DejaVu Sans Mono', monospace" fill="#FFFFFF" font-weight="400" text-anchor="start">export KRB5CCNAME="$cache"</text>
+  <text x="1120" y="257.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">Returns when usable credentials</text>
+  <text x="1120" y="280.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">and background maintenance</text>
+  <text x="1120" y="303.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">are ready.</text>
+  <text x="64" y="361.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#315DC0" font-weight="600" text-anchor="start">01 / RENEW</text>
+  <text x="64" y="401.68" font-size="28" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Use the current ticket</text>
+  <text x="64" y="440.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">When a renewable TGT has &lt;=20% of its lifetime left</text>
+  <text x="64" y="467.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">(capped at 2 h), and its expiry can extend.</text>
+  <text x="64" y="494.96" font-size="16" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">A renewal error retries here; no immediate enrollment.</text>
+  <polyline points="790,347 790,642" fill="none" stroke="#D5E0E7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="824" y="361.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="600" text-anchor="start">02 / FRESH ENROLLMENT</text>
+  <text x="824" y="401.68" font-size="28" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Obtain fresh credentials</text>
+  <text x="824" y="440.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Missing or expired TGT; renewal deadline is near;</text>
+  <text x="824" y="467.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">or a ticket that cannot extend is nearing expiry.</text>
+  <text x="824" y="494.96" font-size="16" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Rollover margin: 1/7 of the renewal window, capped at 1 day.</text>
+  <rect x="64" y="522" width="191" height="79" rx="9" fill="#E3EBFA" stroke="none" stroke-width="1" />
+  <text x="159.5" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">Cached TGT</text>
+  <text x="159.5" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">+ session key</text>
+  <rect x="315" y="522" width="178" height="79" rx="9" fill="#E3EBFA" stroke="none" stroke-width="1" />
+  <text x="404.0" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">KDC</text>
+  <text x="404.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">renew request</text>
+  <rect x="553" y="522" width="215" height="79" rx="9" fill="#E3EBFA" stroke="none" stroke-width="1" />
+  <text x="660.5" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">Validated TGT</text>
+  <text x="660.5" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">new expiry</text>
+  <polyline points="255,561 315,561" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="315,561 307.0,556.6 307.0,565.4" fill="#315DC0" />
+  <polyline points="493,561 553,561" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="553,561 545.0,556.6 545.0,565.4" fill="#315DC0" />
+  <text x="64" y="629.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#315DC0" font-weight="400" text-anchor="start">Renew-till never moves later.</text>
+  <text x="64" y="653.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#315DC0" font-weight="400" text-anchor="start">Retain usable service tickets.</text>
+  <rect x="824" y="522" width="178" height="79" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
+  <text x="913.0" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">Run craft</text>
+  <text x="913.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">fresh key + CSR</text>
+  <rect x="1062" y="522" width="218" height="79" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
+  <text x="1171.0" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">GC + CES / CA</text>
+  <text x="1171.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">enroll certificate</text>
+  <rect x="1340" y="522" width="196" height="79" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
+  <text x="1438.0" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">KDC / PKINIT</text>
+  <text x="1438.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">new user TGT</text>
+  <polyline points="1002,561 1062,561" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1062,561 1054.0,556.6 1054.0,565.4" fill="#007F7C" />
+  <polyline points="1280,561 1340,561" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1340,561 1332.0,556.6 1332.0,565.4" fill="#007F7C" />
+  <text x="824" y="629.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="400" text-anchor="start">New renewal window.</text>
+  <text x="824" y="653.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="400" text-anchor="start">Replace the shared cache.</text>
+  <text x="64" y="679.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">A due renewal takes priority during rollover, keeping usable credentials alive while enrollment is delayed.</text>
+  <rect x="64" y="708" width="1472" height="92" rx="11" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <text x="84" y="741.82" font-size="22" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Successful refresh</text>
+  <text x="84" y="773.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Publish atomically to .krb5cc_craft (caller-owned, mode 0600).</text>
+  <polyline points="790,725 790,782" fill="none" stroke="#D5E0E7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="824" y="741.82" font-size="22" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Refresh failure</text>
+  <text x="824" y="773.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Keep the existing cache and retry; the job continues.</text>
+  <polyline points="64,830 524,830" fill="none" stroke="#D5E0E7" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="64" y="856.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="start">RETRY</text>
+  <text x="64" y="886.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Renewal: ~30 s to 5 min + jitter.</text>
+  <text x="64" y="913.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Enrollment cooldown: 1 min to 1 h.</text>
+  <polyline points="552,830 1036,830" fill="none" stroke="#D5E0E7" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="552" y="856.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="start">STOP</text>
+  <text x="552" y="886.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Watched PID exits, duration ends or signal.</text>
+  <text x="552" y="913.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Maintainer stops; the shared cache remains.</text>
+  <polyline points="1064,830 1536,830" fill="none" stroke="#D5E0E7" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="1064" y="856.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="start">APPLICATION</text>
+  <text x="1064" y="886.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Reload credentials when authenticating again.</text>
+  <text x="1064" y="913.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Access follows the user's service permissions.</text>
+  <polyline points="64,956 1536,956" fill="none" stroke="#D5E0E7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="64" y="981.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">SOURCE  maintain.cpp: schedule, update, renewed_cache, detached loop; common.hpp: publish_cache; source/README.md: Long-running jobs</text>
+  <text x="1536" y="980.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="end">CRAFT  /  04</text>
+</svg>

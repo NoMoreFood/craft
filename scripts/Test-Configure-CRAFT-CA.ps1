@@ -215,7 +215,7 @@ Write-Host "PASS: independently generated account passwords and existing account
     {
         Export-SubmitterKeytab 'svc-test@EXAMPLE.COM' 'EXAMPLE\svc-test' $path
         $expected = @('/princ', 'svc-test@EXAMPLE.COM', '/mapuser', 'EXAMPLE\svc-test',
-            '/pass', '+rndpass', '/minpass', '64', '/maxpass', '64', '/answer', '+',
+            '+rndpass', '/minpass', '64', '/maxpass', '64', '+answer',
             '/crypto', 'AES256-SHA1', '/ptype', 'KRB5_NT_PRINCIPAL', '/out', $path)
         $matches = $calls.Count -eq 1 -and ($calls[0] -join '|') -ceq ($expected -join '|')
         Assert $matches "Keytab generation exposed a password or changed its principal/encryption."
@@ -330,8 +330,15 @@ Write-Host "PASS: secret-free keytab invocation, overwrite prevention and empty-
         $mockAdmin = [pscustomobject]@{ Bytes = $good; Fail = $false }
         function Get-ADUser([string]$Identity, [string[]]$Properties, [string]$ErrorAction)
         {
-            if ($Identity -eq $agent)
+            $agentDn = 'CN=svc-test,CN=Users,DC=example,DC=com'
+            if ($Identity -eq $agent -and -not $Properties)
             {
+                return [pscustomobject]@{ DistinguishedName = $agentDn }
+            }
+            if ($Identity -eq $agentDn)
+            {
+                Assert (($Properties -join '|') -ceq 'tokenGroups|sIDHistory') `
+                    "Agent group lookup omitted authorization data."
                 return [pscustomobject]@{
                     SID = [System.Security.Principal.SecurityIdentifier]::new($agent)
                     tokenGroups = $tokenGroups
@@ -477,12 +484,16 @@ Write-Host "PASS: scoped CA restrictions, malformed policy rejection and fail-cl
     catch { $rejected = $true }
     Assert $rejected "The agent was allowed to change its own template permissions."
     $writes = [System.Collections.Generic.List[object]]::new()
-    function Get-Acl([string]$LiteralPath)
+    function Get-Acl([string]$Path)
     {
-        Assert ($LiteralPath -eq 'AD:offline-template') "ACL test accessed a real template."
+        Assert ($Path -eq 'AD:offline-template') "ACL test accessed a real template."
         return $currentAcl
     }
-    function Set-Acl([string]$LiteralPath, $AclObject) { $writes.Add($AclObject) }
+    function Set-Acl([string]$Path, $AclObject)
+    {
+        Assert ($Path -eq 'AD:offline-template') "ACL test wrote an unexpected template."
+        $writes.Add($AclObject)
+    }
     Set-EnrollmentTemplatePermissions 'offline-template' @($administrator.Value) $agent $false
     $rules = @($currentAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
     Assert (@($rules | Where-Object { $_.IdentityReference -eq $agent -and $_.ObjectType -eq $enroll }).Count -eq 1) `
@@ -517,14 +528,39 @@ Assert ($topCommands.Count -eq 2 -and $topCommands[0].GetCommandName() -eq 'Publ
 
 $powerShell = (Get-Process -Id $PID).Path
 Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command", "exit 0")
+Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command",
+    "[Console]::Error.WriteLine('SYNTHETIC-NATIVE-WARNING'); exit 0")
 $rejected = $false
-try { Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command", "exit 7") }
+try
+{
+    Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command",
+        "[Console]::Error.WriteLine('SYNTHETIC-NATIVE-ERROR'); exit 7")
+}
 catch { $rejected = $_.Exception.Message -like "*exit code 7*" }
 Assert $rejected "A failing native command was reported as successful."
 $rejected = $false
 try { Invoke-CheckedCommand "craft-test-nonexistent-command.exe" @() }
 catch { $rejected = $true }
 Assert $rejected "A missing native command was reported as successful."
+& {
+    $root = Join-Path $env:USERPROFILE "CRAFT.Tests.$([Guid]::NewGuid().ToString('N'))"
+    Initialize-ExportDirectory $root | Out-Null
+    $invalidProgram = Join-Path $root 'invalid-native-program.exe'
+    try
+    {
+        [System.IO.File]::WriteAllText($invalidProgram, 'SYNTHETIC-INVALID-EXECUTABLE')
+        $LASTEXITCODE = 0
+        $rejected = $false
+        try { Invoke-CheckedCommand $invalidProgram @() }
+        catch { $rejected = $true }
+        Assert $rejected "A native command that failed to start inherited a successful exit status."
+    }
+    finally
+    {
+        Remove-Item -LiteralPath $invalidProgram -Force
+        Remove-Item -LiteralPath $root -Force
+    }
+}
 Assert ($ErrorActionPreference -eq "Stop") "Native command handling changed the caller's error preference."
 Write-Host "PASS: native command success/failure handling"
 

@@ -122,8 +122,10 @@ function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments)
     $ErrorActionPreference = "Continue"
     try
     {
+        $global:LASTEXITCODE = $null
         & $command.Source @Arguments *>$null
-        if (-not $? -or $LASTEXITCODE -ne 0) { throw "$FilePath failed (exit code $LASTEXITCODE)." }
+        $exitCode = $global:LASTEXITCODE
+        if ($null -eq $exitCode -or $exitCode -ne 0) { throw "$FilePath failed (exit code $exitCode)." }
     }
     finally
     {
@@ -278,8 +280,8 @@ function Export-SubmitterKeytab([string]$Principal, [string]$Account, [string]$P
     $arguments = @(
         "/princ", $Principal,
         "/mapuser", $Account,
-        "/pass", "+rndpass",
-        "/minpass", "64", "/maxpass", "64", "/answer", "+",
+        "+rndpass",
+        "/minpass", "64", "/maxpass", "64", "+answer",
         "/crypto", "AES256-SHA1",
         "/ptype", "KRB5_NT_PRINCIPAL",
         "/out", $Path
@@ -322,7 +324,7 @@ function Set-EnrollmentTemplatePermissions([string]$DistinguishedName, [string[]
     [System.Security.Principal.SecurityIdentifier]$AgentSid, [bool]$RemoveAuthenticatedEnroll)
 {
     $path = "AD:$DistinguishedName"
-    $acl = Get-Acl -LiteralPath $path
+    $acl = Get-Acl -Path $path
     $enroll = [Guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55'
     $sidType = [System.Security.Principal.SecurityIdentifier]
     if ($RemoveAuthenticatedEnroll)
@@ -341,8 +343,8 @@ function Set-EnrollmentTemplatePermissions([string]$DistinguishedName, [string[]
     $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new(
         $AgentSid, 'ExtendedRight', 'Allow', $enroll))
     $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new($AgentSid, 'GenericRead', 'Allow'))
-    Set-Acl -LiteralPath $path -AclObject $acl
-    Assert-EnrollmentTemplateAcl (Get-Acl -LiteralPath $path) $AgentSid.Value $AdministratorSids $DistinguishedName
+    Set-Acl -Path $path -AclObject $acl
+    Assert-EnrollmentTemplateAcl (Get-Acl -Path $path) $AgentSid.Value $AdministratorSids $DistinguishedName
 }
 
 function Assert-EnrollmentAgentRestrictions([byte[]]$Descriptor, [string]$AgentSid, [string]$TargetSid,
@@ -414,7 +416,9 @@ function Assert-CAEnrollmentPolicy([string]$Configuration, [string]$AgentSid, [s
         $admin = New-Object -ComObject CertificateAuthority.Admin
         [byte[]]$descriptor = $admin.GetConfigEntry($Configuration, '', 'EnrollmentAgentRights')
         $security = [System.Security.AccessControl.RawSecurityDescriptor]::new($descriptor, 0)
-        $account = Get-ADUser -Identity $AgentSid -Properties tokenGroups, sIDHistory -ErrorAction Stop
+        $agentAccount = Get-ADUser -Identity $AgentSid -ErrorAction Stop
+        $account = Get-ADUser -Identity $agentAccount.DistinguishedName -Properties tokenGroups, sIDHistory `
+            -ErrorAction Stop
         if (-not $account.tokenGroups) { throw "The agent's transitive authorization groups could not be read." }
         $agentSids = @($AgentSid)
         foreach ($sid in @($account.tokenGroups) + @($account.sIDHistory))
@@ -563,7 +567,7 @@ if (@($caller.Groups.Value | Where-Object { $_ -in $administratorSids -and $_ -l
     $administratorSids += $caller.User.Value
 }
 $agentTemplateDN = "CN=EnrollmentAgent,$templatesDN"
-$agentTemplateAcl = Get-Acl -LiteralPath "AD:$agentTemplateDN"
+$agentTemplateAcl = Get-Acl -Path "AD:$agentTemplateDN"
 Assert-EnrollmentTemplateAcl $agentTemplateAcl $agentSid.Value $administratorSids 'EnrollmentAgent'
 
 $templateExists = [ADSI]::Exists($templateLdapPath)

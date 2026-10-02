@@ -1,0 +1,94 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="01-system-overview-title 01-system-overview-desc">
+  <title id="01-system-overview-title">A temporary certificate. A reusable ticket workflow.</title>
+  <desc id="01-system-overview-desc">CRAFT separates the Linux caller, its dedicated enrollment worker, and the user ticket cache. The worker resolves the user in Active Directory, enrolls through CES and the CA, authenticates with PKINIT at the KDC, and publishes a caller-owned cache. Applications use that TGT to request service tickets and authenticate to services under the user's existing permissions.</desc>
+  <rect x="0" y="0" width="1600" height="1000" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <rect x="0" y="0" width="1600" height="181" rx="0" fill="#112D43" stroke="none" stroke-width="1" />
+  <rect x="64" y="40" width="5" height="26" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
+  <text x="84" y="55.82" font-size="22" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">CRAFT</text>
+  <text x="193" y="55.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">CERTIFICATE REQUEST AGENT FOR TICKETS</text>
+  <text x="1536" y="55.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="end">01 / 04</text>
+  <text x="64" y="114.78" font-size="38" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">A temporary certificate. A reusable ticket workflow.</text>
+  <text x="64" y="153.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">A ticket-granting ticket (TGT) lets approved Linux users request service tickets without storing AD passwords.</text>
+  <text x="94" y="233.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="start">TRUSTED LINUX HOST</text>
+  <text x="1126" y="233.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="start">ACTIVE DIRECTORY + PKI</text>
+  <polyline points="94,255 790,255" fill="none" stroke="#D5E0E7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+  <polyline points="1126,255 1506,255" fill="none" stroke="#D5E0E7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+  <rect x="94" y="298" width="300" height="124" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="114" y="319" width="4" height="23" rx="0" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="130" y="335.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Approved Linux user</text>
+  <text x="116" y="369.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">craft: real UID / NSS checks</text>
+  <text x="116" y="394.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Parent drops to caller</text>
+  <rect x="470" y="298" width="320" height="278" rx="12" fill="#112D43" stroke="none" stroke-width="1" />
+  <text x="494" y="343.87" font-size="27" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">craft-worker</text>
+  <text x="494" y="374.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">Dedicated craft Unix account</text>
+  <polyline points="494,393 766,393" fill="none" stroke="#406074" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="494" y="425.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="400" text-anchor="start">Fresh RSA-3072 key + CSR</text>
+  <text x="494" y="453.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="400" text-anchor="start">Enrollment-agent signature</text>
+  <text x="494" y="481.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="400" text-anchor="start">Issued certificate checks</text>
+  <text x="494" y="509.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="400" text-anchor="start">PKINIT + returned TGT checks</text>
+  <text x="494" y="558.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">Temporary user certificate / key</text>
+  <rect x="94" y="632" width="300" height="136" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="114" y="653" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
+  <text x="130" y="669.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">User credential cache</text>
+  <text x="116" y="703.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">.krb5cc_craft</text>
+  <text x="116" y="728.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">TGT + session key</text>
+  <text x="116" y="753.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Caller-owned / mode 0600</text>
+  <rect x="470" y="804" width="320" height="100" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="490" y="825" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
+  <text x="506" y="842.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Kerberos-aware app</text>
+  <text x="492" y="875.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Loads cache via KRB5CCNAME</text>
+  <rect x="1126" y="298" width="380" height="96" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="1146" y="319" width="4" height="23" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
+  <text x="1162" y="336.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Active Directory</text>
+  <text x="1148" y="369.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Global Catalog: UPN + SID</text>
+  <rect x="1126" y="442" width="380" height="110" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="1146" y="463" width="4" height="23" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
+  <text x="1162" y="480.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">AD CS / CES + CA</text>
+  <text x="1148" y="513.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Restricted template + recipients</text>
+  <text x="1148" y="538.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Issues short-lived user certificate</text>
+  <rect x="1126" y="610" width="380" height="110" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="1146" y="631" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
+  <text x="1162" y="647.82" font-size="22" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Domain controller / KDC</text>
+  <text x="1148" y="681.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Issues the user's TGT</text>
+  <text x="1148" y="706.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Issues / renews tickets by policy</text>
+  <rect x="1126" y="804" width="380" height="100" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="1146" y="825" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
+  <text x="1162" y="841.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Kerberos-enabled services</text>
+  <text x="1148" y="875.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">SMB / LDAP / HTTP; existing user rights</text>
+  <polyline points="394,354 470,354" fill="none" stroke="#18334A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="470,354 462.0,349.6 462.0,358.4" fill="#18334A" />
+  <circle cx="432" cy="326" r="15" fill="#18334A" stroke="none" stroke-width="1" />
+  <text x="432" y="331.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">1</text>
+  <polyline points="790,347 1126,347" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1126,347 1118.0,342.6 1118.0,351.4" fill="#007F7C" />
+  <polygon points="790,347 798.0,351.4 798.0,342.6" fill="#007F7C" />
+  <text x="825" y="330.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">2  Resolve caller identity</text>
+  <polyline points="790,500 1126,500" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1126,500 1118.0,495.6 1118.0,504.4" fill="#007F7C" />
+  <polygon points="790,500 798.0,504.4 798.0,495.6" fill="#007F7C" />
+  <text x="825" y="482.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">3  HTTPS / MS-WSTEP</text>
+  <polyline points="790,550 910,550 910,667 1126,667" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1126,667 1118.0,662.6 1118.0,671.4" fill="#007F7C" />
+  <polygon points="790,550 798.0,554.4 798.0,545.6" fill="#007F7C" />
+  <text x="933" y="631.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">4  PKINIT</text>
+  <text x="933" y="655.96" font-size="16" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">User certificate</text>
+  <polyline points="630,576 630,690 394,690" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="394,690 402.0,694.4 402.0,685.6" fill="#315DC0" />
+  <text x="430" y="724.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">5  Publish via caller</text>
+  <polyline points="244,768 244,854 470,854" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="470,854 462.0,849.6 462.0,858.4" fill="#315DC0" />
+  <text x="267" y="835.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">6  Select cache</text>
+  <polyline points="790,826 1028,826 1028,697 1126,697" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1126,697 1118.0,692.6 1118.0,701.4" fill="#315DC0" />
+  <polygon points="790,826 798.0,830.4 798.0,821.6" fill="#315DC0" />
+  <text x="819" y="770.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">7  Request / receive</text>
+  <text x="819" y="796.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">a service ticket</text>
+  <polyline points="790,882 1126,882" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1126,882 1118.0,877.6 1118.0,886.4" fill="#315DC0" />
+  <text x="823" y="863.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">8  Present service ticket</text>
+  <text x="94" y="938.96" font-size="16" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Trust comes from the managed host, enrollment credentials and CA restrictions. CRAFT performs no MFA challenge.</text>
+  <polyline points="64,956 1536,956" fill="none" stroke="#D5E0E7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="64" y="981.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">SOURCE  launcher.cpp: main; worker.cpp: main, lookup_ad_user, get_tgt; source/README.md: Access Active Directory Resources</text>
+  <text x="1536" y="980.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="end">CRAFT  /  01</text>
+</svg>
