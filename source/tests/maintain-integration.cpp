@@ -212,6 +212,10 @@ void test(std::string_view name, auto action)
 
 void checks()
 {
+    test("maintenance updates preserve renewal during enrollment outages", [] {
+        const auto result = run({fixtures, "--maintain-update-tests"});
+        need(result.code == 0, result.output + result.error);
+    });
     test("healthy startup returns only the cache name and stops with its job", [] {
         reset("healthy");
         const auto before = read_file(cache);

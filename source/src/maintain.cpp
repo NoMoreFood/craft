@@ -99,7 +99,11 @@ inline Schedule schedule(const krb5_creds *tgt, time_t now)
     const int64_t margin = std::clamp(life / 5, int64_t{1}, int64_t{7200});
     const int64_t remaining = static_cast<int64_t>(tgt->times.endtime) - now;
     const bool renewable = (tgt->ticket_flags & TKT_FLG_RENEWABLE) != 0;
+    const bool extendible = renewable && tgt->times.renew_till > tgt->times.endtime;
     int64_t next = remaining - margin;
+
+    // Keep usable credentials renewed even while fresh enrollment is unavailable or backing off.
+    if (extendible && next <= 0) return {Action::Renew};
 
     // Use the actual absolute renewal deadline, with proportional headroom for shorter grants.
     if (renewable)
@@ -107,10 +111,12 @@ inline Schedule schedule(const krb5_creds *tgt, time_t now)
         const int64_t window = static_cast<int64_t>(tgt->times.renew_till) - tgt->times.authtime;
         const int64_t renewal_margin = std::clamp(window / 7, int64_t{1}, int64_t{86400});
         const int64_t renew_remaining = static_cast<int64_t>(tgt->times.renew_till) - now;
-        if (renew_remaining <= renewal_margin) return {Action::Enroll};
+        if (renew_remaining <= renewal_margin)
+            return {Action::Enroll, extendible
+                ? static_cast<uint32_t>(std::clamp(next, int64_t{1}, int64_t{900})) : 900U};
         next = std::min(next, renew_remaining - renewal_margin);
     }
-    if (remaining <= margin) return {renewable ? Action::Renew : Action::Enroll};
+    if (remaining <= margin) return {Action::Enroll};
     return {Action::Idle, static_cast<uint32_t>(std::clamp(next, int64_t{1}, int64_t{900}))};
 }
 
@@ -308,7 +314,7 @@ inline void update(const Account &caller, const std::string &expected, Result &r
             const auto now = static_cast<uint64_t>(time(nullptr));
             if (next > now)
             {
-                result.retry = static_cast<uint32_t>(std::min(next - now, uint64_t{3600}));
+                result.retry = static_cast<uint32_t>(std::min(next - now, uint64_t{plan.delay}));
                 fail(std::format("fresh enrollment retry is delayed until Unix {}", next));
             }
             result.retry = std::min(3600U, 60U << failures);
@@ -316,6 +322,7 @@ inline void update(const Account &caller, const std::string &expected, Result &r
             sysneed(lseek(retry.get(), 0, SEEK_SET) == 0 && ftruncate(retry.get(), 0) == 0,
                     "update enrollment retry state");
             write_all(retry.get(), byte_view(text));
+            result.retry = std::min(result.retry, plan.delay);
             lock = Fd();
             enroll();
             result.retry = 0;

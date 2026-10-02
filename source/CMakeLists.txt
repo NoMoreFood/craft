@@ -37,6 +37,7 @@ if(BUILD_TESTING)
   add_executable(craft-maintain-tests tests/maintain-integration.cpp)
   add_dependencies(craft-maintain-tests craft-maintain craft-tests)
   target_link_libraries(craft-tests PRIVATE PkgConfig::DEPS)
+  target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds)
   add_test(NAME offline-tests COMMAND craft-tests)
 endif()
 # Intentionally no automatic setuid install target. Review before privileged install.

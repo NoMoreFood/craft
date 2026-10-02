@@ -5,6 +5,25 @@
 using namespace craft;
 
 static int passed = 0, failed = 0;
+static const krb5_creds *maintenance_grant = nullptr;
+static unsigned maintenance_renewals = 0;
+
+// Substitute only the KDC exchange while exercising real cache reads, validation and publication.
+extern "C" krb5_error_code __real_krb5_get_renewed_creds(krb5_context, krb5_creds *,
+                                                       krb5_principal, krb5_ccache, const char *);
+extern "C" krb5_error_code __wrap_krb5_get_renewed_creds(krb5_context ctx, krb5_creds *creds,
+                                                       krb5_principal client, krb5_ccache cache, const char *service)
+{
+    if (!maintenance_grant) return __real_krb5_get_renewed_creds(ctx, creds, client, cache, service);
+    ++maintenance_renewals;
+    krb5_creds *copy = nullptr;
+    const auto code = krb5_copy_creds(ctx, maintenance_grant, &copy);
+    if (code) return code;
+    *creds = *copy;
+    *copy = {};
+    krb5_free_creds(ctx, copy);
+    return 0;
+}
 
 static void test(const char *name, std::invocable auto &&f)
 {
@@ -909,8 +928,107 @@ static void maintenance_fixture(std::string_view mode)
     wipe(bytes);
 }
 
+static void maintenance_update_tests()
+{
+    using namespace craft::maintain;
+    maintenance_fixture("rollover");
+    const Account caller = lookup_uid(getuid());
+    const Fd home = caller_home(caller);
+    KrbContext context;
+    need(krb5_init_context(out(context)) == 0, "maintenance update context");
+    const auto ctx = context.get();
+    auto cache = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
+    auto client = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+    auto server = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(ctx);
+    need(krb5_cc_resolve(ctx, ("FILE:" + caller.home + "/" + CACHE_NAME).c_str(), out(cache)) == 0,
+         "maintenance update cache");
+    need(krb5_cc_get_principal(ctx, cache.get(), out(client)) == 0 &&
+             krb5_parse_name(ctx, "krbtgt/DOMAIN.LOCAL@DOMAIN.LOCAL", out(server)) == 0,
+         "maintenance update principals");
+    krb5_creds match{}, original{};
+    match.client = client.get();
+    match.server = server.get();
+    need(krb5_cc_retrieve_cred(ctx, cache.get(), 0, &match, &original) == 0, "read rollover fixture");
+    ScopeExit cleanup([&]() noexcept { maintenance_grant = nullptr; krb5_free_cred_contents(ctx, &original); });
+    auto read = [&](const char *name)
+    {
+        const Fd file(openat(home.get(), name, O_RDONLY | O_CLOEXEC));
+        need(file.get() >= 0, "read maintenance update fixture");
+        return read_all(file.get());
+    };
+    auto publish = [&](krb5_creds &tgt)
+    {
+        auto bytes = file_cache(ctx, tgt);
+        publish_cache(caller, bytes);
+        wipe(bytes);
+    };
+
+    test("enrollment denial and shared cooldown cannot postpone a due renewal", [&] {
+        for (const char *name : {".maintain-test-issuance", ".krb5cc_craft.maintain.retry"})
+            need(unlinkat(home.get(), name, 0) == 0 || errno == ENOENT, "reset enrollment state");
+        const Fd mode(openat(home.get(), ".maintain-test-mode", O_WRONLY | O_CREAT | O_TRUNC, 0600));
+        need(mode.get() >= 0, "deny test enrollment");
+        write_all(mode.get(), byte_view("deny"));
+        const auto now = static_cast<krb5_timestamp>(time(nullptr));
+        auto due = original;
+        due.times.starttime = now - 28800 + 30;
+        due.times.endtime = now + 7200 + 30;
+        publish(due);
+
+        // An issuer failure must wake the loop by the renewal threshold without shortening shared backoff.
+        Result denied;
+        rejects([&] { update(caller, {}, denied); });
+        need(!denied.success && denied.retry > 0 && denied.retry <= 30, "enrollment backoff delays renewal");
+        const auto issuance = read(".maintain-test-issuance"), retry = read(".krb5cc_craft.maintain.retry");
+        need(std::ranges::count(issuance, '\n') == 1, "enrollment denial was not exercised");
+        std::istringstream retry_state(std::string(retry.begin(), retry.end()));
+        int64_t next = 0;
+        need(static_cast<bool>(retry_state >> next) && next >= now + 60, "shared enrollment cooldown was shortened");
+        Result waiting;
+        rejects([&] { update(caller, {}, waiting); });
+        need(waiting.retry > 0 && waiting.retry <= 30, "shared cooldown delays renewal");
+
+        // Advance the cached ticket to its renewal threshold while the issuer remains in cooldown.
+        due.times.starttime -= 60;
+        due.times.endtime -= 60;
+        publish(due);
+        auto grant = due;
+        grant.times.starttime = now;
+        grant.times.endtime = now + 36000;
+        grant.ticket_flags &= ~TKT_FLG_INITIAL;
+        maintenance_grant = &grant;
+        ScopeExit reset_grant([&]() noexcept { maintenance_grant = nullptr; });
+        Result renewed;
+        update(caller, {}, renewed);
+        maintenance_grant = nullptr;
+        need(renewed.success && maintenance_renewals == 1 && renewed.end == grant.times.endtime,
+             "rollover did not renew the usable TGT");
+        need(read(".maintain-test-issuance") == issuance && read(".krb5cc_craft.maintain.retry") == retry,
+             "renewal bypassed or reset shared enrollment backoff");
+        krb5_creds saved{};
+        ScopeExit free([&]() noexcept { krb5_free_cred_contents(ctx, &saved); });
+        need(krb5_cc_retrieve_cred(ctx, cache.get(), 0, &match, &saved) == 0 &&
+                 saved.times.endtime == grant.times.endtime, "renewed TGT was not published");
+
+        // A ticket already at its absolute deadline must retain enrollment backoff instead of attempting renewal.
+        due.times.starttime = now - 300;
+        due.times.endtime = due.times.renew_till = now + 60;
+        publish(due);
+        maintenance_grant = &grant;
+        Result exhausted;
+        rejects([&] { update(caller, {}, exhausted); });
+        need(maintenance_renewals == 1 && exhausted.retry >= 45,
+             "an exhausted renewal window caused renewal or busy polling");
+    });
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && std::string_view(argv[1]) == "--maintain-update-tests")
+    {
+        maintenance_update_tests();
+        return failed ? 1 : 0;
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--maintain-fixture")
     {
         maintenance_fixture(argv[2]);
