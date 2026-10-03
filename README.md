@@ -66,6 +66,17 @@ job wrapper is needed. See the [usage guide](source/README.md#long-running-jobs)
 | [Configuration and validation](docs/02-CRAFT-Configuration-and-Validation.docx) | Certificate profile and lab acceptance ([PDF](docs/02-CRAFT-Configuration-and-Validation.pdf)) |
 | [Windows provisioning helper](scripts/Configure-CRAFT-CA.ps1) | Optional partial CA/template setup for a lab |
 
+### Diagrams
+
+| Diagram | Picture | Editable version |
+| --- | --- | --- |
+| System overview | [PNG](output/pdf/png/craft-diagram-1.png) | [SVG](output/pdf/svg/01-system-overview.svg) |
+| Enrollment sequence | [PNG](output/pdf/png/craft-diagram-2.png) | [SVG](output/pdf/svg/02-enrollment-sequence.svg) |
+| Credential timing | [PNG](output/pdf/png/craft-diagram-3.png) | [SVG](output/pdf/svg/03-credential-timing.svg) |
+| Long-running job maintenance | [PNG](output/pdf/png/craft-diagram-4.png) | [SVG](output/pdf/svg/04-job-maintenance.svg) |
+
+[All diagrams (PDF)](output/pdf/CRAFT-Timing-and-Architecture.pdf) | [Editable source bundle (ZIP)](output/pdf/CRAFT-Editable-Diagrams.zip)
+
 ## Project status
 
 CRAFT is a reference implementation. Review the [validation record](source/TESTING.md) and validate your own CES, PKINIT, certificate-policy, and privilege-boundary configuration before production use. The KDC decides the ticket lifetime and renewal window. Certificate-based authentication here uses software keys and does not establish hardware possession or MFA.
