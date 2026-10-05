@@ -6,7 +6,6 @@ import math
 import os
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from zipfile import ZIP_DEFLATED, ZipFile
 
 from reportlab.lib.colors import HexColor
 from reportlab.pdfbase import pdfmetrics
@@ -493,12 +492,8 @@ def main():
     for page in (overview, acquisition, timing, maintenance):
         page(pdf)
     pdf.save()
-    with ZipFile(ROOT / "CRAFT-Editable-Diagrams.zip", "w", ZIP_DEFLATED) as archive:
-        for svg in sorted(SVG_DIR.glob("*.svg")):
-            archive.write(svg, "svg/" + svg.name)
-        archive.write(Path(__file__), "build_craft_diagrams.py")
     print(f"Created {pdf_path}")
-    print(f"Created {len(list(SVG_DIR.glob('*.svg')))} SVG diagrams and editable source bundle")
+    print(f"Created {len(list(SVG_DIR.glob('*.svg')))} SVG diagrams")
 
 
 if __name__ == "__main__":

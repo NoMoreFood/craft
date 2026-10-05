@@ -75,7 +75,7 @@ job wrapper is needed. See the [usage guide](source/README.md#long-running-jobs)
 | Credential timing | [PNG](output/pdf/png/craft-diagram-3.png) | [SVG](output/pdf/svg/03-credential-timing.svg) |
 | Long-running job maintenance | [PNG](output/pdf/png/craft-diagram-4.png) | [SVG](output/pdf/svg/04-job-maintenance.svg) |
 
-[All diagrams (PDF)](output/pdf/CRAFT-Timing-and-Architecture.pdf) | [Editable source bundle (ZIP)](output/pdf/CRAFT-Editable-Diagrams.zip)
+[All diagrams (PDF)](output/pdf/CRAFT-Timing-and-Architecture.pdf)
 
 ## Project status
 
