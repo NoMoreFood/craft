@@ -62,6 +62,7 @@ job wrapper is needed. See the [usage guide](source/README.md#long-running-jobs)
 | [Build and installation](source/README.md) | Dependencies, AD CS preparation, configuration, and usage |
 | [Validation and tests](source/TESTING.md) | Offline tests, recorded lab results, and live acceptance checks |
 | [Security review notes](source/SECURITY.md) | Trust assumptions, implemented controls, and limitations |
+| [Enrollment agent restrictions](docs/03-Enrollment-Agent-Restrictions.md) | CA authorization, privileged-account exclusion, key custody, and denial tests |
 | [Process overview](docs/01-CRAFT-Process-Overview.docx) | Enrollment, service tickets, and credential lifecycle ([PDF](docs/01-CRAFT-Process-Overview.pdf)) |
 | [Configuration and validation](docs/02-CRAFT-Configuration-and-Validation.docx) | Certificate profile and lab acceptance ([PDF](docs/02-CRAFT-Configuration-and-Validation.pdf)) |
 | [Windows provisioning helper](scripts/Configure-CRAFT-CA.ps1) | Optional partial CA/template setup for a lab |

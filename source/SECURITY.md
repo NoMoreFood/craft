@@ -6,6 +6,8 @@ Resolving a Unix username against Active Directory delegates authentication of t
 
 Restrict the enrollment agent at the CA to a dedicated template and approved recipient group. Local policy checks are defense in depth, not a replacement for CA restrictions. Do not authorize privileged AD administrators in the initial deployment. Protect and audit UID/name lifecycle, NSS providers, root accounts and the service account.
 
+See [Enrollment Agent Restrictions](../docs/03-Enrollment-Agent-Restrictions.md) for CA policy, privileged-account exclusion, credential custody, and live denial tests.
+
 ## Lifetime and Encryption Policy
 
 The default ten-hour initial user TGT with seven-day renewal matches the most permissive DISA STIG guidance for domain controllers. A ten-hour certificate does not revoke an already-issued ticket, and destroying its private key does not destroy a cached TGT. A stolen mode-0600 cache still carries an independent session key. Do not treat certificate expiry, local deletion, or changing a file permission as ticket revocation.
