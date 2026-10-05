@@ -41,7 +41,7 @@
   <rect x="1126" y="298" width="380" height="96" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="1146" y="319" width="4" height="23" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
   <text x="1162" y="336.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Active Directory</text>
-  <text x="1148" y="369.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Global Catalog: UPN + SID</text>
+  <text x="1148" y="369.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Global Catalog: user UPN</text>
   <rect x="1126" y="442" width="380" height="110" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="1146" y="463" width="4" height="23" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
   <text x="1162" y="480.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">AD CS / CES + CA</text>

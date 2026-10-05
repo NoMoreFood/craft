@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="02-enrollment-sequence-title 02-enrollment-sequence-desc">
   <title id="02-enrollment-sequence-title">From a Linux account to a validated user TGT.</title>
-  <desc id="02-enrollment-sequence-desc">Sequence: validate the real caller and drop privileges; obtain a separate short-lived transport TGT using the submission keytab; resolve UPN and SID in the Global Catalog; generate and sign an EOBO request; enroll through CES; validate the certificate; perform user PKINIT; validate the TGT; return cache bytes to the unprivileged caller and publish atomically. Solid arrows are requests; dashed arrows are responses. CES transport uses Negotiate or a separate TLS client identity.</desc>
+  <desc id="02-enrollment-sequence-desc">Sequence: validate the real caller and drop privileges; obtain a separate short-lived transport TGT using the submission keytab; resolve the UPN in the Global Catalog; generate and sign an EOBO request; enroll through CES; validate the certificate; perform user PKINIT; validate the TGT; return cache bytes to the unprivileged caller and publish atomically. Solid arrows are requests; dashed arrows are responses. CES transport uses Negotiate or a separate TLS client identity.</desc>
   <rect x="0" y="0" width="1600" height="1000" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
   <rect x="0" y="0" width="1600" height="181" rx="0" fill="#112D43" stroke="none" stroke-width="1" />
   <rect x="64" y="40" width="5" height="26" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
@@ -56,8 +56,8 @@
   <text x="591" y="426.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">LDAP / GSSAPI: query caller</text>
   <polyline points="865,469 575,469" fill="none" stroke="#007F7C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6" />
   <polygon points="575,469 583.0,473.4 583.0,464.6" fill="#007F7C" />
-  <rect x="586" y="443" width="176.47216796875" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
-  <text x="591" y="458.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Unique AD UPN + SID</text>
+  <rect x="586" y="443" width="166.34521484375" height="21" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
+  <text x="591" y="458.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Unique AD user UPN</text>
   <circle cx="70" cy="528" r="15" fill="#18334A" stroke="none" stroke-width="1" />
   <text x="70" y="533.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">4</text>
   <rect x="495" y="497" width="712" height="62" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
@@ -79,7 +79,7 @@
   <circle cx="70" cy="678" r="15" fill="#18334A" stroke="none" stroke-width="1" />
   <text x="70" y="683.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">6</text>
   <rect x="495" y="647" width="712" height="62" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
-  <text x="518" y="670.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Validate key, UPN, SID, template, EKUs and lifetime.</text>
+  <text x="518" y="670.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Validate key, UPN, template, EKUs and lifetime.</text>
   <text x="518" y="695.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Verify certificate chain and configured CRLs.</text>
   <circle cx="70" cy="753" r="15" fill="#18334A" stroke="none" stroke-width="1" />
   <text x="70" y="758.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">7</text>

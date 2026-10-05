@@ -26,7 +26,7 @@ The no-argument launcher checks the caller and starts certificate and ticket pro
 4. The worker generates a fresh RSA-3072 key and PKCS#10 request. Its UPN SAN is an `otherName` with OID `1.3.6.1.4.1.311.20.2.3`, containing the directory-resolved UPN as a UTF8String.
 5. It wraps the CSR in CMS SignedData, signed using the enrollment-agent certificate and private key. A signed Microsoft `requestername` attribute identifies `DOMAIN\linuxname`. This is enrollment on behalf of another user, not signing the final user certificate locally. [2,3]
 6. It submits that request to **AD CS Certificate Enrollment Web Service (CES)** using MS-WSTEP over verified HTTPS. It implements neither legacy `/certsrv` page scraping nor a Linux DCOM/RPC client. [4,5]
-7. The returned certificate must have the expected key, UPN, CA-generated AD SID, template OID, usage and short validity, and pass trust-chain/CRL checks. A UPN alone is not enough for current Windows certificate mapping; this implementation requires the SID extension rather than weakening domain-controller policy. [6,7]
+7. The returned certificate must have the expected key, UPN, template OID, usage and short validity, and pass trust-chain/CRL checks. The domain controller enforces strong certificate-to-account mapping during PKINIT. [6]
 8. MIT Kerberos performs PKINIT using the issued certificate/key through sealed Linux memory-file descriptors. A 10-hour non-forwardable, non-proxiable TGT with 7-day renewal is requested, and returned flags, identity and expiry are checked. [8]
 9. The caller-side process writes a mode-0600 FILE credential cache to the caller's actual home using an atomic rename. The fixed filename is `.krb5cc_craft`. It prints the resulting `FILE:/absolute/path/.krb5cc_craft` cache name, not credentials.
 
@@ -54,9 +54,9 @@ The AD/PKI administrator must establish the following. The Linux client does not
 
 Provision a least-privilege directory/submission account and set its exact principal in `service_principal`. The worker looks up `sAMAccountName=<caller>` in the Active Directory Global Catalog over LDAP/GSSAPI, using the `service_principal` and `submitter.keytab` credentials. **Both CES authentication modes require these Kerberos credentials for directory lookup.** The account must have directory read access.
 
-Set `gc_url` to a GC host whose `ldap/hostname` Kerberos SPN resolves correctly; the default is `ldap://<domain>:3268`. `gc_base_dn` defaults to the domain DN (`DC=domain,DC=local`). Pin an appropriate search base so names are unambiguous; the configured NetBIOS domain must match the account's domain. LDAP referrals are disabled. The lookup rejects zero or multiple matching entries and obtains the AD `objectSid` and `userPrincipalName`. When the UPN attribute is absent, the fallback is `<caller>@<domain>`. Alternate UPN suffixes are retained; the Kerberos user principal remains `<caller>@<realm>`.
+Set `gc_url` to a GC host whose `ldap/hostname` Kerberos SPN resolves correctly; the default is `ldap://<domain>:3268`. `gc_base_dn` defaults to the domain DN (`DC=domain,DC=local`). Pin an appropriate search base so names are unambiguous; the configured NetBIOS domain must match the account's domain. LDAP referrals are disabled. The lookup rejects zero or multiple matching entries and obtains the AD `userPrincipalName`. When the UPN attribute is absent, the fallback is `<caller>@<domain>`. Alternate UPN suffixes are retained; the Kerberos user principal remains `<caller>@<realm>`.
 
-The CA, not this client, adds that user's SID to the issued certificate. The code never inserts a chosen SID into its CSR. After enrollment, the worker validates that the certificate issued by the CA matches the exact identity, UPN, and SID retrieved from Active Directory. [7]
+The signed `requestername` identifies `DOMAIN\<caller>` to the CA. The CA resolves that account and adds its SID to the issued certificate for domain-controller mapping. After enrollment, the worker checks the certificate UPN against the directory-resolved UPN. [3,6,7]
 
 ### Enrollment Agent and Dedicated Template
 
@@ -267,7 +267,7 @@ appear in status/logs and never stop the job. Keep CRLs, enrollment credentials 
 
 ## Limits and Failure Behavior
 
-The worker rejects unknown Active Directory accounts, runtime UID/name mismatches, mismatched identities/keys/templates, missing SID/EKUs, untrusted or revoked chains, missing/expired required CRLs, excessive certificate validity, unexpected TGT principals/flags/expiry, SOAP faults and unsupported/pending responses. It refuses password prompts and supplies no user password/keytab fallback.
+The worker rejects unknown Active Directory accounts, runtime UID/name mismatches, mismatched UPNs/keys/templates, missing EKUs, untrusted or revoked chains, missing/expired required CRLs, excessive certificate validity, unexpected TGT principals/flags/expiry, SOAP faults and unsupported/pending responses. It refuses password prompts and supplies no user password/keytab fallback.
 
 Each UID has one issuance in flight and a default 60-second interval between attempts, including failed attempts. Locks/timestamps reside in the private runtime directory. Timeouts can leave an already-issued certificate in the CA database whose private key has been discarded; there is no automatic CA-side cancellation or revocation. Establish CA cleanup/audit policy and capacity planning separately.
 

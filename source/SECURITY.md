@@ -14,7 +14,7 @@ The default ten-hour initial user TGT with seven-day renewal matches the most pe
 
 The worker does not forge or extend a KDC-issued ticket. RFC 4556 key/certificate-lifetime rules bind the initial ticket to the certificate validity. Strict mode rejects shortened initial grants and shortened renewable windows. AES128/256 checks cover session and outer ticket encryption, but do not compensate for excessive validity or host compromise.
 
-Manage trusted NSS and account lifecycle centrally so that Linux usernames strictly match their corresponding Active Directory sAMAccountName. The actual AD SID is resolved directly from Active Directory and verified against the CA-issued certificate; the client never inserts a chosen SID into its CSR. A custom CSR CN cannot change the authenticated identity.
+Manage trusted NSS and account lifecycle centrally so that Linux usernames strictly match their corresponding Active Directory sAMAccountName. The directory-resolved UPN is checked against the issued certificate. The CA supplies the certificate SID, and the domain controller enforces certificate-to-account mapping. A custom CSR CN cannot change the authenticated identity.
 
 ## Privilege Separation
 
@@ -30,11 +30,11 @@ CRAFT keeps the issued user certificate and its private key in process memory an
 
 ## Implemented Controls
 
-- Dynamic Active Directory Global Catalog resolution plus real-UID/NSS revalidation, fixed endpoint/template from root-owned files, no caller-supplied target identity or output path.
+- Dynamic UPN resolution through the Active Directory Global Catalog plus real-UID/NSS revalidation, fixed endpoint/template from root-owned files, no caller-supplied target identity or output path.
 - No trusted-path symlinks; root ownership and parent write-permission checks; verified executable opened before privilege drop and launched with fexecve.
 - Parent writes as caller, unique mode-0600 staging file, atomic fixed-name replacement, no target-symlink following.
 - HTTPS peer/name verification, no redirects or proxy environment, no explicitly enabled Basic/NTLM authentication. Directory access uses the separately provisioned keytab over LDAP/GSSAPI in both CES modes.
-- Agent signature/key/EKU/trust validation; returned certificate key/UPN/SID/template/EKU/lifetime/trust/CRL validation.
+- Agent signature/key/EKU/trust validation; returned certificate key/UPN/template/EKU/lifetime/trust/CRL validation.
 - PKINIT certificate/private key and pinned KDC trust; rejecting password prompter; explicit TGT flags, principal, AES session/envelope and actual lifetime validation.
 - Bounded network payloads, forbidden XML DTD/entity declarations, per-user issuance lock/interval, execution deadlines, CPU/address-space limits, no core dumps and non-dumpable processes.
 - No private key or TGT printed in diagnostics. The stdout pipe is credentials; the launcher's stdout is only the cache name.
@@ -47,7 +47,7 @@ The HTTPS path validates certificate chain and hostname but does not implement i
 
 The Kerberos configuration is administrator-controlled and can reference further files/plugins; those must be protected as well. Dynamic libraries, NSS modules, Kerberos preauth plugins, OpenSSL configuration/providers and the OS trust boundary must remain administrator-controlled. Do not add user-writable library paths or config includes. Inspect the rebuilt executable's dynamic dependencies before installation.
 
-The exact returned user UPN, AD SID and template are checked in application code after certificate verification. Pinning the actual issuing CA separately from the configured trust-chain files is not implemented. Keep the accepted CA set narrow and review any alternate strong mappings in AD that could conflict with intended identity selection.
+The exact returned user UPN and template are checked in application code after certificate verification. Pinning the actual issuing CA separately from the configured trust-chain files is not implemented. Keep the accepted CA set narrow and review any alternate strong mappings in AD that could conflict with intended identity selection.
 
 ## Required Live-Lab Checks
 

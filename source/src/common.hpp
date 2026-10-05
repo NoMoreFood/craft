@@ -307,7 +307,7 @@ inline std::string root_text(const std::string &path, size_t maximum = 65536)
 struct Mapping
 {
     uid_t uid;
-    std::string name, sid, upn;
+    std::string name, upn;
 };
 
 inline std::string domain_to_dn(std::string_view domain)
@@ -321,54 +321,6 @@ inline std::string domain_to_dn(std::string_view domain)
         dn.append(part.begin(), part.end());
     }
     return dn;
-}
-
-inline std::string format_sid(std::span<const unsigned char> bytes)
-{
-    // Validate binary SID header and extract revision and subauthority count.
-    if (bytes.size() < 8) return "";
-    const uint8_t revision = bytes[0];
-    const uint8_t count = bytes[1];
-    if (bytes.size() != static_cast<size_t>(8 + count * 4)) return "";
-
-    // Decode 48-bit identifier authority value.
-    uint64_t authority = 0;
-    for (size_t i = 2; i < 8; ++i)
-        authority = (authority << 8) | bytes[i];
-    std::string out = std::format("S-{}-{}", revision, authority);
-
-    // Decode 32-bit little-endian subauthorities into canonical string format.
-    for (size_t i = 0; i < count; ++i)
-    {
-        const size_t offset = 8 + i * 4;
-        const uint32_t sub = static_cast<uint32_t>(bytes[offset]) |
-                             (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
-                             (static_cast<uint32_t>(bytes[offset + 2]) << 16) |
-                             (static_cast<uint32_t>(bytes[offset + 3]) << 24);
-        out += std::format("-{}", sub);
-    }
-    return out;
-}
-
-inline bool validate_sid(std::string_view sid) noexcept
-{
-    // Verify standard domain SID prefix and subauthority format.
-    if (!sid.starts_with("S-1-5-21-")) return false;
-    sid.remove_prefix(9);
-
-    // Verify subauthorities do not overflow 32-bit unsigned integers.
-    for (size_t i = 0; i < 4; ++i)
-    {
-        const auto dash = sid.find('-');
-        const auto part = sid.substr(0, dash);
-        if ((dash == sid.npos) != (i == 3) || part.empty() || (part.size() > 1 && part.front() == '0'))
-            return false;
-        uint32_t value{};
-        const auto [end, error] = std::from_chars(part.data(), part.data() + part.size(), value);
-        if (error != std::errc{} || end != part.data() + part.size() || (i == 3 && value == 0)) return false;
-        if (i != 3) sid.remove_prefix(dash + 1);
-    }
-    return true;
 }
 
 // Disable dumps, close inherited descriptors, and permanently relinquish elevated IDs.

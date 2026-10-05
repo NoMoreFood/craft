@@ -6,7 +6,7 @@ This is useful where interactive sign-in is protected by two-factor or multifact
 
 ## How it works
 
-1. Resolve the invoking Linux user's identity through the Active Directory Global Catalog.
+1. Resolve the invoking Linux user's UPN through the Active Directory Global Catalog.
 2. Generate a temporary RSA key and an enrollment-on-behalf-of (EOBO) certificate request.
 3. Submit the request to AD CS Certificate Enrollment Web Service (CES) over HTTPS using MS-WSTEP.
 4. Validate the issued certificate's identity, key, template, trust chain, revocation status, and lifetime.
@@ -21,7 +21,7 @@ After enrollment and authentication, the user selects the resulting credential c
 - Detached TGT renewal and periodic fresh enrollment for long-running jobs.
 - AD CS enrollment-on-behalf-of using an administrator-provisioned enrollment-agent certificate.
 - HTTP Negotiate or mutual TLS for CES transport, with LDAP/GSSAPI directory lookup.
-- Active Directory SID and UPN checks against the issued certificate.
+- Directory-resolved UPN checks against the issued certificate.
 - AES128/AES256 Kerberos encryption, ten-hour requested TGT validity, and seven-day requested renewal.
 - Temporary PKINIT key material passed through sealed Linux memory files.
 - Synthetic offline tests and an optional PowerShell helper for Windows lab provisioning.

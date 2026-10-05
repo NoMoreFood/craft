@@ -47,8 +47,6 @@ inline constexpr char AGENT_OID[] = "1.3.6.1.4.1.311.20.2.1";
 inline constexpr char PKINIT_CLIENT_OID[] = "1.3.6.1.5.2.3.4";
 inline constexpr char CLIENT_AUTH_OID[] = "1.3.6.1.5.5.7.3.2";
 inline constexpr char SMARTCARD_OID[] = "1.3.6.1.4.1.311.20.2.2";
-inline constexpr char SID_OID[] = "1.3.6.1.4.1.311.25.2";
-inline constexpr char OBJECTSID_OID[] = "1.3.6.1.4.1.311.25.2.1";
 inline constexpr char TEMPLATE_OID[] = "1.3.6.1.4.1.311.21.7";
 inline constexpr char ENROLL_PAIR_OID[] = "1.3.6.1.4.1.311.13.2.1";
 
@@ -325,7 +323,7 @@ inline Ext raw_extension(const char *oid, ByteView bytes)
     return e;
 }
 
-// Expand only administrator-configured CN placeholders; identity still comes from UPN/SID.
+// Expand only administrator-configured CN placeholders; identity still comes from the directory UPN.
 inline std::string common_name(const Config &cfg, std::string_view user, std::string_view upn)
 {
     // Substitute placeholders in configured common name pattern
@@ -479,25 +477,6 @@ inline std::string certificate_upn(X509 *c)
     return upn;
 }
 
-inline std::string certificate_sid(X509 *c)
-{
-    Bytes b = extension_bytes(c, SID_OID);
-    const unsigned char *p = b.data();
-
-    // Windows encodes this extension using the GeneralNames/OtherName tagging.
-    Owned<GENERAL_NAMES, GENERAL_NAMES_free> names(
-        d2i_GENERAL_NAMES(nullptr, &p, static_cast<long>(b.size())));
-    sslneed(names && p == b.data() + b.size() && sk_GENERAL_NAME_num(names.get()) == 1,
-            "decode AD SID security extension");
-    GENERAL_NAME *n = sk_GENERAL_NAME_value(names.get(), 0);
-    need(n->type == GEN_OTHERNAME && objtext(n->d.otherName->type_id) == OBJECTSID_OID,
-         "unexpected AD SID extension type");
-    ASN1_TYPE *v = n->d.otherName->value;
-    need(v->type == V_ASN1_OCTET_STRING, "SID must be OCTET STRING");
-    return std::string(reinterpret_cast<const char *>(ASN1_STRING_get0_data(v->value.octet_string)),
-                       static_cast<size_t>(ASN1_STRING_length(v->value.octet_string)));
-}
-
 inline std::string certificate_template(X509 *cert)
 {
     const auto bytes = extension_bytes(cert, TEMPLATE_OID);
@@ -549,7 +528,7 @@ inline void verify_chain(X509 *x)
              X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx.get())));
 }
 
-// Enforce the pinned key, UPN, SID, template, usage, and short validity.
+// Enforce the pinned key, UPN, template, usage, and short validity.
 inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Config &cfg)
 {
     sslneed(X509_check_private_key(c, key) == 1, "issued certificate public key mismatch");
@@ -568,7 +547,6 @@ inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Conf
          "certificate needs digitalSignature and must not authorize certificate/CRL signing");
     const std::string expected_upn = m.upn.empty() ? (m.name + "@" + cfg.domain) : m.upn;
     need(certificate_upn(c) == expected_upn, "issued UPN differs from Active Directory UPN");
-    need(certificate_sid(c) == m.sid, "CA-issued SID differs from Active Directory account SID");
     need(certificate_template(c) == cfg.template_oid, "CA returned the wrong certificate template");
     time_t now = time(nullptr), start = as_time(X509_get0_notBefore(c)), end = as_time(X509_get0_notAfter(c));
     need(start <= now && end > now + 60, "certificate is not currently valid for at least 60 seconds");
@@ -1161,7 +1139,7 @@ inline Mapping lookup_ad_user(const Config &cfg, uid_t uid, const std::string &n
 
     std::string base_dn = cfg.gc_base_dn.empty() ? domain_to_dn(cfg.domain) : cfg.gc_base_dn;
     std::string filter = std::format("(&(objectCategory=person)(objectClass=user)(sAMAccountName={}))", name);
-    const char *attrs[] = {"objectSid", "userPrincipalName", nullptr};
+    const char *attrs[] = {"userPrincipalName", nullptr};
 
     ScopedLdapMsg res;
     rc = ldap_search_ext_s(ld.get(),
@@ -1184,21 +1162,13 @@ inline Mapping lookup_ad_user(const Config &cfg, uid_t uid, const std::string &n
     LDAPMessage *entry = ldap_first_entry(ld.get(), res.get());
     need(entry != nullptr, "failed to get LDAP entry");
 
-    Owned<berval *, ldap_value_free_len> sid_vals(ldap_get_values_len(ld.get(), entry, "objectSid"));
-    need(sid_vals && ldap_count_values_len(sid_vals.get()) == 1,
-         "Active Directory entry needs exactly one objectSid");
-    const auto *sid = *sid_vals;
-    const auto sid_str = format_sid(
-        std::span<const unsigned char>(reinterpret_cast<const unsigned char *>(sid->bv_val), sid->bv_len));
-    need(validate_sid(sid_str), "invalid Active Directory user objectSid");
-
     Owned<berval *, ldap_value_free_len> upn_vals(ldap_get_values_len(ld.get(), entry, "userPrincipalName"));
     need(!upn_vals || ldap_count_values_len(upn_vals.get()) <= 1,
          "Active Directory entry has multiple userPrincipalName values");
     const auto *upn = upn_vals ? *upn_vals : nullptr;
     const auto upn_str = upn && upn->bv_len ? std::string(upn->bv_val, upn->bv_len) : name + "@" + cfg.domain;
 
-    return Mapping{.uid = uid, .name = name, .sid = sid_str, .upn = upn_str};
+    return Mapping{.uid = uid, .name = name, .upn = upn_str};
 }
 } // namespace craft
 

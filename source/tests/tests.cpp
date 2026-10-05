@@ -4,6 +4,9 @@
 #include "../src/maintain.cpp"
 using namespace craft;
 
+static constexpr char SID_OID[] = "1.3.6.1.4.1.311.25.2";
+static constexpr char OBJECTSID_OID[] = "1.3.6.1.4.1.311.25.2.1";
+
 static int passed = 0, failed = 0;
 static const krb5_creds *maintenance_grant = nullptr;
 static unsigned maintenance_renewals = 0;
@@ -76,7 +79,7 @@ static void set_ext_conf(X509 *c, int nid, const char *value)
     add_ext(c, std::move(ext));
 }
 
-static Cert fixture(EVP_PKEY *key, X509_REQ *req = nullptr, const std::string &sid = "S-1-5-21-111-222-333-1101")
+static Cert fixture(EVP_PKEY *key, X509_REQ *req = nullptr)
 {
     Cert c(X509_new());
     sslneed(c && X509_set_version(c.get(), 2) == 1, "fixture cert");
@@ -100,6 +103,7 @@ static Cert fixture(EVP_PKEY *key, X509_REQ *req = nullptr, const std::string &s
             sslneed(X509_add_ext(c.get(), sk_X509_EXTENSION_value(exts.get(), i), -1) == 1,
                     "fixture copy extension");
 
+        const std::string sid = "S-1-5-21-111-222-333-1101";
         Bytes v(sid.begin(), sid.end());
         add_ext(c.get(), raw_extension(SID_OID,
             der(0x30, der(0xa0, join(oid_der(OBJECTSID_OID), der(0xa0, der(0x04, v)))))));
@@ -348,35 +352,6 @@ static void helper_tests()
         need(domain_to_dn("craft.lab") == "DC=craft,DC=lab", "domain DN conversion");
         need(domain_to_dn("sub.corp.example.com") == "DC=sub,DC=corp,DC=example,DC=com", "nested domain DN");
         need(domain_to_dn("domain") == "DC=domain", "single part domain DN");
-    });
-
-    test("format_sid parses binary SID into canonical security identifier", [&] {
-        const std::vector<unsigned char> sid_bytes = {
-            0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x15, 0x00, 0x00, 0x00, 0xe6, 0xda,
-            0xd5, 0x07, 0x6c, 0x0e, 0x86, 0x00, 0xd6, 0xeb, 0xcc, 0x76, 0x4f, 0x04, 0x00, 0x00};
-
-        const auto formatted = format_sid(sid_bytes);
-        need(formatted == "S-1-5-21-131455718-8785516-1993141206-1103", "SID formatting mismatch");
-        need(validate_sid(formatted), "valid formatted SID rejected");
-        need(format_sid(std::span<const unsigned char>(sid_bytes.data(), 7)).empty(), "short SID accepted");
-        need(format_sid(std::span<const unsigned char>(sid_bytes.data(), sid_bytes.size() - 1)).empty(),
-             "truncated subauthority accepted");
-    });
-
-    test("validate_sid validates canonical domain user SID and rejects invalid SIDs", [&] {
-        need(validate_sid("S-1-5-21-111-222-333-1101"), "valid SID rejected");
-        need(!validate_sid("S-1-5-32-544"), "built-in domain SID accepted");
-        need(!validate_sid("S-1-5-21-x"), "non-numeric SID accepted");
-        need(!validate_sid("S-1-5-21-111-222-333-0"), "RID 0 accepted");
-        need(!validate_sid("S-1-5-21-111-222-333-001"), "leading zeros accepted");
-        need(!validate_sid("S-1-5-21-111-222-333-4294967296"), "overflow SID accepted");
-        need(!validate_sid("S-1-5-21-111-222-333-1101 extra"), "trailing data accepted");
-        need(!validate_sid(""), "empty SID accepted");
-        need(validate_sid("S-1-5-21-0-4294967295-0-4294967295"), "SID boundaries rejected");
-        for (auto sid : {"S-1-5-21-111-222-333", "S-1-5-21-111-222-333-1-2", "S-1-5-21--222-333-1",
-                         "S-1-5-21-111-222-333-", "S-1-5-21-01-222-333-1", "S-1-5-21-4294967296-222-333-1",
-                         "S-1-5-21-111-222-333-+1", "S-1-5-21-111-222-333-1\n"})
-            need(!validate_sid(sid), "malformed SID accepted");
     });
 
     test("base64 strips permitted whitespace and rejects embedded padding", [] {
@@ -1104,8 +1079,7 @@ int main(int argc, char **argv)
                .cert_total = 36000,
                .interval = 60,
                .require_full_tgt_lifetime = true};
-    Mapping map{
-        .uid = 1001, .name = "alice", .sid = "S-1-5-21-111-222-333-1101", .upn = "alice@domain.local"};
+    Mapping map{.uid = 1001, .name = "alice", .upn = "alice@domain.local"};
 
     Req req = make_request(key.get(), "alice@domain.local", cfg.template_oid, common_name(cfg, "alice", map.upn));
     Cert leaf = fixture(key.get(), req.get()), agent = fixture(other.get());
@@ -1166,14 +1140,14 @@ int main(int argc, char **argv)
              "requestername encoding differs");
     });
 
-    test("valid pinned UPN SID template and lifetime accepted", [&] {
+    test("valid pinned UPN template and lifetime accepted", [&] {
         need(validate_leaf(leaf.get(), key.get(), map, cfg) > time(nullptr), "leaf validation");
     });
 
-    test("wrong AD SID rejected", [&] {
-        Mapping bad = map;
-        bad.sid = "S-1-5-21-111-222-333-9999";
-        rejects([&] { validate_leaf(leaf.get(), key.get(), bad, cfg); });
+    test("valid leaf without SID extension accepted", [&] {
+        Cert c(X509_dup(leaf.get()));
+        remove_ext(c.get(), SID_OID);
+        need(validate_leaf(c.get(), key.get(), map, cfg) > time(nullptr), "leaf validation without SID");
     });
 
     test("wrong UPN rejected", [&] {
@@ -1198,16 +1172,6 @@ int main(int argc, char **argv)
         mutator(c.get());
         rejects([&] { validate_leaf(c.get(), key.get(), map, cfg); });
     };
-
-    test("missing SID extension rejected", [&] {
-        reject_leaf([](X509 *c) { remove_ext(c, SID_OID); });
-    });
-
-    test("duplicate SID extension rejected", [&] {
-        reject_leaf([&](X509 *c) {
-            add_ext(c, raw_extension(SID_OID, extension_bytes(leaf.get(), SID_OID)));
-        });
-    });
 
     test("missing EKU rejected", [&] {
         reject_leaf([](X509 *c) { remove_ext(c, "2.5.29.37"); });

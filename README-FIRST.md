@@ -37,7 +37,7 @@ The issued user certificate and private key are temporary on the Linux client an
 
 ## Defaults and Limitations
 
-The default certificate profile accepts at most ten hours TOTAL validity, including backdating. The CA must issue that profile; the client does not set CA dates. The user TGT request matches the most permissive DISA STIG guidance for domain controllers: ten hours (36000 seconds) of initial ticket validity with seven days (604800 seconds) of renewal validity. AES256/AES128 session and outer-ticket encryption are required. User identity (SID and UPN) is resolved dynamically via Active Directory Global Catalog lookups; the real runtime UID/NSS name remains checked.
+The default certificate profile accepts at most ten hours TOTAL validity, including backdating. The CA must issue that profile; the client does not set CA dates. The user TGT request matches the most permissive DISA STIG guidance for domain controllers: ten hours (36000 seconds) of initial ticket validity with seven days (604800 seconds) of renewal validity. AES256/AES128 session and outer-ticket encryption are required. The user UPN is resolved dynamically via Active Directory Global Catalog lookups; the real runtime UID/NSS name remains checked.
 
 IMPORTANT: Under DISA STIG for Windows Server Domain Controllers, initial user tickets are capped at 10 hours and renewals at 7 days. Additionally, RFC 4556 certificate/key-lifetime constraints constrain initial tickets by client certificate validity, requiring a 10-hour certificate template. The program does not bypass KDC policy or rewrite tickets. Default strict mode rejects shorter grants without replacing the current cache. Set `require_full_tgt_lifetime=no` only to explicitly accept a shorter ticket with a warning.
 

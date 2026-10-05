@@ -226,7 +226,7 @@ def overview(pdf):
     p.node(470, 804, 320, 100, "Kerberos-aware app", ["Loads cache via KRB5CCNAME"],
            color=BLUE, title_size=23)
 
-    p.node(1126, 298, 380, 96, "Active Directory", ["Global Catalog: UPN + SID"], color=TEAL)
+    p.node(1126, 298, 380, 96, "Active Directory", ["Global Catalog: user UPN"], color=TEAL)
     p.node(1126, 442, 380, 110, "AD CS / CES + CA",
            ["Restricted template + recipients", "Issues short-lived user certificate"], color=TEAL)
     p.node(1126, 610, 380, 110, "Domain controller / KDC",
@@ -262,7 +262,7 @@ def acquisition(pdf):
     p = Page(pdf, "02-enrollment-sequence", 2, "From a Linux account to a validated user TGT.",
              "Successful exchange. Time flows downward; spacing represents order, not network latency.",
              "Sequence: validate the real caller and drop privileges; obtain a separate short-lived transport "
-             "TGT using the submission keytab; resolve UPN and SID in the Global Catalog; generate and sign an "
+             "TGT using the submission keytab; resolve the UPN in the Global Catalog; generate and sign an "
              "EOBO request; enroll through CES; validate the certificate; perform user PKINIT; validate the TGT; "
              "return cache bytes to the unprivileged caller and publish atomically. Solid arrows are requests; "
              "dashed arrows are responses. CES transport uses Negotiate or a separate TLS client identity.")
@@ -291,7 +291,7 @@ def acquisition(pdf):
 
     p.number_badge(70, 453, 3)
     p.message(575, 865, 437, "LDAP / GSSAPI: query caller", color=TEAL, size=17)
-    p.message(865, 575, 469, "Unique AD UPN + SID", color=TEAL, dashed=True, size=17)
+    p.message(865, 575, 469, "Unique AD user UPN", color=TEAL, dashed=True, size=17)
 
     p.number_badge(70, 528, 4)
     p.rect(495, 497, 712, 62, TEAL_LIGHT, radius=9)
@@ -306,7 +306,7 @@ def acquisition(pdf):
 
     p.number_badge(70, 678, 6)
     p.rect(495, 647, 712, 62, TEAL_LIGHT, radius=9)
-    p.lines(518, 656, ["Validate key, UPN, SID, template, EKUs and lifetime.",
+    p.lines(518, 656, ["Validate key, UPN, template, EKUs and lifetime.",
                        "Verify certificate chain and configured CRLs."], 18, leading=25, max_width=665)
 
     p.number_badge(70, 753, 7)

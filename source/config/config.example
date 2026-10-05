@@ -12,7 +12,7 @@ template_oid=1.3.6.1.4.1.311.21.8.999.1
 # CUSTOMIZE REQUESTED CERTIFICATE CN HERE: {user}, {upn}, {domain} supported.
 # {upn} uses the resolved AD UPN, including an alternate suffix.
 # Final CN must be 1-64 printable ASCII characters; the CA may override it.
-# This does not change UPN/SID binding or authorize enrollee-supplied identities.
+# This does not change the directory UPN or authorize enrollee-supplied identities.
 certificate_cn={user}
 
 # AD CS CES endpoint, not legacy /certsrv. Replace with the real endpoint.
