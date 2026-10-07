@@ -1,0 +1,479 @@
+# Offline enrollment/export checks; only newly created synthetic certificates are used.
+#requires -Version 5.0
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+$scriptPath = Join-Path $PSScriptRoot 'Request-CRAFT-Certificate.cmd'
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
+foreach ($name in @('Initialize-CraftKeyExporter', 'Initialize-CraftCertificateDestination',
+    'Write-CraftExportFile', 'Write-CraftPem', 'Remove-CraftStoredCertificate', 'Invoke-CraftCertificateEnrollment'))
+{
+    $definition = $ast.Find({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+    }, $false)
+    if ($null -eq $definition) { throw "Missing helper: $name" }
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
+
+function Assert([bool]$Condition, [string]$Message)
+{
+    if (-not $Condition) { throw $Message }
+}
+
+function Reject([scriptblock]$Action)
+{
+    $rejected = $false
+    try { & $Action | Out-Null }
+    catch { $rejected = $true }
+    Assert $rejected 'An invalid or conflicting export was accepted.'
+}
+
+function Read-Pem([string]$Path, [string]$Label)
+{
+    $text = [System.IO.File]::ReadAllText($Path)
+    Assert ($text.StartsWith("-----BEGIN $Label-----`n") -and
+        $text.EndsWith("-----END $Label-----`n") -and -not $text.Contains("`r")) 'Unexpected PEM framing.'
+    return ,([Convert]::FromBase64String(($text -replace '-----[^\n]+-----', '').Trim()))
+}
+
+function Invoke-Cmd([string]$Command)
+{
+    $start = [System.Diagnostics.ProcessStartInfo]::new($env:ComSpec, '/d /s /c ' + $Command)
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($start)
+    try
+    {
+        $output = $process.StandardOutput.ReadToEnd() + $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return [pscustomobject]@{ Output = $output; ExitCode = $process.ExitCode }
+    }
+    finally { $process.Dispose() }
+}
+
+function Get-Certificate
+{
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Template, [uri]$Url, [string]$CertStoreLocation)
+    $script:requests++
+    Assert ($Template -eq 'OfflineUserLogon' -and $Url.OriginalString -eq 'ldap:' -and
+        $CertStoreLocation -eq 'Cert:\CurrentUser\My') 'Incorrect enrollment policy or user store.'
+    if ($script:status -ne 'Issued') { return [pscustomobject]@{ Status = $script:status; Certificate = $null } }
+    return [pscustomobject]@{ Status = 'Issued'; Certificate = Get-Item -LiteralPath $script:certificatePath }
+}
+
+function New-CraftFixture([double]$Days)
+{
+    $certificate = New-SelfSignedCertificate -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy Exportable `
+        -Provider 'Microsoft Software Key Storage Provider' -Type Custom -KeyUsage DigitalSignature `
+        -Subject ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()) -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -NotAfter (Get-Date).AddDays($Days)
+    $path = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
+    $fixtures.Add($path)
+    $certificate.Dispose()
+    return $path
+}
+
+function Read-CraftSnapshot($Target)
+{
+    foreach ($name in @('user.pem', 'user.key', '.craft-certificate.json'))
+    {
+        (Get-FileHash -LiteralPath (Join-Path $Target.Path $name) -Algorithm SHA256).Hash
+    }
+}
+
+$root = Join-Path $env:USERPROFILE ('CRAFT.Certificate.Tests.' + [Guid]::NewGuid().ToString('N'))
+$fixtures = [System.Collections.Generic.List[string]]::new()
+$script:requests = 0
+$script:status = 'Issued'
+try
+{
+    $template = "Preview & O'Brien [x] (1)!"
+    $preview = Join-Path $root $template
+    $command = '""' + $scriptPath + '" "' + $template + '" "' + $preview +
+        '" /DeleteAfterExport /RenewBeforeDays 2 /WhatIf"'
+    $result = Invoke-Cmd $command
+    Assert ($result.ExitCode -eq 0 -and $result.Output.Contains($template) -and
+        $result.Output.Contains($preview) -and $result.Output.Contains('less than 2 day(s)') -and
+        $result.Output.Contains('remove the Windows certificate')) ('CMD preview failed: ' + $result.Output)
+    Assert (-not (Test-Path -LiteralPath $root)) 'CMD preview changed the filesystem.'
+    $command = '""' + $scriptPath + '" "' + $template + '" "' + $preview + '" /WhatIf"'
+    $result = Invoke-Cmd $command
+    Assert ($result.ExitCode -eq 0 -and $result.Output.Contains('one calendar month') -and
+        -not (Test-Path -LiteralPath $root)) 'The default CMD renewal window is not one calendar month.'
+    $command = "& ([scriptblock]::Create([IO.File]::ReadAllText('" + $scriptPath.Replace("'", "''") +
+        "'))) -TemplateName '" + $template.Replace("'", "''") + "' -Destination '" +
+        $preview.Replace("'", "''") + "' -DeleteAfterExport -RenewBeforeDays 2 -WhatIf"
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $output = & powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1
+    Assert ($LASTEXITCODE -eq 0 -and ($output -join "`n").Contains($template) -and
+        ($output -join "`n").Contains($preview) -and ($output -join "`n").Contains('less than 2 day(s)') -and
+        ($output -join "`n").Contains('remove the Windows certificate')) 'PowerShell preview lost its arguments.'
+    Assert (-not (Test-Path -LiteralPath $root)) 'PowerShell preview changed the filesystem.'
+    $command = "& '" + $scriptPath.Replace("'", "''") + "' '" + $template.Replace("'", "''") +
+        "' '" + $preview.Replace("'", "''") + "' /RenewBeforeDays 2 /WhatIf /DeleteAfterExport"
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $output = & powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1
+    Assert ($LASTEXITCODE -eq 0 -and ($output -join "`n").Contains($template) -and
+        ($output -join "`n").Contains($preview) -and ($output -join "`n").Contains('less than 2 day(s)') -and
+        ($output -join "`n").Contains('remove the Windows certificate')) 'PowerShell CMD launch lost its arguments.'
+    Assert (-not (Test-Path -LiteralPath $root)) 'PowerShell CMD preview changed the filesystem.'
+    $command = '""' + $scriptPath + '""'
+    $result = Invoke-Cmd $command
+    Assert ($result.ExitCode -eq 64) 'Missing CMD arguments did not return the usage status.'
+    Write-Host 'PASS: CMD and Windows PowerShell previews preserve arguments without enrollment or files'
+
+    Initialize-CraftKeyExporter
+    $target = Initialize-CraftCertificateDestination $root
+    $algorithms = @(
+        @{ Name = 'CNG-RSA'; KeyAlgorithm = 'RSA'; KeyLength = 2048;
+            Provider = 'Microsoft Software Key Storage Provider' },
+        @{ Name = 'Encrypted-export-only'; KeyAlgorithm = 'RSA'; KeyLength = 2048;
+            Provider = 'Microsoft Software Key Storage Provider' },
+        @{ Name = 'CSP-RSA'; KeyAlgorithm = 'RSA'; KeyLength = 2048;
+            Provider = 'Microsoft Enhanced RSA and AES Cryptographic Provider'; KeySpec = 'Signature' },
+        @{ Name = 'CNG-ECDSA'; KeyAlgorithm = 'ECDSA_nistP256';
+            Provider = 'Microsoft Software Key Storage Provider' }
+    )
+    foreach ($algorithm in $algorithms)
+    {
+        $parameters = $algorithm.Clone()
+        $name = $parameters.Name
+        $parameters.Remove('Name')
+        $sourceKey = $null
+        $sourceRsa = $null
+        if ($name -eq 'Encrypted-export-only')
+        {
+            $creation = [System.Security.Cryptography.CngKeyCreationParameters]::new()
+            $creation.ExportPolicy = [System.Security.Cryptography.CngExportPolicies]::AllowExport
+            $creation.Parameters.Add([System.Security.Cryptography.CngProperty]::new('Length',
+                [BitConverter]::GetBytes(2048), [System.Security.Cryptography.CngPropertyOptions]::None))
+            $sourceKey = [System.Security.Cryptography.CngKey]::Create(
+                [System.Security.Cryptography.CngAlgorithm]::Rsa, ('CRAFT.TEST.' + [Guid]::NewGuid()), $creation)
+            $sourceRsa = [System.Security.Cryptography.RSACng]::new($sourceKey)
+            try
+            {
+                $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+                    ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()), $sourceRsa,
+                    [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+                $certificate = $request.CreateSelfSigned([DateTimeOffset]::Now.AddMinutes(-1),
+                    [DateTimeOffset]::Now.AddMinutes(15))
+                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+                try { $store.Open('ReadWrite'); $store.Add($certificate) }
+                finally { $store.Dispose() }
+            }
+            catch { $sourceKey.Delete(); throw }
+            finally { $sourceRsa.Dispose(); $sourceKey.Dispose() }
+        }
+        else
+        {
+            $certificate = New-SelfSignedCertificate @parameters -Type Custom -KeyExportPolicy Exportable `
+                -CertStoreLocation 'Cert:\CurrentUser\My' -Subject ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()) `
+                -KeyUsage DigitalSignature -NotAfter (Get-Date).AddMinutes(15)
+        }
+        $script:certificatePath = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
+        $fixtures.Add($script:certificatePath)
+        if ($name -eq 'Encrypted-export-only')
+        {
+            $sourceKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
+                $certificate)
+            try
+            {
+                Reject { $sourceKey.Key.Export([System.Security.Cryptography.CngKeyBlobFormat]::Pkcs8PrivateBlob) }
+            }
+            finally { $sourceKey.Dispose() }
+        }
+        $export = Initialize-CraftCertificateDestination (Join-Path $root $name)
+        Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+        $certificateBytes = Read-Pem (Join-Path $export.Path 'user.pem') 'CERTIFICATE'
+        $keyBytes = Read-Pem (Join-Path $export.Path 'user.key') 'PRIVATE KEY'
+        $published = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateBytes)
+        $key = [System.Security.Cryptography.CngKey]::Import($keyBytes,
+            [System.Security.Cryptography.CngKeyBlobFormat]::Pkcs8PrivateBlob)
+        $private = $null
+        $public = $null
+        try
+        {
+            Assert ($published.Thumbprint -eq $certificate.Thumbprint) 'Export selected a different certificate.'
+            $message = [System.Text.Encoding]::UTF8.GetBytes('SYNTHETIC OFFLINE SIGNATURE CHECK')
+            if ($name -eq 'CNG-ECDSA')
+            {
+                $private = [System.Security.Cryptography.ECDsaCng]::new($key)
+                $public = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey(
+                    $published)
+                $signature = $private.SignData($message, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+                Assert ($public.VerifyData($message, $signature,
+                    [System.Security.Cryptography.HashAlgorithmName]::SHA256)) 'ECDSA PEM pair does not match.'
+            }
+            else
+            {
+                $private = [System.Security.Cryptography.RSACng]::new($key)
+                $public = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey(
+                    $published)
+                $signature = $private.SignData($message, [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+                Assert ($public.VerifyData($message, $signature,
+                    [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)) 'RSA PEM pair does not match.'
+            }
+            $allowed = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+                'S-1-5-18', 'S-1-5-32-544')
+            foreach ($file in @('user.pem', 'user.key'))
+            {
+                $acl = Get-Acl -LiteralPath (Join-Path $export.Path $file)
+                Assert $acl.AreAccessRulesProtected 'Export inherited destination permissions.'
+                foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+                {
+                    Assert ($rule.IdentityReference.Value -in $allowed) 'An ordinary user can access the export.'
+                }
+            }
+            Assert (@(Get-ChildItem -LiteralPath $export.Path -Filter '*.pfx').Count -eq 0) 'PFX was saved to disk.'
+            $before = $script:requests
+            Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -RenewBeforeDays 0 | Out-Null
+            Assert ($script:requests -eq $before) 'Existing output triggered another certificate request.'
+            Assert (Test-Path -LiteralPath $script:certificatePath) 'Default export deleted the Windows certificate.'
+            Assert ([Convert]::ToBase64String((Read-Pem (Join-Path $export.Path 'user.key') 'PRIVATE KEY')) -eq
+                [Convert]::ToBase64String($keyBytes)) 'Existing private key was changed.'
+            $openssl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
+            if (Test-Path -LiteralPath $openssl)
+            {
+                & $openssl pkey -in (Join-Path $export.Path 'user.key') -check -noout
+                Assert ($LASTEXITCODE -eq 0) 'OpenSSL rejected the PKCS#8 PEM key.'
+                & $openssl x509 -in (Join-Path $export.Path 'user.pem') -noout
+                Assert ($LASTEXITCODE -eq 0) 'OpenSSL rejected the certificate PEM.'
+            }
+            Write-Host "PASS: $name matching PEM export, private ACLs, and existing-output preservation"
+        }
+        finally
+        {
+            if ($null -ne $public) { $public.Dispose() }
+            if ($null -ne $private) { $private.Dispose() }
+            $key.Dispose()
+            $published.Dispose()
+            [Array]::Clear($keyBytes, 0, $keyBytes.Length)
+        }
+        $original = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
+            (Get-Item -LiteralPath $script:certificatePath))
+        if ($null -ne $original) { $original.SignData($message,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1) | Out-Null; $original.Dispose() }
+        $certificate.Dispose()
+    }
+
+    $script:certificatePath = $fixtures[0]
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'PublicationConflict')
+    $script:competingKey = Join-Path $export.Path 'user.key'
+    $script:pemWriter = ${function:Write-CraftPem}
+    function Write-CraftPem([string]$Path, [string]$Label, [byte[]]$Bytes,
+        [System.Security.AccessControl.FileSecurity]$Security)
+    {
+        & $script:pemWriter $Path $Label $Bytes $Security
+        if ($Label -eq 'PRIVATE KEY')
+        {
+            [System.IO.File]::WriteAllText($script:competingKey, 'Competing output to preserve.')
+        }
+    }
+    try
+    {
+        Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' }
+        Assert (-not (Test-Path -LiteralPath (Join-Path $export.Path 'user.pem')) -and
+            [System.IO.File]::ReadAllText($script:competingKey) -eq 'Competing output to preserve.') `
+            'Partial publication changed another output or left an incomplete certificate pair.'
+        Assert (@(Get-ChildItem -LiteralPath $export.Path -Directory).Count -eq 0) 'Staged private key was retained.'
+        Assert (Test-Path -LiteralPath $script:certificatePath) 'Publication failure removed the Windows credential.'
+    }
+    finally { Set-Item -LiteralPath Function:\Write-CraftPem -Value $script:pemWriter }
+    Write-Host 'PASS: publication conflicts preserve competing files and remove only staged/published files'
+
+    $certificate = New-SelfSignedCertificate -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable `
+        -Type Custom -Subject ('CN=CRAFT NONEXPORTABLE TEST ' + [Guid]::NewGuid()) `
+        -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddMinutes(15)
+    $script:certificatePath = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
+    $nonexportablePath = $script:certificatePath
+    $fixtures.Add($script:certificatePath)
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'Nonexportable')
+    try
+    {
+        Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' }
+        Assert (@(Get-ChildItem -LiteralPath $export.Path -Filter 'user.*').Count -eq 0) `
+            'Nonexportable key published files.'
+    }
+    finally { $certificate.Dispose() }
+    Write-Host 'PASS: nonexportable keys fail without publishing files'
+
+    foreach ($value in @('Pending', 'Denied'))
+    {
+        $script:status = $value
+        $export = Initialize-CraftCertificateDestination (Join-Path $root $value)
+        $code = $null
+        $rejected = $false
+        try { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' }
+        catch { $rejected = $true; $code = $_.Exception.Data['CraftExitCode'] }
+        Assert $rejected 'Pending or denied request unexpectedly succeeded.'
+        if ($value -eq 'Pending') { Assert ($code -eq 2) 'Pending approval did not return its distinct status.' }
+        Assert (-not (Test-Path -LiteralPath (Join-Path $export.Path 'user.pem')) -and
+            -not (Test-Path -LiteralPath (Join-Path $export.Path 'user.key'))) 'A failed request published files.'
+    }
+    Write-Host 'PASS: pending and denied requests publish no PEM files'
+
+    $script:status = 'Issued'
+    $script:certificatePath = New-CraftFixture 60
+    $reusePath = $script:certificatePath
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'ReuseAndDelete')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    $snapshot = (Read-CraftSnapshot $export) -join ':'
+    $before = $script:requests
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    Assert ($script:requests -eq $before -and (Test-Path -LiteralPath $reusePath) -and
+        ((Read-CraftSnapshot $export) -join ':') -eq $snapshot) 'A current pair was renewed or deleted by default.'
+    $stored = Get-Item -LiteralPath $reusePath
+    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($stored)
+    $keyName = $rsa.Key.KeyName
+    $provider = $rsa.Key.Provider
+    $rsa.Dispose()
+    $stored.Dispose()
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport | Out-Null
+    Assert ($script:requests -eq $before -and -not (Test-Path -LiteralPath $reusePath) -and
+        ((Read-CraftSnapshot $export) -join ':') -eq $snapshot) 'Optional deletion changed the exported pair.'
+    Reject { $key = [System.Security.Cryptography.CngKey]::Open($keyName, $provider); $key.Dispose() }
+    Write-Host 'PASS: current pairs are reused and Windows certificate/key deletion defaults off'
+
+    $script:certificatePath = New-CraftFixture 3
+    $deletePath = $script:certificatePath
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'DeleteAfterNewExport')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport | Out-Null
+    Assert (-not (Test-Path -LiteralPath $deletePath) -and
+        (Test-Path -LiteralPath (Join-Path $export.Path 'user.pem')) -and
+        (Test-Path -LiteralPath (Join-Path $export.Path 'user.key'))) 'Fresh export deletion removed the PEM pair.'
+    Write-Host 'PASS: optional deletion runs after a successful fresh export'
+
+    $script:certificatePath = New-CraftFixture 5
+    $sharedPath = $script:certificatePath
+    $stored = Get-Item -LiteralPath $sharedPath
+    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($stored)
+    $sibling = $null
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+    try
+    {
+        $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+            ('CN=CRAFT OFFLINE TEST SHARED ' + [Guid]::NewGuid()), $rsa,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $sibling = $request.CreateSelfSigned([DateTimeOffset]::Now.AddMinutes(-1), [DateTimeOffset]::Now.AddDays(5))
+        $store.Open('ReadWrite')
+        $store.Add($sibling)
+        $siblingPath = 'Cert:\CurrentUser\My\' + $sibling.Thumbprint
+        $fixtures.Add($siblingPath)
+    }
+    finally
+    {
+        $store.Dispose()
+        if ($null -ne $sibling) { $sibling.Dispose() }
+        $rsa.Dispose()
+        $stored.Dispose()
+    }
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'SharedKey')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport | Out-Null
+    Assert (-not (Test-Path -LiteralPath $sharedPath) -and (Test-Path -LiteralPath $siblingPath)) `
+        'Deletion removed another Windows certificate.'
+    $stored = Get-Item -LiteralPath $siblingPath
+    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($stored)
+    try
+    {
+        Assert ($null -ne $rsa) 'Deletion removed a shared private key.'
+        $rsa.SignData([System.Text.Encoding]::UTF8.GetBytes('SHARED KEY CHECK'),
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1) | Out-Null
+    }
+    finally { if ($null -ne $rsa) { $rsa.Dispose() }; $stored.Dispose() }
+    Write-Host 'PASS: deletion preserves other Windows certificates and their shared private keys'
+
+    $script:certificatePath = New-CraftFixture 20
+    $oldPath = $script:certificatePath
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'Renew')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    $snapshot = (Read-CraftSnapshot $export) -join ':'
+    foreach ($value in @('Pending', 'Denied'))
+    {
+        $script:status = $value
+        Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport }
+        Assert ((Test-Path -LiteralPath $oldPath) -and
+            ((Read-CraftSnapshot $export) -join ':') -eq $snapshot) 'Failed renewal removed the working credential.'
+    }
+    $script:status = 'Issued'
+    $script:certificatePath = $nonexportablePath
+    Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport }
+    Assert ((Test-Path -LiteralPath $oldPath) -and
+        ((Read-CraftSnapshot $export) -join ':') -eq $snapshot) 'Failed key export changed the working pair.'
+    $script:certificatePath = New-CraftFixture 45
+    $newPath = $script:certificatePath
+    $busy = [System.IO.File]::Open((Join-Path $export.Path 'user.key'), [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try { Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport } }
+    finally { $busy.Dispose() }
+    Assert ((Test-Path -LiteralPath $oldPath) -and (Test-Path -LiteralPath $newPath) -and
+        ((Read-CraftSnapshot $export) -join ':') -eq $snapshot -and
+        @(Get-ChildItem -LiteralPath $export.Path -Directory).Count -eq 0) 'Publication failure did not restore output.'
+    $before = $script:requests
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    $pem = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        (Read-Pem (Join-Path $export.Path 'user.pem') 'CERTIFICATE'))
+    try
+    {
+        Assert ($script:requests -eq $before + 1 -and -not (Test-Path -LiteralPath $oldPath) -and
+            (Test-Path -LiteralPath $newPath) -and $pem.Thumbprint -eq (Split-Path -Leaf $newPath)) `
+            'Default renewal did not replace the pair and remove the old Windows certificate.'
+    }
+    finally { $pem.Dispose() }
+    $script:certificatePath = New-CraftFixture 90
+    $nextPath = $script:certificatePath
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -RenewBeforeDays 60 -DeleteAfterExport | Out-Null
+    Assert (-not (Test-Path -LiteralPath $newPath) -and -not (Test-Path -LiteralPath $nextPath)) `
+        'Custom renewal/deletion did not remove both managed Windows certificates.'
+    $before = $script:requests
+    Reject { Invoke-CraftCertificateEnrollment $export 'DifferentTemplate' }
+    [System.IO.File]::WriteAllText((Join-Path $export.Path 'user.key'), 'Changed file to preserve.')
+    Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' }
+    Assert ($script:requests -eq $before -and
+        [System.IO.File]::ReadAllText((Join-Path $export.Path 'user.key')) -eq 'Changed file to preserve.') `
+        'Changed output or a different template triggered enrollment or overwriting.'
+    Write-Host 'PASS: one-month/custom renewal, rollback, old-certificate deletion, and changed-file protection'
+
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'Busy')
+    $busy = [System.IO.File]::Open((Join-Path $export.Path '.craft-certificate-export.lock'),
+        [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    try
+    {
+        $before = $script:requests
+        Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' }
+        Assert ($script:requests -eq $before) 'A concurrent export submitted another request.'
+    }
+    finally { $busy.Dispose() }
+    $junction = Join-Path $root 'Redirect'
+    New-Item -ItemType Junction -Path $junction -Target $export.Path | Out-Null
+    try { Reject { Initialize-CraftCertificateDestination (Join-Path $junction 'Nested') } }
+    finally { [System.IO.Directory]::Delete($junction) }
+    Write-Host 'PASS: concurrent export and redirected destination refusal'
+}
+finally
+{
+    foreach ($path in $fixtures)
+    {
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -DeleteKey -Force }
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($root)
+    if ([System.IO.Path]::GetDirectoryName($fullPath) -ne $env:USERPROFILE -or
+        [System.IO.Path]::GetFileName($fullPath) -notlike 'CRAFT.Certificate.Tests.*')
+    {
+        throw 'Unexpected certificate test cleanup path.'
+    }
+    if (Test-Path -LiteralPath $fullPath) { Remove-Item -LiteralPath $fullPath -Recurse -Force }
+}
+Write-Host 'Offline enrollment/export checks passed. No AD CA was contacted.'

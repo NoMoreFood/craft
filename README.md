@@ -19,6 +19,16 @@ Applications select the cache through `KRB5CCNAME` and use its TGT to obtain ser
 
 Place an existing certificate and its matching unencrypted private key at the fixed paths below. Use PEM format; PFX loading and passphrase prompts are unsupported.
 
+To obtain that pair from AD CS, run the [Windows certificate helper](scripts/Request-CRAFT-Certificate.cmd) from CMD or Windows PowerShell as the intended domain user:
+
+```bat
+.\scripts\Request-CRAFT-Certificate.cmd UserLogon "C:\Users\Alice\CRAFT Certificate"
+```
+
+Windows enrollment policy selects an eligible CA for the template's internal name or OID. Choose a template allowing direct user enrollment and exportable software keys, with the logon usages and identity mapping required by the KDC. The helper writes `user.pem` and an unencrypted PKCS#8 `user.key` to the destination without elevation or OpenSSL. Transfer the pair securely to Linux, then install it as shown below. See [Windows certificate requests](source/README.md#request-a-home-certificate-on-windows) for prerequisites, preview and failure handling.
+
+Repeat the command with the same template and destination to reuse the pair until less than one calendar month remains before expiration. `/RenewBeforeDays N` overrides that window with a day-based period. Renewal replaces the managed exports and removes their old Windows-store certificate after the new pair is ready. `/DeleteAfterExport` also removes the current Windows-store certificate after successful export or reuse; it defaults off. The helper checks when invoked and does not schedule renewal or replace Linux copies automatically.
+
 ```sh
 mkdir -p ~/.config/craft
 chmod 0700 ~/.config/craft
@@ -81,6 +91,7 @@ export KRB5CCNAME="$cache"
 | [Process overview](docs/01-CRAFT-Process-Overview.docx) | Enrollment, service tickets, and credential lifecycle ([PDF](docs/01-CRAFT-Process-Overview.pdf)) |
 | [Configuration and validation](docs/02-CRAFT-Configuration-and-Validation.docx) | Certificate profile and lab acceptance ([PDF](docs/02-CRAFT-Configuration-and-Validation.pdf)) |
 | [Windows provisioning helper](scripts/Configure-CRAFT-CA.ps1) | Optional partial CA/template setup for a lab |
+| [Windows certificate helper](scripts/Request-CRAFT-Certificate.cmd) | User enrollment and PEM export for the home-certificate workflow |
 
 ### Diagrams
 

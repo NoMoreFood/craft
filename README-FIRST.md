@@ -14,6 +14,7 @@ After authentication, the user selects the resulting credential cache for an app
 - [Configuration and validation](docs/02-CRAFT-Configuration-and-Validation.docx) ([PDF](docs/02-CRAFT-Configuration-and-Validation.pdf)): both certificate profiles, installation and lab acceptance.
 - [Build and installation guide](source/README.md): C++20 project, configuration, dependencies and tests.
 - [Windows lab provisioning helper](scripts/Configure-CRAFT-CA.ps1): partial CA/template setup; review before use.
+- [Windows certificate helper](scripts/Request-CRAFT-Certificate.cmd): request a user certificate from an eligible CA and export the home PEM pair without elevation.
 
 ## Components and Paths
 
@@ -32,6 +33,10 @@ After authentication, the user selects the resulting credential cache for an app
 `craft` checks the actual caller's `~/.config/craft/user.pem` and `user.key` first. A complete PEM pair uses the caller's privileges throughout certificate processing and Kerberos operations. Install `craft`, `craft-worker` and optional `craft-maintain` as ordinary mode-0755 executables; provide readable, root-controlled configuration and public trust/CRL files. No service account, directory keytab, LDAP lookup, CES or enrollment agent is required. Follow [home-certificate installation](source/README.md#home-certificate-installation).
 
 The private key must be unencrypted PEM with private permissions such as 0600. Both files must be caller-owned regular files, without symlinks or additional hard links, nonempty and at most 1 MiB each. Their directories must belong to the caller and not be group/world-writable. CRAFT keeps these supplied files in place. A malformed, expired, revoked, incomplete or unsafe pair fails without replacing the cache or selecting enrollment.
+
+To obtain a pair on Windows, run `Request-CRAFT-Certificate.cmd UserLogon "C:\Users\Alice\CRAFT Certificate"` as the intended domain user. Supply the template's internal name or OID and a local destination directory. The template must permit direct user enrollment and exportable software keys. The helper uses Windows AD enrollment policy to select a CA and writes `user.pem` and `user.key`; transfer them securely to the Linux home paths. Follow [Windows certificate requests](source/README.md#request-a-home-certificate-on-windows) for requirements and preview mode.
+
+On repeat runs, the helper reuses its pair until less than one calendar month remains, then obtains a replacement and removes the old Windows-store certificate. `/RenewBeforeDays N` overrides the window with a day-based period. `/DeleteAfterExport` removes the current Windows-store certificate after successful export or reuse and defaults off; it leaves the PEM files available for Linux. Run the helper again to check renewal and transfer replacement files before the Linux pair expires.
 
 When neither file exists, an enrollment-enabled installation uses its dedicated service account, directory lookup, enrollment-agent signature and CES. This path requires the compiled setuid launcher and CA recipient restrictions. See [enrollment installation](source/README.md#enrollment-installation). A home-only installation reports that enrollment is unavailable when no pair exists.
 

@@ -34,6 +34,8 @@ Only an absent pair selects enrollment. That workflow requires the setuid launch
 
 ### Supply the Certificate and Key
 
+Obtain a matching PEM pair through your approved enrollment workflow. The [Windows certificate helper](#request-a-home-certificate-on-windows) can request and export it as the domain user. Transfer the pair securely to Linux, then install it as that Linux user:
+
 ```sh
 mkdir -p ~/.config/craft
 chmod 0700 ~/.config/craft
@@ -298,6 +300,30 @@ Enrollment certificate caps accept 60 to 86400 seconds, with remaining validity 
 Enrollment timeouts can leave a CA-issued certificate recorded after its generated key is discarded. CRAFT does not cancel issuance or revoke certificates. The enrollment service account remains sensitive because it can read the agent and transport credentials; a home-only deployment removes that enrollment authority from the host. A supplied persistent private key and the ticket cache remain reusable credentials that require protection.
 
 See [SECURITY.md](SECURITY.md) and [TESTING.md](TESTING.md) before deployment. The Word guides are in [docs](../docs/).
+
+## Request a Home Certificate on Windows
+
+[`Request-CRAFT-Certificate.cmd`](../scripts/Request-CRAFT-Certificate.cmd) is a CMD/Windows PowerShell 5.x polyglot that requests a certificate as the signed-in domain user and exports the home PEM pair. Run it without elevation on a Windows computer that can reach AD and its enterprise CA enrollment endpoints. Windows PowerShell 5.x, .NET Framework 4.6 or newer, and the Windows PKI module are required; RSAT and OpenSSL are unnecessary.
+
+Choose a template's internal name or OID that permits this user's direct enrollment and exportable RSA or ECDSA software keys. Its certificate profile must meet the [home certificate requirements](#home-certificate-workflow) and the KDC's mapping policy. The Windows account must map to the intended Linux username and realm. Windows [AD enrollment policy](https://learn.microsoft.com/en-us/powershell/module/pki/get-certificate) selects an eligible CA; no CA name, enrollment agent or administrator credential is supplied.
+
+From the repository root in either CMD or PowerShell, use a dedicated local destination directory:
+
+```bat
+.\scripts\Request-CRAFT-Certificate.cmd UserLogon "C:\Users\Alice\CRAFT Certificate"
+.\scripts\Request-CRAFT-Certificate.cmd UserLogon "C:\Users\Alice\CRAFT Certificate" /WhatIf
+.\scripts\Request-CRAFT-Certificate.cmd UserLogon "C:\Users\Alice\CRAFT Certificate" /DeleteAfterExport
+```
+
+The helper writes a PEM certificate `user.pem`, matching unencrypted PKCS#8 private key `user.key`, and private `.craft-certificate.json` tracking metadata. Keep the metadata in the Windows destination for repeat runs; only the PEM pair is needed on Linux. New directories and files allow only the caller, SYSTEM and local administrators. Incomplete, modified, unmanaged or different-template output is refused before enrollment. The export uses an encrypted PFX only in memory and does not require a PFX file on disk.
+
+The default renewal window is one calendar month before the recorded certificate's expiration. On each invocation, reuse the pair outside that window; otherwise obtain a new certificate and key. `/RenewBeforeDays N` overrides the default with a window from 0 to 3650 days, including fractional days; 0 replaces only expired certificates. Stage the replacement before publishing it, restore the old exports on publication failure, and retain the old Windows credential on pending, denied or failed enrollment/export. Successful renewal replaces the managed files and removes the old certificate from `Cert:\CurrentUser\My`.
+
+`/DeleteAfterExport` is optional and defaults off. Enable it to remove the current Windows-store certificate after a successful export or reuse; the PEM files remain. Associated Windows private keys are deleted only when no other certificate in that user's My store shares the public key. Removal is local and does not revoke certificates or issued tickets. A store-cleanup error returns failure while preserving the usable exports for inspection.
+
+Exit status is 0 for a successful export, reuse or preview, 1 for failure, 2 for pending CA approval, and 64 for invalid CMD arguments. A pending request remains in the Windows request store and leaves existing exports in place. Use Windows enrollment tools to retrieve approved requests. Failed enrollment/export retains Windows credentials.
+
+Transfer both files securely to the Linux user, install them at `~/.config/craft/user.pem` and `user.key` with private permissions as described in [home certificate installation](#home-certificate-installation), and remove unneeded transfer copies. Provision the issuing trust chain and current CRLs under `/etc/craft` separately. CRAFT validates the pair and obtains the TGT as the caller. The Windows helper checks renewal only when invoked; schedule repeat runs separately and transfer replacements before expiry. Certificate renewal is independent of TGT maintenance.
 
 ## Windows Provisioning Helper
 
