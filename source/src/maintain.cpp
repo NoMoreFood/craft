@@ -229,7 +229,7 @@ inline void enroll()
     sysneed(waited == child, "wait for issuer");
     cleanup.release();
     need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-         "fresh enrollment failed: " + trim(std::string(diagnostics.begin(), diagnostics.end())));
+         "fresh credential acquisition failed: " + trim(std::string(diagnostics.begin(), diagnostics.end())));
 }
 
 inline void update(const Account &caller, const std::string &expected, Result &result)

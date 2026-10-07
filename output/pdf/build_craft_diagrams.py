@@ -70,7 +70,7 @@ class Page:
         self.rect(64, 40, 5, 26, TEAL)
         self.text(84, 38, "CRAFT", 22, WHITE, "semibold")
         self.text(193, 45, "CERTIFICATE REQUEST AGENT FOR TICKETS", 13, HEADER_MUTED)
-        self.text(1536, 42, f"{number:02d} / 04", 17, HEADER_MUTED, align="right")
+        self.text(1536, 42, f"{number:02d} / 05", 17, HEADER_MUTED, align="right")
         self.text(64, 84, title, 38, WHITE, "semibold", max_width=1472)
         self.text(64, 139, subtitle, 18, HEADER_MUTED, max_width=1472)
 
@@ -199,68 +199,73 @@ class Page:
 
 
 def overview(pdf):
-    p = Page(pdf, "01-system-overview", 1, "A temporary certificate. A reusable ticket workflow.",
-             "A ticket-granting ticket (TGT) lets approved Linux users request service tickets "
-             "without storing AD passwords.",
-             "CRAFT separates the Linux caller, its dedicated enrollment worker, and the user ticket cache. "
-             "The worker resolves the user in Active Directory, enrolls through CES and the CA, authenticates "
-             "with PKINIT at the KDC, and publishes a caller-owned cache. Applications use that TGT to request "
-             "service tickets and authenticate to services under the user's existing permissions.")
-    p.text(94, 221, "TRUSTED LINUX HOST", 15, MUTED, "semibold")
-    p.text(1126, 221, "ACTIVE DIRECTORY + PKI", 15, MUTED, "semibold")
-    p.line([(94, 255), (790, 255)])
-    p.line([(1126, 255), (1506, 255)])
+    p = Page(pdf, "01-system-overview", 1, "Two certificate paths to one user ticket cache",
+             "A supplied home pair takes priority. Only an absent pair selects administrator-authorized enrollment.",
+             "The caller worker checks the NSS home for user.pem and user.key first. Home certificates are "
+             "loaded, validated and used for PKINIT under the caller UID. No service account, directory "
+             "lookup, enrollment agent or CES is used. If neither file exists, the setuid installation "
+             "starts the dedicated service-account enrollment workflow, which resolves the directory UPN "
+             "and enrolls through CES and the CA. Both paths request the fixed Linux-name Kerberos principal, "
+             "validate the returned TGT and atomically publish a caller-owned cache. Applications use the "
+             "cache for service tickets. Partial or invalid home pairs fail without enrollment fallback.")
+    p.text(64, 220, "TRUSTED LINUX HOST", 15, MUTED, "semibold")
+    p.text(1136, 220, "ACTIVE DIRECTORY + PKI", 15, MUTED, "semibold")
+    p.line([(64, 251), (958, 251)])
+    p.line([(1136, 251), (1536, 251)])
 
-    p.node(94, 298, 300, 124, "Approved Linux user",
-           ["craft: real UID / NSS checks", "Parent drops to caller"], title_size=21)
-    p.rect(470, 298, 320, 278, HEADER, radius=12)
-    p.text(494, 322, "craft-worker", 27, WHITE, "semibold")
-    p.text(494, 361, "Dedicated craft Unix account", 17, HEADER_MUTED)
-    p.line([(494, 393), (766, 393)], "#406074", 1)
-    p.lines(494, 412, ["Fresh RSA-3072 key + CSR", "Enrollment-agent signature", "Issued certificate checks",
-                       "PKINIT + returned TGT checks"], 17, WHITE, leading=28, max_width=272)
-    p.text(494, 546, "Temporary user certificate / key", 15, HEADER_MUTED, max_width=272)
-    p.node(94, 632, 300, 136, "User credential cache",
-           [".krb5cc_craft", "TGT + session key", "Caller-owned / mode 0600"], color=BLUE, title_size=21)
-    p.node(470, 804, 320, 100, "Kerberos-aware app", ["Loads cache via KRB5CCNAME"],
+    p.node(64, 282, 290, 112, "Linux caller", ["Real UID / NSS name + home", "Invoke craft with no arguments"],
+           title_size=22)
+    p.node(420, 282, 538, 112, "Check the home pair first",
+           ["~/.config/craft/user.pem + user.key", "Partial or invalid pair: fail and retain cache"],
            color=BLUE, title_size=23)
+    p.arrow([(354, 338), (420, 338)], INK)
+    p.arrow([(600, 394), (600, 427), (256, 427), (256, 466)], BLUE)
+    p.text(78, 439, "PAIR PRESENT", 14, BLUE, "semibold")
+    p.arrow([(766, 394), (766, 466)], TEAL)
+    p.text(797, 439, "BOTH FILES ABSENT", 14, TEAL, "semibold")
 
-    p.node(1126, 298, 380, 96, "Active Directory", ["Global Catalog: user UPN"], color=TEAL)
-    p.node(1126, 442, 380, 110, "AD CS / CES + CA",
-           ["Restricted template + recipients", "Issues short-lived user certificate"], color=TEAL)
-    p.node(1126, 610, 380, 110, "Domain controller / KDC",
-           ["Issues the user's TGT", "Issues / renews tickets by policy"], color=BLUE, title_size=22)
-    p.node(1126, 804, 380, 100, "Kerberos-enabled services",
-           ["SMB / LDAP / HTTP; existing user rights"], color=BLUE, title_size=21)
+    p.node(64, 466, 384, 179, "Home certificate worker",
+           ["Runs as the caller", "Key, logon profile, trust + CRLs", "No LDAP, agent or CES",
+            "Supplied PEM files remain"], color=BLUE, fill=BLUE_LIGHT, title_size=22)
+    p.node(574, 466, 384, 179, "Enrollment worker",
+           ["Dedicated craft service account", "GC UPN + EOBO agent signature", "CES / CA issues temporary pair",
+            "Pins UPN, template, short validity"], color=TEAL, fill=TEAL_LIGHT, title_size=22)
+    p.node(1136, 268, 400, 96, "Global Catalog", ["Enrollment: resolve user UPN"], color=TEAL)
+    p.node(1136, 414, 400, 96, "CES + certificate authority",
+           ["Enrollment: restricted issuance"], color=TEAL, title_size=22)
+    p.node(1136, 574, 400, 142, "Domain controller / KDC",
+           ["Enforces certificate mapping", "Issues / renews user tickets", "Sets lifetime and encryption"],
+           color=BLUE, title_size=22)
+    p.arrow([(958, 500), (1008, 500), (1008, 316), (1136, 316)], TEAL, both=True)
+    p.text(1025, 285, "GC / UPN", 16, TEAL)
+    p.arrow([(958, 552), (1055, 552), (1055, 462), (1136, 462)], TEAL, both=True)
+    p.text(976, 527, "CES / CA", 16, TEAL)
+    p.arrow([(958, 607), (1083, 607), (1083, 640), (1136, 640)], TEAL, both=True)
+    p.text(974, 619, "PKINIT", 16, TEAL)
+    p.arrow([(256, 645), (256, 698), (1136, 698)], BLUE, both=True)
+    p.text(470, 669, "PKINIT as the caller", 18, BLUE, "semibold")
 
-    p.arrow([(394, 354), (470, 354)], INK)
-    p.number_badge(432, 326, 1)
-    p.arrow([(790, 347), (1126, 347)], TEAL, both=True)
-    p.text(825, 316, "2  Resolve caller identity", 18, max_width=295)
-    p.arrow([(790, 500), (1126, 500)], TEAL, both=True)
-    p.text(825, 468, "3  HTTPS / MS-WSTEP", 18, max_width=295)
-    p.arrow([(790, 550), (910, 550), (910, 667), (1126, 667)], TEAL, both=True)
-    p.text(933, 617, "4  PKINIT", 18)
-    p.text(933, 643, "User certificate", 16, MUTED)
-    p.arrow([(630, 576), (630, 690), (394, 690)], BLUE)
-    p.text(430, 710, "5  Publish via caller", 18)
-    p.arrow([(244, 768), (244, 854), (470, 854)], BLUE)
-    p.text(267, 821, "6  Select cache", 18)
-    p.arrow([(790, 826), (1028, 826), (1028, 697), (1126, 697)], BLUE, both=True)
-    p.lines(819, 756, ["7  Request / receive", "a service ticket"], 18, leading=26, max_width=195)
-    p.arrow([(790, 882), (1126, 882)], BLUE)
-    p.text(823, 849, "8  Present service ticket", 18, max_width=290)
-    p.text(94, 926, "Trust comes from the managed host, enrollment credentials and CA restrictions. "
-           "CRAFT performs no MFA challenge.",
-           16, MUTED, max_width=1412)
-    p.footer("launcher.cpp: main; worker.cpp: main, lookup_ad_user, get_tgt; "
-             "source/README.md: Access Active Directory Resources")
+    p.node(64, 780, 354, 126, "Caller-owned cache",
+           [".krb5cc_craft: mode 0600", "TGT + session key", "Atomic validated publication"],
+           color=BLUE, title_size=22)
+    p.arrow([(1136, 705), (1022, 705), (1022, 747), (240, 747), (240, 780)], BLUE)
+    p.text(473, 723, "Validated FILE-cache bytes returned to caller", 17, BLUE)
+    p.node(498, 792, 460, 112, "Kerberos-aware application",
+           ["Selects cache via KRB5CCNAME", "Uses TGT to obtain service tickets"], color=BLUE, title_size=23)
+    p.arrow([(418, 837), (498, 837)], BLUE)
+    p.node(1136, 806, 400, 114, "Kerberos-enabled service",
+           ["SMB / LDAP / HTTP", "Access follows the user's rights"], color=BLUE, title_size=22)
+    p.arrow([(958, 866), (1136, 866)], BLUE)
+    p.text(982, 836, "Service ticket", 17, BLUE)
+    p.text(64, 931, "Public policy, trust and CRLs stay root-controlled. Home-only executables need no setuid or service account.",
+           16, MUTED, max_width=1472)
+    p.footer("launcher.cpp: run_worker; common.hpp: user_identity_files; worker.cpp: main, get_tgt")
 
 
 def acquisition(pdf):
-    p = Page(pdf, "02-enrollment-sequence", 2, "From a Linux account to a validated user TGT.",
-             "Successful exchange. Time flows downward; spacing represents order, not network latency.",
-             "Sequence: validate the real caller and drop privileges; obtain a separate short-lived transport "
+    p = Page(pdf, "02-enrollment-sequence", 2, "Enrollment when no home certificate pair is present",
+             "Enrollment path only: an absent home pair selects the service account, directory lookup and CES.",
+             "Sequence: first confirm the home pair is absent, then validate the real caller and drop privileges; obtain a separate short-lived transport "
              "TGT using the submission keytab; resolve the UPN in the Global Catalog; generate and sign an "
              "EOBO request; enroll through CES; validate the certificate; perform user PKINIT; validate the TGT; "
              "return cache bytes to the unprivileged caller and publish atomically. Solid arrows are requests; "
@@ -281,7 +286,7 @@ def acquisition(pdf):
     p.rect(235, 309, 10, 516, BLUE_LIGHT)
 
     p.number_badge(70, 319, 1)
-    p.message(245, 565, 319, "UID / NSS; drop privileges", label_x=257, size=17)
+    p.message(245, 565, 319, "Home pair absent; UID drop", label_x=257, size=17)
 
     p.number_badge(70, 385, 2)
     p.message(575, 1430, 369, "Authenticate directory/CES account with submitter.keytab", color=INK)
@@ -328,19 +333,20 @@ def acquisition(pdf):
 
 
 def timing(pdf):
-    p = Page(pdf, "03-credential-timing", 3, "One acquisition, several independent clocks.",
-             "Default profile: request 10 h / 7 d. Certificate validity and KDC policy constrain the initial grant.",
-             "The certificate and private key remain on the client only for enrollment and PKINIT. Certificate "
-             "validity is capped at ten hours total, including backdating. In a full-grant example, initial TGT "
-             "validity spans hours zero to ten; renewal around hour eight grants a TGT ending around hour eighteen; "
-             "renewal around hour sixteen grants one ending around hour twenty-six. The original absolute "
-             "renewal deadline remains day seven. Fresh enrollment around day six begins a new renewal window "
-             "that can extend to day thirteen. These are idealized schedule illustrations, not measurements.")
-    p.rect(64, 208, 1472, 78, TEAL_LIGHT, radius=10)
-    p.text(84, 222, "USER CERTIFICATE + PRIVATE KEY", 14, TEAL, "semibold")
-    p.text(84, 246, "Client residency lasts only for enrollment and PKINIT.", 23, INK, "semibold")
-    p.text(1050, 223, "Certificate validity: <= 10 h total", 18, INK)
-    p.text(1050, 252, "CA backdating consumes this allowance.", 16, MUTED)
+    p = Page(pdf, "03-credential-timing", 3, "Ticket clocks and certificate storage",
+             "Both paths request 10 h / 7 d by default. Certificate lifetime and KDC policy constrain the initial grant.",
+             "Home certificates and keys persist until the user replaces or removes them; ordinary certificate "
+             "validity is accepted. Enrollment generates a temporary key and certificate, caps certificate "
+             "validity at ten hours by default and releases its pair after PKINIT. Both paths request the same "
+             "ten-hour TGT and seven-day renewal window. Renewal uses the cached ticket and session key. "
+             "Fresh authentication near day six reuses a valid home pair, or enrolls if no home pair exists. "
+             "The renewed ticket's absolute renewal deadline remains fixed. Times are schedule illustrations.")
+    p.rect(64, 208, 704, 78, BLUE_LIGHT, radius=10)
+    p.text(84, 220, "HOME CERTIFICATE + KEY", 14, BLUE, "semibold")
+    p.text(84, 245, "Persistent files; replace before certificate expiry.", 22, INK, "semibold", max_width=664)
+    p.rect(800, 208, 736, 78, TEAL_LIGHT, radius=10)
+    p.text(820, 220, "ENROLLMENT CERTIFICATE + KEY", 14, TEAL, "semibold")
+    p.text(820, 245, "Temporary pair; default certificate cap is 10 h.", 22, INK, "semibold", max_width=696)
 
     p.text(64, 311, "01 / HOURS", 14, BLUE, "semibold")
     p.text(284, 306, "Renew before expiry", 24, INK, "semibold")
@@ -382,16 +388,16 @@ def timing(pdf):
         p.text(x, 725, f"Day {value}", 16, MUTED,
                align="left" if value == 0 else "right" if value == 8 else "center")
     p.line([(start, 749), (end, 749)], LINE, 1)
-    p.text(64, 776, "Enrollment 1", 22, INK, "semibold")
+    p.text(64, 776, "Acquisition 1", 22, INK, "semibold")
     p.text(64, 805, "Renewal window", 15, MUTED)
     p.rect(day(0), 773, day(7) - day(0), 42, BLUE_LIGHT, radius=6)
     p.rect(day(0), 773, day(6) - day(0), 42, BLUE, radius=6)
     p.text(day(0) + 18, 785, "Original renewal window", 18, WHITE, "semibold")
     p.text(day(7) - 10, 785, "Deadline", 17, BLUE, align="right")
     p.arrow([(day(6), 816), (day(6), 847)], TEAL, 2, head=7)
-    p.text(day(6) + 13, 820, "Enroll ~day 6", 17, TEAL, "semibold")
-    p.text(64, 852, "Enrollment 2", 22, INK, "semibold")
-    p.text(64, 881, "Fresh certificate + TGT", 15, MUTED)
+    p.text(day(6) + 13, 820, "Refresh ~day 6", 17, TEAL, "semibold")
+    p.text(64, 852, "Acquisition 2", 22, INK, "semibold")
+    p.text(64, 881, "Home pair or enrollment", 15, MUTED)
     p.polygon([(day(6), 849), (end - 15, 849), (end, 870), (end - 15, 891), (day(6), 891)], TEAL)
     p.text(day(6) + 18, 861, "New 7-day window", 18, WHITE, "semibold")
     p.text(1536, 902, "Continues to ~day 13", 15, MUTED, align="right")
@@ -407,8 +413,8 @@ def maintenance(pdf):
              "The maintainer starts once for a watched job PID. A usable cache and detached loop are required "
              "before startup returns successfully. Due renewable TGTs renew at the KDC using the cached ticket "
              "and session key. Missing or expired TGTs, the rollover window, or nonextendible tickets near expiry "
-             "trigger fresh enrollment through craft. Due renewal takes priority over rollover. Successful "
-             "updates atomically replace the cache. Renewal retains usable service tickets; fresh enrollment "
+             "trigger fresh authentication through craft, using a home pair first or enrollment when absent. Due renewal takes priority over rollover. Successful "
+             "updates atomically replace the cache. Renewal retains usable service tickets; fresh authentication "
              "replaces the cache. Failure keeps existing credentials and schedules retries. Job exit stops "
              "maintenance but leaves the cache. Applications need to reload refreshed credentials.")
     p.rect(64, 210, 1472, 104, HEADER, radius=11)
@@ -424,9 +430,9 @@ def maintenance(pdf):
     p.lines(64, 425, ["When a renewable TGT has <=20% of its lifetime left",
                      "(capped at 2 h), and its expiry can extend."],
             19, INK, leading=27, max_width=704)
-    p.text(64, 482, "A renewal error retries here; no immediate enrollment.", 16, MUTED, max_width=704)
+    p.text(64, 482, "A renewal error retries; no immediate fresh authentication.", 16, MUTED, max_width=704)
     p.line([(790, 347), (790, 642)], LINE, 1)
-    p.text(824, 349, "02 / FRESH ENROLLMENT", 15, TEAL, "semibold")
+    p.text(824, 349, "02 / FRESH AUTHENTICATION", 15, TEAL, "semibold")
     p.text(824, 379, "Obtain fresh credentials", 28, INK, "semibold")
     p.lines(824, 425, ["Missing or expired TGT; renewal deadline is near;",
                       "or a ticket that cannot extend is nearing expiry."],
@@ -444,18 +450,18 @@ def maintenance(pdf):
     p.lines(64, 615, ["Renew-till never moves later.", "Retain usable service tickets."],
             18, BLUE, leading=24, max_width=704)
 
-    for x, w, title, detail in [(824, 178, "Run craft", "fresh key + CSR"),
-                               (1062, 218, "GC + CES / CA", "enroll certificate"),
+    for x, w, title, detail in [(824, 178, "Run craft", "select source"),
+                               (1062, 218, "Home / enrollment", "PEM or GC + CES"),
                                (1340, 196, "KDC / PKINIT", "new user TGT")]:
         p.rect(x, 522, w, 79, TEAL_LIGHT, radius=9)
         p.text(x + w / 2, 536, title, 21, INK, "semibold", align="center")
         p.text(x + w / 2, 569, detail, 17, MUTED, align="center")
     p.arrow([(1002, 561), (1062, 561)], TEAL)
     p.arrow([(1280, 561), (1340, 561)], TEAL)
-    p.lines(824, 615, ["New renewal window.", "Replace the shared cache."],
+    p.lines(824, 615, ["Reuse a valid home pair, or enroll.", "New renewal window; replace cache."],
             18, TEAL, leading=24, max_width=710)
     p.text(64, 665, "A due renewal takes priority during rollover, "
-           "keeping usable credentials alive while enrollment is delayed.",
+           "keeping usable credentials alive while fresh authentication is delayed.",
            18, MUTED, max_width=1472)
 
     p.rect(64, 708, 1472, 92, WHITE, LINE, radius=11)
@@ -466,7 +472,7 @@ def maintenance(pdf):
     p.text(824, 759, "Keep the existing cache and retry; the job continues.", 18, INK, max_width=692)
 
     notes = [
-        (64, 460, "RETRY", ["Renewal: ~30 s to 5 min + jitter.", "Enrollment cooldown: 1 min to 1 h."]),
+        (64, 460, "RETRY", ["Renewal: ~30 s to 5 min + jitter.", "Fresh acquisition: 1 min to 1 h cooldown."]),
         (552, 484, "STOP", ["Watched PID exits, duration ends or signal.",
                             "Maintainer stops; the shared cache remains."]),
         (1064, 472, "APPLICATION", ["Reload credentials when authenticating again.",
@@ -480,6 +486,58 @@ def maintenance(pdf):
              "common.hpp: publish_cache; source/README.md: Long-running jobs")
 
 
+def home_certificate(pdf):
+    p = Page(pdf, "05-home-certificate-workflow", 5, "Home certificate PKINIT without privilege elevation",
+             "Ordinary executables run as the caller. The KDC maps the supplied certificate to the fixed Linux-name principal.",
+             "A caller-owned, complete PEM pair at the fixed NSS-home paths takes priority. All loading, "
+             "certificate validation, PKINIT and cache publication run as the caller. Public root-controlled "
+             "configuration, trust and current CRLs are readable by callers. No service account, enrollment "
+             "keytab, LDAP, agent, CES or runtime issuance directory is needed. Files are opened once with "
+             "ownership, permissions, regular-file, size and symlink checks. The certificate must pass key, "
+             "logon usage, UPN shape, validity, trust and revocation checks. The KDC enforces account mapping, "
+             "and CRAFT validates the exact returned TGT. Failure preserves the existing cache, while "
+             "success atomically publishes it. Supplied PEM files remain and require user-managed replacement.")
+    p.rect(64, 210, 1472, 123, BLUE_LIGHT, radius=11)
+    p.text(88, 225, "CALLER-OWNED PEM FILES IN THE NSS HOME", 14, BLUE, "semibold")
+    p.text(88, 255, "~/.config/craft/user.pem", 24, INK, "mono")
+    p.text(88, 293, "~/.config/craft/user.key", 24, INK, "mono")
+    p.line([(760, 229), (760, 312)], LINE, 1)
+    p.text(792, 225, "PUBLIC ADMINISTRATOR CONFIGURATION", 14, BLUE, "semibold")
+    p.lines(792, 256, ["Readable config, CA/KDC trust anchors and CRLs.",
+                      "No service account, keytab, LDAP, CES or /run/craft."], 19, INK, leading=32, max_width=716)
+
+    for x, width, title, detail in [(310, 320, "craft / caller", "real UID and NSS home"),
+                                    (855, 320, "craft-worker", "same caller UID"),
+                                    (1410, 252, "KDC", "account mapping")]:
+        p.rect(x - width / 2, 372, width, 66, WHITE, LINE, radius=9)
+        p.text(x, 384, title, 23, BLUE, "semibold", align="center")
+        p.text(x, 414, detail, 16, MUTED, align="center")
+        p.line([(x, 445), (x, 822)], LINE, 1.1, dashed=True)
+
+    p.number_badge(70, 475, 1, BLUE)
+    p.message(315, 850, 475, "Run fixed worker without privilege elevation", color=BLUE, size=18)
+    p.number_badge(70, 549, 2, BLUE)
+    p.rect(590, 509, 635, 93, BLUE_LIGHT, radius=9)
+    p.lines(612, 522, ["Open the pair once; check owner, permissions and size.",
+                      "Validate key, logon usage, validity, CA trust and CRLs."], 19, leading=32, max_width=589)
+
+    p.number_badge(70, 656, 3, BLUE)
+    p.message(860, 1410, 643, "PKINIT: Linux username @ configured realm", color=BLUE, size=17)
+    p.message(1410, 860, 681, "TGT + session key; KDC decides grant", color=BLUE, dashed=True, size=17)
+    p.number_badge(70, 739, 4, BLUE)
+    p.rect(590, 711, 635, 62, BLUE_LIGHT, radius=9)
+    p.lines(612, 724, ["Check returned caller principal, flags, AES and lifetimes."],
+            19, leading=28, max_width=589)
+    p.number_badge(70, 811, 5, BLUE)
+    p.message(850, 315, 811, "Return validated FILE-cache bytes to the caller", color=BLUE, dashed=True, size=18)
+
+    p.rect(64, 854, 1472, 74, BLUE_LIGHT, radius=10)
+    p.text(88, 866, "Publish the cache atomically as the caller", 23, INK, "semibold")
+    p.text(88, 901, "user.pem and user.key stay in place. Invalid pairs fail without enrollment fallback or cache replacement.",
+           18, INK, max_width=1424)
+    p.footer("common.hpp: user_identity_files; worker.cpp: load_user_identity, validate_leaf, get_tgt; launcher.cpp: run_worker")
+
+
 def main():
     fonts()
     SVG_DIR.mkdir(parents=True, exist_ok=True)
@@ -487,9 +545,9 @@ def main():
     pdf = canvas.Canvas(str(pdf_path), pagesize=(WIDTH * SCALE, HEIGHT * SCALE), pageCompression=1)
     pdf.setTitle("CRAFT | Timing and Architecture")
     pdf.setAuthor("CRAFT")
-    pdf.setSubject("Source-grounded architecture, enrollment, credential timing and job maintenance diagrams")
+    pdf.setSubject("Certificate selection, enrollment, unprivileged home PKINIT, credential timing and job maintenance")
     pdf.setCreator("CRAFT vector diagram builder")
-    for page in (overview, acquisition, timing, maintenance):
+    for page in (overview, acquisition, timing, maintenance, home_certificate):
         page(pdf)
     pdf.save()
     print(f"Created {pdf_path}")

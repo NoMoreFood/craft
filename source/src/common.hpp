@@ -181,6 +181,8 @@ inline Bytes read_all(int fd, size_t maximum = MAX_BLOB)
 {
     Bytes bytes;
     std::array<unsigned char, 8192> buffer{};
+    ScopeExit erase_bytes([&]() noexcept { wipe(bytes); });
+    ScopeExit erase_buffer([&]() noexcept { wipe(buffer); });
 
     // Read descriptor data into temporary buffer chunk by chunk.
     for (;;)
@@ -188,7 +190,11 @@ inline Bytes read_all(int fd, size_t maximum = MAX_BLOB)
         const auto count = ::read(fd, buffer.data(), buffer.size());
         if (count < 0 && errno == EINTR) continue;
         sysneed(count >= 0, "read");
-        if (!count) return bytes;
+        if (!count)
+        {
+            erase_bytes.release();
+            return bytes;
+        }
 
         // Enforce buffer size limit and accumulate read bytes.
         need(static_cast<size_t>(count) <= maximum - bytes.size(), "input exceeds size limit");
@@ -405,6 +411,57 @@ inline Fd caller_home(const Account &caller)
          "home must belong to caller and not be group/world-writable");
 
     return home;
+}
+
+struct UserIdentityFiles
+{
+    Fd certificate{};
+    Fd key{};
+};
+
+// Open an optional PEM pair using only the caller's filesystem permissions.
+inline UserIdentityFiles user_identity_files(const Account &caller)
+{
+    need(getuid() == caller.uid && geteuid() == caller.uid,
+         "user certificate must be opened after dropping to the caller");
+    Fd directory = caller_home(caller);
+    bool safe_directory = true;
+
+    // Resolve the fixed location without following user-controlled symlinks.
+    for (const char *name : {".config", "craft"})
+    {
+        Fd next(openat(directory.get(), name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+        if (next.get() < 0 && errno == ENOENT) return {};
+        sysneed(next.get() >= 0, "open ~/.config/craft for user certificate");
+        struct stat st{};
+        sysneed(fstat(next.get(), &st) == 0, "stat user certificate directory");
+        safe_directory = safe_directory && st.st_uid == caller.uid && !(st.st_mode & 0022);
+        directory = std::move(next);
+    }
+
+    // Only an entirely absent pair selects enrollment; partial or unsafe inputs fail.
+    std::array<Fd, 2> files;
+    constexpr std::array names{"user.pem", "user.key"};
+    for (size_t i = 0; i < files.size(); ++i)
+    {
+        files[i] = Fd(openat(directory.get(), names[i], O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC));
+        if (files[i].get() < 0 && errno == ENOENT) continue;
+        sysneed(files[i].get() >= 0, std::format("open ~/.config/craft/{}", names[i]));
+        struct stat st{};
+        sysneed(fstat(files[i].get(), &st) == 0, "stat user certificate/key");
+        need(S_ISREG(st.st_mode) && st.st_uid == caller.uid && st.st_nlink == 1 &&
+                 !(st.st_mode & (i == 0 ? 0022 : 0077)),
+             "user certificate/key must be caller-owned regular files; user.key must be private (mode 0600)");
+        need(st.st_size > 0 && static_cast<uint64_t>(st.st_size) <= MAX_BLOB,
+             "user certificate/key must be nonempty and at most 1 MiB each");
+    }
+    if (files[0].get() < 0 && files[1].get() < 0) return {};
+    need(safe_directory,
+         "user certificate directories must belong to caller and not be group/world-writable");
+    need(files[0].get() >= 0 && files[1].get() >= 0,
+         "incomplete user certificate pair; provide both ~/.config/craft/user.pem and user.key");
+
+    return {std::move(files[0]), std::move(files[1])};
 }
 
 // Serialize cache changes using a private, stable lock file.

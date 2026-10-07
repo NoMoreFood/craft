@@ -288,6 +288,16 @@ static void helper_tests()
         rejects([&] { parse_config(valid + "require_full_tgt_lifetime=maybe\n"); });
     });
 
+    test("home credential configuration needs no enrollment settings", [] {
+        const std::string text = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
+        const auto cfg = parse_config(text, CertificateSource::Home);
+        need(cfg.domain == "domain.local" && cfg.realm == "DOMAIN.LOCAL" && cfg.service_principal.empty() &&
+                 cfg.ces_url.empty() && cfg.tgt == 36000 && cfg.renew == 604800, "home configuration policy");
+        rejects([&] { parse_config(text); });
+        rejects([] { parse_config("enabled=no\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n",
+                                 CertificateSource::Home); });
+    });
+
     test("configuration rejects disabled missing unknown and duplicate settings", [&] {
         rejects([&] { parse_config(valid + "enabled=yes\n"); });
         rejects([&] { parse_config(valid + "unknown=yes\n"); });
@@ -1034,6 +1044,141 @@ static void maintenance_update_tests()
         });
 }
 
+static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY *key, X509 *leaf)
+{
+    char path[] = "/tmp/craft-user-identity-XXXXXX";
+    need(mkdtemp(path) != nullptr, "user identity test directory");
+    const Account caller{.uid = getuid(), .gid = getgid(), .name = "alice", .home = path};
+    const auto config_path = caller.home + "/.config", directory_path = config_path + "/craft";
+    ScopeExit cleanup([&]() noexcept
+    {
+        for (const char *name : {"user.pem", "user.key", "held.key"})
+            unlink((directory_path + "/" + name).c_str());
+        rmdir(directory_path.c_str());
+        rmdir(config_path.c_str());
+        rmdir(path);
+    });
+    test("absent user identity directories and pair select enrollment", [&] {
+        need(user_identity_files(caller).certificate.get() < 0, "missing .config selected a certificate");
+        need(mkdir(config_path.c_str(), 0700) == 0, "identity .config fixture");
+        need(user_identity_files(caller).certificate.get() < 0, "missing craft directory selected a certificate");
+        need(mkdir(directory_path.c_str(), 0700) == 0, "identity directory fixture");
+        need(user_identity_files(caller).certificate.get() < 0, "missing pair selected a certificate");
+        need(chmod(config_path.c_str(), 0770) == 0, "unrelated writable .config fixture");
+        need(user_identity_files(caller).certificate.get() < 0, "empty writable directory blocked enrollment");
+        need(chmod(config_path.c_str(), 0700) == 0, "restore .config fixture");
+    });
+    const Fd directory(open(directory_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    need(directory.get() >= 0, "open identity fixture directory");
+    Bio certificate(BIO_new(BIO_s_mem())), private_key(BIO_new(BIO_s_mem()));
+    sslneed(certificate && private_key && PEM_write_bio_X509(certificate.get(), leaf) == 1 &&
+                PEM_write_bio_PrivateKey(private_key.get(), key, nullptr, nullptr, 0, nullptr, nullptr) == 1,
+            "PEM identity fixtures");
+    const auto write = [&](const char *name, Bio &bio)
+    {
+        const Fd file(openat(directory.get(), name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600));
+        need(file.get() >= 0, "open PEM fixture");
+        Bytes bytes = biobytes(bio.get());
+        ScopeExit erase([&]() noexcept { wipe(bytes); });
+        write_all(file.get(), bytes);
+    };
+    write("user.pem", certificate);
+    write("user.key", private_key);
+    test("private home PEM pair loads using caller permissions", [&] {
+        const auto files = user_identity_files(caller);
+        auto identity = load_user_identity(files);
+        need(X509_cmp(identity.certificate.get(), leaf) == 0 &&
+                 validate_leaf(identity.certificate.get(), identity.key.get(), map, cfg,
+                               CertificateSource::Home) > time(nullptr), "loaded identity differs");
+        auto other_caller = caller;
+        other_caller.uid += 1;
+        rejects([&] { user_identity_files(other_caller); });
+    });
+    test("opened identity survives file replacement without reopening paths", [&] {
+        const auto files = user_identity_files(caller);
+        need(renameat(directory.get(), "user.key", directory.get(), "held.key") == 0, "hold private key inode");
+        ScopeExit restore([&]() noexcept
+        {
+            unlinkat(directory.get(), "user.key", 0);
+            renameat(directory.get(), "held.key", directory.get(), "user.key");
+        });
+        const Fd replacement(openat(directory.get(), "user.key", O_WRONLY | O_CREAT | O_EXCL, 0600));
+        write_all(replacement.get(), byte_view("INVALID PRIVATE KEY"));
+        auto identity = load_user_identity(files);
+        sslneed(X509_check_private_key(identity.certificate.get(), identity.key.get()) == 1,
+                "identity followed replacement inode");
+    });
+    test("incomplete symlinked and nonregular private keys fail without enrollment", [&] {
+        need(unlinkat(directory.get(), "user.key", 0) == 0, "remove fixture key");
+        ScopeExit restore([&]() noexcept { try { write("user.key", private_key); } catch (...) {} });
+        rejects([&] { user_identity_files(caller); });
+        need(symlinkat("user.pem", directory.get(), "user.key") == 0, "key symlink fixture");
+        rejects([&] { user_identity_files(caller); });
+        need(unlinkat(directory.get(), "user.key", 0) == 0 &&
+                 mkfifoat(directory.get(), "user.key", 0600) == 0, "key FIFO fixture");
+        rejects([&] { user_identity_files(caller); });
+        need(unlinkat(directory.get(), "user.key", 0) == 0, "remove key FIFO");
+    });
+    test("unsafe key and identity directory permissions fail", [&] {
+        need(fchmodat(directory.get(), "user.key", 0644, 0) == 0, "make key public");
+        ScopeExit restore([&]() noexcept
+        {
+            const int restored = fchmodat(directory.get(), "user.key", 0600, 0);
+            (void)restored;
+        });
+        rejects([&] { user_identity_files(caller); });
+        need(fchmodat(directory.get(), "user.key", 0600, 0) == 0 &&
+                 fchmod(directory.get(), 0770) == 0, "make directory writable");
+        ScopeExit restore_directory([&]() noexcept { fchmod(directory.get(), 0700); });
+        rejects([&] { user_identity_files(caller); });
+    });
+    test("empty oversized malformed and encrypted PEM keys fail without prompts", [&] {
+        ScopeExit restore([&]() noexcept { try { write("user.key", private_key); } catch (...) {} });
+        const Fd file(openat(directory.get(), "user.key", O_WRONLY | O_TRUNC));
+        rejects([&] { user_identity_files(caller); });
+        need(ftruncate(file.get(), MAX_BLOB + 1) == 0, "oversized key fixture");
+        rejects([&] { user_identity_files(caller); });
+        need(ftruncate(file.get(), 0) == 0, "truncate key fixture");
+        write_all(file.get(), byte_view("INVALID PRIVATE KEY"));
+        rejects([&] { load_user_identity(user_identity_files(caller)); });
+        Bio encrypted(BIO_new(BIO_s_mem()));
+        unsigned char passphrase[] = "OFFLINE TEST ONLY";
+        sslneed(encrypted && PEM_write_bio_PrivateKey(encrypted.get(), key, EVP_aes_256_cbc(), passphrase,
+                                                       sizeof(passphrase) - 1, nullptr, nullptr) == 1,
+                "encrypted PEM fixture");
+        write("user.key", encrypted);
+        rejects([&] { load_user_identity(user_identity_files(caller)); });
+    });
+    test("home certificate accepts ordinary validity and a smart-card profile without enrollment template", [&] {
+        Cert certificate(X509_dup(leaf));
+        remove_ext(certificate.get(), TEMPLATE_OID);
+        remove_ext(certificate.get(), "2.5.29.37");
+        set_ext_conf(certificate.get(), NID_ext_key_usage, SMARTCARD_OID);
+        need(X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 365 * 86400), "ordinary validity fixture");
+        need(validate_leaf(certificate.get(), key, map, cfg, CertificateSource::Home) > time(nullptr),
+             "home certificate rejected ordinary profile");
+        rejects([&] { validate_leaf(certificate.get(), key, map, cfg); });
+    });
+    test("home certificate retains logon identity usage and expiry checks", [&] {
+        const auto reject = [&](auto mutation)
+        {
+            Cert certificate(X509_dup(leaf));
+            mutation(certificate.get());
+            rejects([&] { validate_leaf(certificate.get(), key, map, cfg, CertificateSource::Home); });
+        };
+        reject([](X509 *c) { X509_gmtime_adj(X509_getm_notAfter(c), -1); });
+        reject([](X509 *c) { X509_gmtime_adj(X509_getm_notBefore(c), 60); });
+        reject([](X509 *c) { remove_ext(c, "2.5.29.15"); });
+        reject([](X509 *c) { remove_ext(c, "2.5.29.37"); });
+        reject([](X509 *c) { remove_ext(c, "2.5.29.17"); });
+        reject([](X509 *c) { remove_ext(c, "2.5.29.19"); });
+        reject([](X509 *c) {
+            remove_ext(c, "2.5.29.37");
+            set_ext_conf(c, NID_ext_key_usage, "clientAuth");
+        });
+    });
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && std::string_view(argv[1]) == "--maintain-update-tests")
@@ -1083,6 +1228,7 @@ int main(int argc, char **argv)
 
     Req req = make_request(key.get(), "alice@domain.local", cfg.template_oid, common_name(cfg, "alice", map.upn));
     Cert leaf = fixture(key.get(), req.get()), agent = fixture(other.get());
+    user_identity_tests(cfg, map, key.get(), leaf.get());
 
     test("base64 round trips and malformed input rejection", [] {
         for (size_t n = 1; n < 513; ++n)

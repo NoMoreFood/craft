@@ -8,6 +8,8 @@ The synthetic fixtures cover:
 
 - CSR self-signature and requested CN, UPN, template, three client EKUs and non-CA usage; CMS signature, embedded CSR and signed requestername.
 - Pinned UPN/template/key checks; certificates with and without a CA-supplied SID extension; missing/duplicate/malformed identities, missing client EKUs, non-CA constraints, wrong usage, expiry and ten-hour validity caps.
+- Home-pair selection and filesystem checks: absent versus partial pairs, caller identity, permissions, symlink/FIFO refusal, bounded reads, opened-inode replacement and malformed/encrypted PEM rejection.
+- Home-only configuration without enrollment settings; ordinary certificate lifetime/template acceptance with logon usage, identity shape and expiry validation.
 - Dynamic Global Catalog settings parsing, domain-to-DN formatting, integer bounds, configuration flags and custom CN substitutions.
 - Ten-hour requested/granted initial lifetime, seven-day renewal lifetime checks, strict short-grant refusal and explicit shorter-grant warnings; renewable and non-renewable validation; ticket flags, principal, key length and AES128/AES256 session/envelope validation; RC4 rejection.
 - Exception-safe C output adoption, resource ownership, secret-buffer erasure, bounded I/O, sealed memfd behavior, WSTEP parsing and malformed/DTD/oversized responses.
@@ -74,6 +76,25 @@ MIT Kerberos 1.20.1, OpenSSL 3.0.13, libcurl 8.5.0, libxml2 2.9.14, OpenLDAP 2.6
 AD CS/PKINIT renewal after certificate expiry, full renewal-window rollover and the actual scheduler/application
 still require live acceptance testing.
 
+## Home Certificate Validation
+
+Release build and CTest completed with 83 offline checks; the 16 synthetic maintainer integration checks passed. The offline executable also passed under an ordinary Linux account.
+
+A disposable MIT KDC and test CA exercised the installed home workflow with ordinary mode-0755 executables, public root-controlled configuration, current CRLs, no `craft` service account and no enrollment credentials. The caller obtained a ten-hour AES256 TGT with seven-day renewal and a usable service ticket. Immediate reacquisition worked without an enrollment interval. A traced invocation with forged environment values opened the NSS home and showed no enrollment-file access or UID/GID changes.
+
+Installed failure checks preserved the existing cache for incomplete, public, symlinked or malformed keys, a revoked certificate, and a valid certificate mapped to a different KDC account. The setuid installation still used the caller-only path when a pair was present; an absent pair selected the enrollment prerequisites. These results establish the tested MIT KDC flow, not AD-specific mapping or CES interoperability.
+
+## Home Workflow Acceptance Checks
+
+1. Install the launcher, worker and maintainer without setuid/setgid. Use root-controlled, readable public configuration/trust/CRL files and omit the service account, private enrollment files and runtime directory.
+2. Supply caller-owned `~/.config/craft/user.pem` and `user.key` in the NSS home, using unencrypted PEM, a private key and safe directories. Run `craft` as the caller and verify cache owner/mode, requested Linux-name principal, flags, AES encryption and ticket times.
+3. Authenticate to a real AD service. Validate the issued certificate's strong mapping on the designated DC, including an alternate UPN suffix where used. No LDAP lookup occurs in home mode.
+4. Verify home credentials take priority even when enrollment is enabled. Confirm no CES request, agent/keytab access or enrollment rate-limit timestamp is generated. Test an inherited `no_new_privs` context with the ordinary installation.
+5. Reject partial pairs, symlinked files/directories, extra hard links, wrong ownership, publicly readable private keys, nonregular/empty/oversized files, encrypted/malformed or mismatched keys, expired/revoked certificates and stale/missing CRLs without replacing the cache or enrolling.
+6. Reject a valid certificate mapped to another account. Validate accepted Smart Card Logon/PKINIT usage and ordinary certificate validity; enrollment template and short-validity checks must remain scoped to enrollment.
+7. Remove both files. A home-only installation must report the setuid enrollment requirement; an enrollment-enabled installation must use its existing service-account and CA policy path.
+8. Exercise maintenance renewal and fresh authentication with the home pair, certificate replacement before expiry, missing/invalid replacement pairs, KDC outages, concurrent jobs and watched-job exit. Renewals use the cache; fresh acquisition checks the pair again.
+
 ## Windows Helper Checks
 
 From the repository root in PowerShell, run the offline parameter, native-command and certificate-selection checks:
@@ -102,6 +123,8 @@ Tested source commit `514b851` and updated DISA STIG configuration on the two-no
 6. **Ticket Renewal:** Renewed the issued ticket against the KDC via `kinit -R -c $KRB5CCNAME`; renewal succeeded without re-prompting, extending expiration to `11:51:11` while retaining the 7-day renew window.
 
 ## Live Acceptance Checklist
+
+The checks below cover enrollment deployments. Complete the home-workflow checks above for supplied certificates and the common KDC/cache checks for both modes.
 
 1. Review the privilege boundary, parsers, trust-chain policy and this host's authority over AD identities. Start with a disposable, nonprivileged account in a lab domain; enforce CA-side template and recipient restrictions.
 2. Verify the GC host/search base, `ldap/hostname` SPN and SASL GSSAPI module. Test `service_principal` and `submitter.keytab` with both CES modes, including missing/ambiguous users and alternate UPN suffixes. Confirm CES URL, TLS trust and transport-account access. For Negotiate, verify libcurl SPNEGO/MIT Kerberos, HTTP SPN and CES-to-CA constrained delegation; for mTLS, verify the separate client certificate mapping.

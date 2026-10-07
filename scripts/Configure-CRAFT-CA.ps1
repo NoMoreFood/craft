@@ -4,7 +4,11 @@
     for the CRAFT (Certificate Request Agent For Tickets) package.
 
 .DESCRIPTION
-    This lab helper configures a CA template and exports starter files for CRAFT.
+    This lab helper configures the enrollment workflow and exports starter files for CRAFT.
+    It is not required when users supply ~/.config/craft/user.pem and user.key for caller-only PKINIT.
+    A home-only Linux installation uses ordinary executables and readable, root-controlled public
+    configuration/trust/CRL files, without an enrollment agent, service account, keytab, LDAP or CES.
+    CRAFT prioritizes a complete home pair; only an absent pair selects enrollment.
     CES, configuring CA agent restrictions, full trust/CRL bundles and live validation remain manual:
     1. Creates a Schema Version 2 Certificate Template (default: 'CRAFTUser') with:
        - Extended Key Usages: Smart Card Logon, Client Auth, and PKINIT Client Auth

@@ -2,7 +2,10 @@
 
 ## Trust Decision
 
-Resolving a Unix username against Active Directory delegates authentication of that AD account to this host. User passwords and AD MFA are not checked by the helper. A software key carrying Smart Card Logon EKU is not evidence of hardware custody or a second factor.
+CRAFT prioritizes a caller-owned certificate/key pair in the NSS home. Home mode runs all certificate and Kerberos work as the caller, without directory lookup, enrollment authority or service credentials. The KDC must map the certificate to the fixed `<Linux username>@<realm>` principal, and CRAFT verifies that principal in the returned TGT. A partial or invalid pair is an error, not permission to enroll.
+
+
+In enrollment mode, resolving a Unix username against Active Directory delegates authentication of that AD account to this host. User passwords and AD MFA are not checked by the helper. A software key carrying Smart Card Logon EKU is not evidence of hardware custody or a second factor.
 
 Restrict the enrollment agent at the CA to a dedicated template and approved recipient group. Local policy checks are defense in depth, not a replacement for CA restrictions. Do not authorize privileged AD administrators in the initial deployment. Protect and audit UID/name lifecycle, NSS providers, root accounts and the service account.
 
@@ -12,34 +15,39 @@ See [Enrollment Agent Restrictions](../docs/03-Enrollment-Agent-Restrictions.md)
 
 The default ten-hour initial user TGT with seven-day renewal matches the most permissive DISA STIG guidance for domain controllers. A ten-hour certificate does not revoke an already-issued ticket, and destroying its private key does not destroy a cached TGT. A stolen mode-0600 cache still carries an independent session key. Do not treat certificate expiry, local deletion, or changing a file permission as ticket revocation.
 
-`craft-maintain` renews cached tickets, obtains fresh credentials near the absolute renewal deadline, and stops with its watched job. It retains no user certificate/key and leaves the shared cache in place. Refresh failures preserve the cache; enrollment retries share backoff.
+`craft-maintain` renews cached tickets, obtains fresh credentials near the absolute renewal deadline, and stops with its watched job. It retains no parsed user certificate/key between operations; supplied home files remain under the user's control and leaves the shared cache in place. Refresh failures preserve the cache; enrollment retries share backoff.
 
 The worker does not forge or extend a KDC-issued ticket. RFC 4556 key/certificate-lifetime rules bind the initial ticket to the certificate validity. Strict mode rejects shortened initial grants and shortened renewable windows. AES128/256 checks cover session and outer ticket encryption, but do not compensate for excessive validity or host compromise.
 
-Manage trusted NSS and account lifecycle centrally so that Linux usernames strictly match their corresponding Active Directory sAMAccountName. The directory-resolved UPN is checked against the issued certificate. The CA supplies the certificate SID, and the domain controller enforces certificate-to-account mapping. A custom CSR CN cannot change the authenticated identity.
+Manage trusted NSS and account lifecycle centrally so that Linux usernames strictly match their corresponding Active Directory sAMAccountName. Enrollment checks the directory-resolved UPN against the issued certificate. Home mode requires a well-formed UPN SAN and relies on KDC mapping rather than an LDAP comparison. The CA supplies the certificate SID, and the domain controller enforces certificate-to-account mapping. A custom CSR CN cannot change the authenticated identity.
 
 ## Privilege Separation
 
-`craft` is the only intended setuid executable. It uses the real UID, accepts no arguments, clears the environment, opens a fixed root-controlled worker executable, and drops every real/effective/saved UID/GID before processing the returned cache or opening the caller's home. The worker runs under a dedicated non-root account; neither program invokes a shell. Credentials travel from worker to parent through a pipe; user keys use sealed memfd objects.
+A home-only installation uses ordinary mode-0755 `craft`, `craft-worker` and optional `craft-maintain` executables. Public `/etc/craft` configuration, trust anchors and CRLs are root-controlled and readable by callers. No service account, keytab, LDAP, enrollment agent, CES or `/run/craft` is required. The worker uses the caller's filesystem permissions to open `~/.config/craft/user.pem` and `user.key` and performs validation and PKINIT under that UID.
 
-Run `craft-maintain` without setuid/setgid. It uses system Kerberos configuration, invokes the fixed `craft` launcher, and coordinates cache publication through private locks. Watched PIDs must belong to the caller; status files are private.
+An enrollment-enabled installation makes only `craft` setuid. It checks the home pair using a permanently unprivileged caller worker. The parent reads only a one-byte selection result while elevated; it drops all real/effective/saved IDs before reading credential bytes or publishing the cache. Only an absent pair starts the dedicated service-account worker. Both paths clear inherited environment, execute a fixed root-controlled worker through `fexecve`, and process certificates and Kerberos outside root.
 
-Only the service account should belong to the `craft` service group. The separately named `craft-users` group controls who may execute the launcher, in addition to Active Directory user account validation and runtime UID revalidation. Never give ordinary users the ability to run arbitrary commands as the service account.
+Only the service account belongs to `craft`. Private agent keys, keytabs and transport credentials remain `root:craft` mode 0640; public files use `root:root` mode 0644 in a root-owned mode-0755 directory. `craft-users` controls execution of an enrollment-enabled restricted launcher. Never grant ordinary users the service identity or private enrollment files. A home-only deployment does not require that group.
 
-## Temporary User Credentials
+`craft-maintain` runs without setuid/setgid, uses system Kerberos configuration and invokes the fixed `craft` entry point for fresh authentication. Home refresh works under `no_new_privs`; enrollment fallback requires permitted setuid elevation. Watched PIDs belong to the caller, and cache/status locks are private.
 
-CRAFT keeps the issued user certificate and its private key in process memory and temporary memory-backed files for PKINIT, releasing them when the operation ends. It does not export a persistent user certificate/key file or install a certificate-store entry. The CA may retain issuance and audit records, and client cleanup does not revoke the certificate. The separate user ticket cache persists after CRAFT exits. Memory can reach swap or be captured by privileged host access; ephemeral storage is not a guarantee of secure erasure.
+## User Credential Storage
+
+Supplied home certificates and keys persist until the user replaces or removes them. CRAFT releases its parsed objects and sealed PKINIT memory files after each operation, and does not renew or delete the source pair. These files provide a continuing authentication credential while the certificate is accepted by the KDC. Protect them separately from the cache.
+
+Enrollment generates temporary user certificate/key material and does not export a persistent user PEM/PFX or store entry. CA issuance/audit records remain independently. Both modes leave the ticket cache after exit. Memory and memory files can reach swap or privileged host capture; ephemeral processing is not secure erasure. Certificate expiry, private-key deletion and cache removal do not revoke an issued TGT.
 
 ## Implemented Controls
 
-- Dynamic UPN resolution through the Active Directory Global Catalog plus real-UID/NSS revalidation, fixed endpoint/template from root-owned files, no caller-supplied target identity or output path.
+- Real-UID/NSS revalidation in both modes; enrollment resolves UPN through the Active Directory Global Catalog, fixed endpoint/template from root-owned files, no caller-supplied target identity or output path.
 - No trusted-path symlinks; root ownership and parent write-permission checks; verified executable opened before privilege drop and launched with fexecve.
 - Parent writes as caller, unique mode-0600 staging file, atomic fixed-name replacement, no target-symlink following.
 - HTTPS peer/name verification, no redirects or proxy environment, no explicitly enabled Basic/NTLM authentication. Directory access uses the separately provisioned keytab over LDAP/GSSAPI in both CES modes.
-- Agent signature/key/EKU/trust validation; returned certificate key/UPN/template/EKU/lifetime/trust/CRL validation.
+- Home files: fixed NSS paths, caller ownership, safe directories, private key permissions, regular files, no symlinks/extra hard links and bounded reads.
+- Both modes: matching key, non-CA/logon usage, current certificate validity, CA trust and CRLs. Enrollment additionally checks agent authorization profile, directory UPN, template and short validity.
 - PKINIT certificate/private key and pinned KDC trust; rejecting password prompter; explicit TGT flags, principal, AES session/envelope and actual lifetime validation.
-- Bounded network payloads, forbidden XML DTD/entity declarations, per-user issuance lock/interval, execution deadlines, CPU/address-space limits, no core dumps and non-dumpable processes.
-- No private key or TGT printed in diagnostics. The stdout pipe is credentials; the launcher's stdout is only the cache name.
+- Bounded network payloads, forbidden XML DTD/entity declarations, per-user issuance lock/interval for enrollment, execution deadlines, CPU/address-space limits, no core dumps and non-dumpable processes.
+- No private key or TGT printed in diagnostics. The home worker first sends a selection byte; subsequent stdout pipe data is credentials; the launcher's stdout is only the cache name.
 
 ## Not Claimed
 
@@ -49,7 +57,7 @@ The HTTPS path validates certificate chain and hostname but does not implement i
 
 The Kerberos configuration is administrator-controlled and can reference further files/plugins; those must be protected as well. Dynamic libraries, NSS modules, Kerberos preauth plugins, OpenSSL configuration/providers and the OS trust boundary must remain administrator-controlled. Do not add user-writable library paths or config includes. Inspect the rebuilt executable's dynamic dependencies before installation.
 
-The exact returned user UPN and template are checked in application code after certificate verification. Pinning the actual issuing CA separately from the configured trust-chain files is not implemented. Keep the accepted CA set narrow and review any alternate strong mappings in AD that could conflict with intended identity selection.
+Enrollment checks the returned user UPN and template after certificate verification. Home mode accepts ordinary templates and validity periods, requires Smart Card Logon or PKINIT Client Authentication EKU, and relies on the KDC to map the certificate to the requested caller principal. Pinning the actual issuing CA separately from the configured trust-chain files is not implemented. Keep the accepted CA set narrow and review any alternate strong mappings in AD that could conflict with intended identity selection.
 
 ## Required Live-Lab Checks
 
@@ -57,4 +65,4 @@ Follow [TESTING.md](TESTING.md). A successful build or synthetic cryptographic t
 
 ## Immediate Disable
 
-Remove the launcher's setuid/execute permission and set `enabled=no` to disable fresh enrollment. Stop renewal by sending SIGTERM to active maintainers' recorded `maintainer_pid`. Revoke affected enrollment-agent/transport credentials if compromise is suspected. Issued tickets can remain valid until expiry; deleting a cache is not revocation. Review CA/CES/KDC/AUTHPRIV logs and follow your incident-response process.
+Set `enabled=no` or remove execute permission to disable fresh acquisition through both paths. Removing only the setuid bit disables enrollment fallback; a valid home pair can still authenticate. Stop renewal by sending SIGTERM to active maintainers' recorded `maintainer_pid`. Revoke affected enrollment-agent/transport credentials if compromise is suspected. Issued tickets can remain valid until expiry; deleting a cache is not revocation. Review CA/CES/KDC/AUTHPRIV logs and follow your incident-response process.

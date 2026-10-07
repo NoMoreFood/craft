@@ -1,4 +1,4 @@
-// Unprivileged, dedicated-account worker. The public entry point is launcher.cpp.
+// Unprivileged certificate worker. The public entry point is launcher.cpp.
 #include "common.hpp"
 #include <sys/mman.h>
 #include <sys/file.h>
@@ -73,6 +73,8 @@ inline std::string objtext(const ASN1_OBJECT *o)
     return s;
 }
 
+enum class CertificateSource { Enrollment, Home };
+
 struct Config
 {
     std::string domain, realm, netbios, template_oid, ces_url, ces_auth, service_principal;
@@ -83,7 +85,7 @@ struct Config
 };
 
 // Parse a strict configuration independently of privileged file access.
-inline Config parse_config(std::string_view text)
+inline Config parse_config(std::string_view text, CertificateSource source = CertificateSource::Enrollment)
 {
     std::map<std::string, std::string, std::less<>> v;
     std::istringstream in{std::string(text)};
@@ -122,13 +124,17 @@ inline Config parse_config(std::string_view text)
         return i->second;
     };
     need(get("enabled") == "yes", "service disabled; review configuration and set enabled=yes");
+    const auto enrollment_value = [&](const char *key)
+    {
+        return source == CertificateSource::Enrollment ? get(key) : std::string{};
+    };
     Config c{.domain = get("domain"),
              .realm = get("realm"),
-             .netbios = get("netbios"),
-             .template_oid = get("template_oid"),
-             .ces_url = get("ces_url"),
-             .ces_auth = get("ces_auth"),
-             .service_principal = get("service_principal"),
+             .netbios = enrollment_value("netbios"),
+             .template_oid = enrollment_value("template_oid"),
+             .ces_url = enrollment_value("ces_url"),
+             .ces_auth = enrollment_value("ces_auth"),
+             .service_principal = enrollment_value("service_principal"),
              .gc_url = {},
              .gc_base_dn = {}};
 
@@ -141,10 +147,13 @@ inline Config parse_config(std::string_view text)
     const static std::regex netbios_re(R"(^[A-Z0-9_-]+$)");
     need(std::regex_match(c.domain, domain_re), "domain must be lowercase DNS syntax");
     need(std::regex_match(c.realm, realm_re), "realm must be uppercase DNS syntax");
-    need(std::regex_match(c.netbios, netbios_re), "invalid NetBIOS domain");
-    Obj oid(OBJ_txt2obj(c.template_oid.c_str(), 1));
-    sslneed(oid != nullptr, "invalid template OID");
-    need(c.ces_auth == "negotiate" || c.ces_auth == "mtls", "ces_auth must be negotiate or mtls");
+    if (source == CertificateSource::Enrollment)
+    {
+        need(std::regex_match(c.netbios, netbios_re), "invalid NetBIOS domain");
+        Obj oid(OBJ_txt2obj(c.template_oid.c_str(), 1));
+        sslneed(oid != nullptr, "invalid template OID");
+        need(c.ces_auth == "negotiate" || c.ces_auth == "mtls", "ces_auth must be negotiate or mtls");
+    }
     if (v.contains("gc_url")) c.gc_url = v["gc_url"];
     else c.gc_url = "ldap://" + c.domain + ":3268";
     if (v.contains("gc_base_dn")) c.gc_base_dn = v["gc_base_dn"];
@@ -169,9 +178,9 @@ inline Config parse_config(std::string_view text)
     return c;
 }
 
-inline Config config()
+inline Config config(CertificateSource source = CertificateSource::Enrollment)
 {
-    return parse_config(root_text(path("config")));
+    return parse_config(root_text(path("config")), source);
 }
 
 // Encode bounded ASN.1 structures without generating CA signatures.
@@ -299,6 +308,28 @@ inline Key load_key(const char *file)
     sslneed(k != nullptr,
             "read noninteractive PEM private key (encrypted PEM needs a different key backend)");
     return k;
+}
+
+struct UserIdentity
+{
+    Cert certificate;
+    Key key;
+};
+
+inline UserIdentity load_user_identity(const UserIdentityFiles &files)
+{
+    // Keep private-key bytes bounded and erase them on normal and exceptional exits.
+    const Bytes certificate_bytes = read_all(files.certificate.get());
+    Bytes key_bytes = read_all(files.key.get());
+    ScopeExit erase([&]() noexcept { wipe(key_bytes); });
+
+    // Never prompt for a private-key passphrase in an unattended Kerberos operation.
+    Bio certificate = membio(certificate_bytes), key = membio(key_bytes);
+    UserIdentity identity{Cert(PEM_read_bio_X509(certificate.get(), nullptr, nullptr, nullptr)),
+                          Key(PEM_read_bio_PrivateKey(key.get(), nullptr, no_pem_password, nullptr))};
+    sslneed(identity.certificate && identity.key,
+            "read ~/.config/craft/user.pem and unencrypted PEM user.key");
+    return identity;
 }
 
 inline Key generate_key()
@@ -528,32 +559,41 @@ inline void verify_chain(X509 *x)
              X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx.get())));
 }
 
-// Enforce the pinned key, UPN, template, usage, and short validity.
-inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Config &cfg)
+// Enforce logon identity and usage; enrollment additionally pins the template and short validity.
+inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Config &cfg,
+                           CertificateSource source = CertificateSource::Enrollment)
 {
-    sslneed(X509_check_private_key(c, key) == 1, "issued certificate public key mismatch");
+    sslneed(X509_check_private_key(c, key) == 1, "user certificate public key mismatch");
     int bc_critical{};
     Owned<BASIC_CONSTRAINTS, BASIC_CONSTRAINTS_free> bc(
         static_cast<BASIC_CONSTRAINTS *>(X509_get_ext_d2i(c, NID_basic_constraints, &bc_critical, nullptr)));
     need(bc && !bc->ca && !bc->pathlen && X509_check_ca(c) == 0, "user certificate needs CA:FALSE");
-    need(has_eku(c, SMARTCARD_OID) && has_eku(c, CLIENT_AUTH_OID) && has_eku(c, PKINIT_CLIENT_OID),
-         "issued certificate needs Smart Card Logon, Client Authentication and PKINIT Client Authentication "
-         "EKUs");
+    if (source == CertificateSource::Enrollment)
+        need(has_eku(c, SMARTCARD_OID) && has_eku(c, CLIENT_AUTH_OID) && has_eku(c, PKINIT_CLIENT_OID),
+             "issued certificate needs Smart Card Logon, Client Authentication and PKINIT Client Authentication "
+             "EKUs");
+    else
+        need(has_eku(c, SMARTCARD_OID) || has_eku(c, PKINIT_CLIENT_OID),
+             "user certificate needs Smart Card Logon or PKINIT Client Authentication EKU");
     int critical = 0;
     Owned<ASN1_BIT_STRING, ASN1_BIT_STRING_free> ku(
         static_cast<ASN1_BIT_STRING *>(X509_get_ext_d2i(c, NID_key_usage, &critical, nullptr)));
     need(ku && ASN1_BIT_STRING_get_bit(ku.get(), 0) == 1 && !ASN1_BIT_STRING_get_bit(ku.get(), 5) &&
              !ASN1_BIT_STRING_get_bit(ku.get(), 6),
          "certificate needs digitalSignature and must not authorize certificate/CRL signing");
-    const std::string expected_upn = m.upn.empty() ? (m.name + "@" + cfg.domain) : m.upn;
-    need(certificate_upn(c) == expected_upn, "issued UPN differs from Active Directory UPN");
-    need(certificate_template(c) == cfg.template_oid, "CA returned the wrong certificate template");
+    const auto upn = certificate_upn(c);
     time_t now = time(nullptr), start = as_time(X509_get0_notBefore(c)), end = as_time(X509_get0_notAfter(c));
     need(start <= now && end > now + 60, "certificate is not currently valid for at least 60 seconds");
-    need(end - start > 0 && end - start <= cfg.cert_total,
-         "CA issued a certificate with excessive total validity");
-    need(end - now <= cfg.cert_remaining,
-         "CA issued a certificate with excessive remaining validity; configure the short-lived template");
+    if (source == CertificateSource::Enrollment)
+    {
+        const std::string expected_upn = m.upn.empty() ? (m.name + "@" + cfg.domain) : m.upn;
+        need(upn == expected_upn, "user certificate UPN differs from Active Directory UPN");
+        need(certificate_template(c) == cfg.template_oid, "CA returned the wrong certificate template");
+        need(end - start > 0 && end - start <= cfg.cert_total,
+             "CA issued a certificate with excessive total validity");
+        need(end - now <= cfg.cert_remaining,
+             "CA issued a certificate with excessive remaining validity; configure the short-lived template");
+    }
     return end;
 }
 
@@ -1179,8 +1219,9 @@ int main(int argc, char **argv)
     uid_t requesting_uid = 0;
     try
     {
-        // Reset inherited state and enforce the dedicated worker credentials.
-        need(argc == 3, "worker is not a public interface; use craft");
+        // Reset inherited state and select the caller or dedicated-account workflow.
+        const bool home = argc == 4 && std::string_view(argv[1]) == "--home";
+        need(home || argc == 3, "worker is not a public interface; use craft");
         sysneed(clearenv() == 0, "clear worker environment");
         sysneed(setenv("KRB5_CONFIG", "/etc/craft/krb5.conf", 1) == 0 &&
                     setenv("HOME", "/nonexistent", 1) == 0 && setenv("LANG", "C", 1) == 0,
@@ -1191,52 +1232,78 @@ int main(int argc, char **argv)
         struct rlimit cpu{30, 30}, mem{512 * 1024 * 1024, 512 * 1024 * 1024};
         sysneed(setrlimit(RLIMIT_CPU, &cpu) == 0 && setrlimit(RLIMIT_AS, &mem) == 0,
                 "worker resource limits");
-        const Account svc = service_account();
-        need(getuid() == svc.uid && geteuid() == svc.uid && getgid() == svc.gid && getegid() == svc.gid,
-             "worker must run with dedicated account credentials");
 
-        // Balance curl process initialization across every normal or exceptional exit.
-        need(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK, "curl initialize");
-        ScopeExit cleanup_curl([]() noexcept { curl_global_cleanup(); });
-
-        // Re-resolve the runtime UID, validate account, and rate-limit enrollment.
-        requesting_uid = number(argv[1]);
-        const std::string name = argv[2];
-        need(requesting_uid != 0 && requesting_uid != svc.uid && simple_name(name),
-             "invalid requesting account");
-        need(lookup_uid(requesting_uid).name == name,
+        // Re-resolve the runtime UID and validate the requesting account.
+        requesting_uid = number(argv[home ? 2 : 1]);
+        const std::string name = argv[home ? 3 : 2];
+        need(requesting_uid != 0 && simple_name(name), "invalid requesting account");
+        const Account caller = lookup_uid(requesting_uid);
+        need(caller.name == name,
              "runtime UID/name changed; administrator review required");
-        Config cfg = config();
-        Fd lock = rate_limit(requesting_uid, cfg.interval);
+        UserIdentityFiles files;
+        if (home)
+        {
+            // Report selection before returning credentials so the launcher can relinquish root.
+            need(getuid() == requesting_uid && geteuid() == requesting_uid && getgid() == getegid(),
+                 "home certificate worker must run as the caller");
+            files = user_identity_files(caller);
+            const unsigned char selected = files.certificate.get() >= 0;
+            write_all(STDOUT_FILENO, {&selected, 1});
+            if (!selected) return 0;
+        }
+        else
+        {
+            // Restrict enrollment credentials to the dedicated account.
+            const Account svc = service_account();
+            need(requesting_uid != svc.uid && getuid() == svc.uid && geteuid() == svc.uid &&
+                     getgid() == svc.gid && getegid() == svc.gid,
+                 "enrollment worker must run with dedicated account credentials");
+        }
+
+        // Balance enrollment transport initialization across every normal or exceptional exit.
+        if (!home) need(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK, "curl initialize");
+        ScopeExit cleanup_curl([home]() noexcept { if (!home) curl_global_cleanup(); });
+        const auto source = home ? CertificateSource::Home : CertificateSource::Enrollment;
+        Config cfg = config(source);
+        UserIdentity identity;
+        Fd lock;
+        if (home) identity = load_user_identity(files);
+        else lock = rate_limit(requesting_uid, cfg.interval);
         root_open(path("kdc-trust.pem"));
         root_open(path("kdc-crls.pem"));
 
-        // Verify the agent, then enroll a fresh certificate for the fixed identity.
-        Cert agent = load_cert("agent.pem");
-        Key agent_key = load_key("agent.key");
-        need(has_eku(agent.get(), AGENT_OID), "agent certificate lacks Certificate Request Agent EKU");
-        sslneed(X509_check_private_key(agent.get(), agent_key.get()) == 1, "agent key mismatch");
-        verify_chain(agent.get());
+        // Keep the caller principal fixed; the KDC enforces certificate-to-account mapping for home credentials.
         Kerberos krb;
-        krb.acquire_transport(cfg);
-        Mapping m = lookup_ad_user(cfg, requesting_uid, name);
-        const auto cn = common_name(cfg, name, m.upn);
-        Key user_key = generate_key();
-        Req req = make_request(user_key.get(), m.upn, cfg.template_oid, cn);
-        Bytes cms = wrap_eobo(req.get(), agent.get(), agent_key.get(), cfg.netbios + "\\" + name);
-        std::string response = send_ces(cfg, soap_request(cfg, cms));
-        Cert user_cert = parse_response(response, user_key.get());
+        Mapping m{.uid = requesting_uid, .name = name, .upn = {}};
+        if (source == CertificateSource::Enrollment)
+        {
+            // Verify the agent and enroll a fresh certificate for the fixed directory identity.
+            Cert agent = load_cert("agent.pem");
+            Key agent_key = load_key("agent.key");
+            need(has_eku(agent.get(), AGENT_OID), "agent certificate lacks Certificate Request Agent EKU");
+            sslneed(X509_check_private_key(agent.get(), agent_key.get()) == 1, "agent key mismatch");
+            verify_chain(agent.get());
+            krb.acquire_transport(cfg);
+            m = lookup_ad_user(cfg, requesting_uid, name);
+            const auto cn = common_name(cfg, name, m.upn);
+            identity.key = generate_key();
+            Req req = make_request(identity.key.get(), m.upn, cfg.template_oid, cn);
+            Bytes cms = wrap_eobo(req.get(), agent.get(), agent_key.get(), cfg.netbios + "\\" + name);
+            const std::string response = send_ces(cfg, soap_request(cfg, cms));
+            identity.certificate = parse_response(response, identity.key.get());
+        }
 
-        // Validate the issued identity before requesting and returning the TGT.
-        verify_chain(user_cert.get());
-        time_t end = validate_leaf(user_cert.get(), user_key.get(), m, cfg);
-        Bytes result = get_tgt(krb, cfg, m, user_cert.get(), user_key.get(), end);
+        // Validate the selected identity before requesting and returning the TGT.
+        verify_chain(identity.certificate.get());
+        time_t end = validate_leaf(identity.certificate.get(), identity.key.get(), m, cfg, source);
+        Bytes result = get_tgt(krb, cfg, m, identity.certificate.get(), identity.key.get(), end);
         ScopeExit erase([&]() noexcept { wipe(result); });
         openlog("craft", LOG_PID, LOG_AUTHPRIV);
         syslog(LOG_NOTICE,
-               "issued TGT uid=%lu user=%s certificate_expiry=%lld",
+               "issued TGT uid=%lu user=%s certificate_source=%s certificate_expiry=%lld",
                static_cast<unsigned long>(m.uid),
                m.name.c_str(),
+               source == CertificateSource::Home ? "home" : "enrollment",
                static_cast<long long>(end));
         closelog();
         write_all(STDOUT_FILENO, result);

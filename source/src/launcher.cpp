@@ -1,4 +1,4 @@
-// CRAFT setuid entry point; certificate, network, and Kerberos processing stays in the worker.
+// CRAFT entry point; certificate, network, and Kerberos processing stays in the worker.
 #include "common.hpp"
 #include <sys/wait.h>
 #include <signal.h>
@@ -13,8 +13,8 @@ int main(int argc, char **)
         const uid_t uid = getuid();
         const gid_t gid = getgid();
         need(argc == 1, "usage: craft (no arguments)");
-        need(uid != 0 && geteuid() == 0,
-             "run directly as an authorized non-root user; install launcher setuid-root");
+        need(uid != 0 && (geteuid() == uid || geteuid() == 0),
+             "run directly as a non-root user");
         need(getegid() == gid, "launcher must not be setgid");
         sysneed(clearenv() == 0, "clearenv");
         no_core();
@@ -37,83 +37,123 @@ int main(int argc, char **)
         close_from(3);
         sysneed(chdir("/") == 0, "chdir /");
 
-        // Resolve the real UID, validate caller identity, and retain only validated worker inputs.
-        const Account caller = lookup_uid(uid), service = service_account();
-        need(uid != 0 && uid != service.uid && simple_name(caller.name), "invalid calling account");
+        // Resolve the real UID and retain only validated worker inputs.
+        const Account caller = lookup_uid(uid);
+        need(simple_name(caller.name), "invalid calling account");
         need(lookup_uid(uid).name == caller.name, "runtime UID/name changed; administrator review required");
         const int count = getgroups(0, nullptr);
         sysneed(count >= 0, "getgroups");
         std::vector<gid_t> groups(static_cast<size_t>(count));
         if (count) sysneed(getgroups(count, groups.data()) == count, "getgroups");
-
-        // Open worker binary securely from trusted path and set up IPC communication pipe.
-        Fd binary = root_open(WORKER, false, true);
-        std::array<int, 2> pipe{};
-        sysneed(pipe2(pipe.data(), O_CLOEXEC) == 0, "pipe2");
-        Fd reader(pipe[0]), writer(pipe[1]);
+        const Fd binary = root_open(WORKER, false, true);
         const auto uidarg = std::to_string(uid);
-        const pid_t parent = getpid(), child = fork();
-        sysneed(child >= 0, "fork");
 
-        // Execute the opened worker as the dedicated account with a fixed environment.
-        if (child == 0)
+        const auto run_worker = [&](const Account &account, bool home)
         {
-            try
+            // Open a private channel and execute the trusted worker in the selected account.
+            std::array<int, 2> descriptors{};
+            sysneed(pipe2(descriptors.data(), O_CLOEXEC) == 0, "worker pipe");
+            Fd reader(descriptors[0]), writer(descriptors[1]);
+            const pid_t parent = getpid(), child = fork();
+            sysneed(child >= 0, "fork");
+            if (child == 0)
             {
-                // Redirect standard I/O streams and drop privileges to service account.
-                sysneed(dup2(writer.get(), STDOUT_FILENO) == STDOUT_FILENO, "worker stdout");
-                const Fd null(open("/dev/null", O_RDONLY));
-                sysneed(null.get() >= 0, "worker stdin");
-                sysneed(dup2(null.get(), STDIN_FILENO) == STDIN_FILENO, "worker stdin dup");
-                if (binary.get() != 3) sysneed(dup3(binary.get(), 3, O_CLOEXEC) == 3, "worker executable fd");
-                close_from(4);
-                drop(service.uid, service.gid);
-                sysneed(prctl(PR_SET_PDEATHSIG, SIGKILL) == 0, "worker parent-death signal");
-                need(getppid() == parent, "launcher disappeared");
+                try
+                {
+                    // Redirect standard I/O streams before relinquishing elevated credentials.
+                    sysneed(dup2(writer.get(), STDOUT_FILENO) == STDOUT_FILENO, "worker stdout");
+                    const Fd null(open("/dev/null", O_RDONLY));
+                    sysneed(null.get() >= 0, "worker stdin");
+                    sysneed(dup2(null.get(), STDIN_FILENO) == STDIN_FILENO, "worker stdin dup");
+                    if (binary.get() != 3) sysneed(dup3(binary.get(), 3, O_CLOEXEC) == 3, "worker executable fd");
+                    close_from(4);
+                    if (geteuid() == 0)
+                        drop(account.uid, home ? gid : account.gid,
+                             home ? std::span<const gid_t>(groups) : std::span<const gid_t>{});
+                    else
+                        sysneed(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0, "no_new_privs");
+                    sysneed(prctl(PR_SET_PDEATHSIG, SIGKILL) == 0, "worker parent-death signal");
+                    need(getppid() == parent, "launcher disappeared");
 
-                // Execute worker binary using verified descriptor with minimal sanitized environment.
-                auto args = std::to_array<char *>({const_cast<char *>(WORKER),
-                                                   const_cast<char *>(uidarg.c_str()),
-                                                   const_cast<char *>(caller.name.c_str()),
-                                                   nullptr});
-                char path[] = "PATH=/usr/bin:/bin", lang[] = "LANG=C", home[] = "HOME=/nonexistent";
-                char krb[] = "KRB5_CONFIG=/etc/craft/krb5.conf";
-                auto env = std::to_array<char *>({path, lang, home, krb, nullptr});
-                fexecve(3, args.data(), env.data());
-                fail("exec fixed worker failed");
+                    // Execute worker binary using verified descriptor with minimal sanitized environment.
+                    auto args = std::to_array<char *>({const_cast<char *>(WORKER),
+                                                       const_cast<char *>(home ? "--home" : uidarg.c_str()),
+                                                       const_cast<char *>(home ? uidarg.c_str() :
+                                                                                caller.name.c_str()),
+                                                       home ? const_cast<char *>(caller.name.c_str()) : nullptr,
+                                                       nullptr});
+                    char path[] = "PATH=/usr/bin:/bin", lang[] = "LANG=C", homevar[] = "HOME=/nonexistent";
+                    char krb[] = "KRB5_CONFIG=/etc/craft/krb5.conf";
+                    auto env = std::to_array<char *>({path, lang, homevar, krb, nullptr});
+                    fexecve(3, args.data(), env.data());
+                    fail("exec fixed worker failed");
+                }
+                catch (const std::exception &error)
+                {
+                    dprintf(STDERR_FILENO, "craft: %s\n", error.what());
+                    _exit(1);
+                }
             }
-            catch (const std::exception &error)
+
+            writer = Fd();
+            ScopeExit reap([&]() noexcept
             {
-                dprintf(STDERR_FILENO, "craft: %s\n", error.what());
-                _exit(1);
+                kill(child, SIGKILL);
+                while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+            });
+            const auto wait_worker = [&]
+            {
+                int status{};
+                pid_t waited;
+                do
+                {
+                    waited = waitpid(child, &status, 0);
+                } while (waited < 0 && errno == EINTR);
+                sysneed(waited == child, "waitpid");
+                reap.release();
+                need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                     "credential acquisition failed; existing cache was not replaced");
+            };
+
+            // Read only the source-selection byte while elevated; credentials require a permanent drop.
+            if (home)
+            {
+                unsigned char selected{};
+                ssize_t length;
+                do
+                {
+                    length = read(reader.get(), &selected, 1);
+                } while (length < 0 && errno == EINTR);
+                need(length == 1 && selected <= 1,
+                     "user certificate selection failed; existing cache was not replaced");
+                if (!selected)
+                {
+                    wait_worker();
+                    return false;
+                }
             }
-        }
+            if (geteuid() == 0) drop(uid, gid, groups);
+            auto cache = read_all(reader.get());
+            ScopeExit erase([&]() noexcept { wipe(cache); });
+            reader = Fd();
+            wait_worker();
 
-        // Drop root before reading credentials or opening anything in the caller's home.
-        writer = Fd();
-        binary = Fd();
-        drop(uid, gid, groups);
-        auto cache = read_all(reader.get());
-        ScopeExit erase([&]() noexcept { wipe(cache); });
-        reader = Fd();
-        int status{};
-        pid_t waited;
+            // Validate ticket cache format and publish atomically to the caller's home.
+            need(cache.size() > 4 && cache[0] == 5 && cache[1] == 4,
+                 "worker returned no valid FILE-cache header");
+            const Fd directory = caller_home(caller), lock = cache_lock(directory.get(), CACHE_LOCK);
+            publish_cache(caller, cache);
+            std::cout << std::format("FILE:{}/{}\n", caller.home, CACHE_NAME);
+            return true;
+        };
 
-        // Wait for child worker to terminate and inspect exit status.
-        do
-        {
-            waited = waitpid(child, &status, 0);
-        } while (waited < 0 && errno == EINTR);
-        sysneed(waited == child, "waitpid");
-        need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-             "enrollment/PKINIT failed; existing cache was not replaced");
-
-        // Validate ticket cache format and publish to caller's home directory.
-        need(cache.size() > 4 && cache[0] == 5 && cache[1] == 4,
-             "worker returned no valid FILE-cache header");
-        const Fd home = caller_home(caller), lock = cache_lock(home.get(), CACHE_LOCK);
-        publish_cache(caller, cache);
-        std::cout << std::format("FILE:{}/{}\n", caller.home, CACHE_NAME);
+        // Prefer home credentials entirely under the caller; enrollment alone needs the service account.
+        if (run_worker(caller, true)) return 0;
+        need(geteuid() == 0,
+             "no ~/.config/craft/user.pem/user.key pair; enrollment requires the setuid-root launcher");
+        const Account service = service_account();
+        need(uid != service.uid, "invalid calling account");
+        run_worker(service, false);
         return 0;
     }
     catch (const std::exception &error)

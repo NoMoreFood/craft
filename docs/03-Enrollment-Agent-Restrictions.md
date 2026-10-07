@@ -6,6 +6,27 @@ The certificate's Certificate Request Agent usage identifies its purpose. It doe
 
 This page explains the authorization boundary, a recommended CRAFT configuration, the remaining risks, and the live tests needed to establish that privileged accounts cannot be enrolled. The configuration examples are recommendations, not a claim that those controls are already deployed in your domain.
 
+## Scope of the home certificate workflow
+
+These agent and recipient restrictions govern CRAFT's enrollment path. CRAFT first checks `~/.config/craft/user.pem` and `user.key` in the real caller's home. A complete pair uses the caller's privileges for certificate validation and PKINIT, without the agent, directory keytab, LDAP, CES or a CA issuance request. The KDC must map that certificate to the fixed Linux-username principal; CRAFT checks the returned TGT. Partial, unsafe or invalid pairs fail without enrollment fallback.
+
+A home-only installation can omit the service account, its private credentials and setuid entirely. Supplied certificates remain governed by their issuing authority, revocation policy and KDC mapping. The CRAFT enrollment recipient allowlist does not authorize or revoke a certificate issued through another path. Removing the launcher setuid bit prevents enrollment fallback but does not disable home authentication. Set `enabled=no` or remove execute access to stop fresh acquisition through either path; existing tickets and renewals remain separate.
+
+```mermaid
+flowchart TD
+    A[Run craft as the real Linux user] --> B{Home certificate pair present?}
+    B -->|Complete pair| C[Caller validates certificate and key]
+    B -->|Both absent| D[Authorized enrollment path]
+    B -->|Partial or unsafe| E[Fail and retain the cache]
+    D --> F[Agent signs the EOBO request]
+    F --> G{CA allows agent template and recipient?}
+    G -->|Yes| H[CA issues the user certificate]
+    G -->|No| E
+    C --> I[KDC validates PKINIT and caller account mapping]
+    H --> I
+    I -->|Accepted| J[Validate TGT and publish as caller]
+```
+
 ## What the agent can do
 
 CRAFT generates a user key and CSR, then signs an enrollment-on-behalf-of request with the agent key. Its signed `requestername` identifies `DOMAIN\user`. The signing certificate has Certificate Request Agent EKU `1.3.6.1.4.1.311.20.2.1`; the CA issues the final user certificate. [Microsoft EOBO processing rules](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/a1f97d5d-4653-48c1-b483-e8adbb7a123f).
@@ -131,7 +152,7 @@ Review other published user-authentication templates, especially legacy template
 
 Manager approval can add human review, but the current CRAFT flow requires an immediately issued certificate and rejects pending enrollment responses. Requiring multiple authorized signatures also requires a different workflow: CRAFT supplies one agent signature. If privileged enrollment needs independent approval or multiple parties, use a separately designed enrollment process rather than admitting privileged accounts to the automatic CRAFT recipient group.
 
-Inspect renewal policy as well as initial issuance. Certain previous-approval reenrollment flags can relax signature and manager-approval requirements when their renewal conditions are satisfied. CRAFT performs fresh user-certificate enrollment, but a stolen issued certificate might be used through another renewal path. Decide whether renewal is permitted and test the effective restrictions rather than assuming initial-issuance controls cover it. [Microsoft enrollment and reenrollment flags](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/9cc7ba15-fcbc-48b3-8a3b-121faef3d5ef).
+Inspect renewal policy as well as initial issuance. Certain previous-approval reenrollment flags can relax signature and manager-approval requirements when their renewal conditions are satisfied. CRAFT's enrollment path performs fresh user-certificate enrollment, but a stolen issued certificate might be used through another renewal path. Decide whether renewal is permitted and test the effective restrictions rather than assuming initial-issuance controls cover it. [Microsoft enrollment and reenrollment flags](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/9cc7ba15-fcbc-48b3-8a3b-121faef3d5ef).
 
 ## Keep identity construction and mapping strict
 
@@ -186,7 +207,7 @@ The ticket distinction follows Kerberos's service-ticket and forwarding mechanis
 
 Protected Users imposes additional restrictions, including shorter, nonrenewable TGT behavior under the documented domain prerequisites. That can make the account incompatible with CRAFT's requested lifetime and renewal policy. It does not establish a CA recipient allowlist. **Design implication:** do not count a failure of CRAFT's strict lifetime check as proof that another client cannot authenticate using an issued privileged certificate. [Microsoft Protected Users guidance](https://learn.microsoft.com/en-us/windows-server/security/credentials-protection-and-management/protected-users-security-group).
 
-CRAFT's defaults request a ten-hour initial TGT and a seven-day renewal window. An already issued renewable TGT can remain useful after the certificate expires, subject to KDC policy. The maintainer can also obtain fresh credentials for a running job while enrollment remains authorized. Select certificate, ticket, and renewal lifetimes together; the [credential-lifecycle guide](../source/README.md#separate-certificate-and-tgt-lifetimes) describes the separate controls.
+CRAFT's defaults request a ten-hour initial TGT and a seven-day renewal window. An already issued renewable TGT can remain useful after the certificate expires, subject to KDC policy. The maintainer can also obtain fresh credentials for a running job while the selected certificate workflow remains available. Home mode reuses the supplied pair; enrollment remains subject to CA authorization. Select certificate, ticket, and renewal lifetimes together; the [credential-lifecycle guide](../source/README.md#separate-certificate-and-tgt-lifetimes) describes the separate controls.
 
 ## What the provisioning helper verifies
 
