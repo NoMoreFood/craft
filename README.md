@@ -29,6 +29,8 @@ Windows enrollment policy selects an eligible CA for the template's internal nam
 
 Repeat the command with the same template and destination to reuse the pair until less than one calendar month remains before expiration. `/RenewBeforeDays N` overrides that window with a day-based period. Renewal replaces the managed exports and removes their old Windows-store certificate after the new pair is ready. `/DeleteAfterExport` also removes the current Windows-store certificate after successful export or reuse; it defaults off. The helper checks when invoked and does not schedule renewal or replace Linux copies automatically.
 
+The helper checks CRAFT's certificate profile before publishing replacements, recovers interrupted publication on the next run, and retries recorded store-cleanup failures. Private-key deletion preserves shared CSP/CNG containers. CMD launch works from Windows PowerShell or PowerShell 7; Linux still validates trust, revocation and KDC mapping.
+
 ```sh
 mkdir -p ~/.config/craft
 chmod 0700 ~/.config/craft

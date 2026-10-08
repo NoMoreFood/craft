@@ -106,6 +106,8 @@ From the repository root in Windows PowerShell, run the offline helper checks:
 
 The provisioning checks cover parameters, native commands and certificate selection. The request/export checks use newly created synthetic current-user certificates and mocked enrollment. They exercise the CMD and PowerShell options/preview paths, matching RSA/CSP/ECDSA PEM exports, encrypted-export-only and nonexportable keys, private file ACLs, unchanged-pair reuse, the calendar-month/custom renewal window, optional certificate/key deletion with shared-key preservation, changed-file/template protection, pending/denied requests, concurrent exports, junction refusal and rollback after publication failure. OpenSSL parsing is also checked when Git for Windows supplies OpenSSL. The fixtures and their private keys are removed at completion.
 
+Regression coverage includes a real PowerShell 7 CMD launch reusing existing exports, distinct signing/exchange keys in one CSP container, invalid replacement dates and certificate profiles, durable retries of old/current certificate deletion, and child processes killed during preparation, ready state and each file-publication step. Restart checks establish rollback or completion without contacting a CA or discarding queued cleanup.
+
 These checks do not provision AD objects, contact an AD CA, configure a CA or validate a live Windows deployment. For the request helper, verify a normal user's enrollment with an authorized logon template in the lab, CA selection, template export policy, pending/denied outcomes, and the exported pair's Linux PKINIT mapping and revocation checks.
 
 ## Hyper-V Lab Run — September 27, 2026

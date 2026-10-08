@@ -38,6 +38,8 @@ To obtain a pair on Windows, run `Request-CRAFT-Certificate.cmd UserLogon "C:\Us
 
 On repeat runs, the helper reuses its pair until less than one calendar month remains, then obtains a replacement and removes the old Windows-store certificate. `/RenewBeforeDays N` overrides the window with a day-based period. `/DeleteAfterExport` removes the current Windows-store certificate after successful export or reuse and defaults off; it leaves the PEM files available for Linux. Run the helper again to check renewal and transfer replacement files before the Linux pair expires.
 
+Replacements must pass the local CRAFT certificate-profile checks before publication. The helper recovers interrupted file updates, retries pending certificate cleanup, and preserves private-key containers shared by other certificates. The CMD entry point uses Windows PowerShell's built-in modules when invoked from PowerShell 7.
+
 When neither file exists, an enrollment-enabled installation uses its dedicated service account, directory lookup, enrollment-agent signature and CES. This path requires the compiled setuid launcher and CA recipient restrictions. See [enrollment installation](source/README.md#enrollment-installation). A home-only installation reports that enrollment is unavailable when no pair exists.
 
 Both paths request `<Linux username>@<configured realm>` and validate the returned ticket. The KDC decides whether the selected certificate maps to that account; home mode does not query the directory UPN.

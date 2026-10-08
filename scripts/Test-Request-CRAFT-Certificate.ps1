@@ -9,13 +9,10 @@ $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
-foreach ($name in @('Initialize-CraftKeyExporter', 'Initialize-CraftCertificateDestination',
-    'Write-CraftExportFile', 'Write-CraftPem', 'Remove-CraftStoredCertificate', 'Invoke-CraftCertificateEnrollment'))
+foreach ($definition in $ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+}, $false))
 {
-    $definition = $ast.Find({ param($node)
-        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
-    }, $false)
-    if ($null -eq $definition) { throw "Missing helper: $name" }
     . ([scriptblock]::Create($definition.Extent.Text))
 }
 
@@ -68,16 +65,51 @@ function Get-Certificate
     return [pscustomobject]@{ Status = 'Issued'; Certificate = Get-Item -LiteralPath $script:certificatePath }
 }
 
-function New-CraftFixture([double]$Days)
+function New-CraftFixture([double]$Days, [string]$Profile = 'Valid')
 {
-    $certificate = New-SelfSignedCertificate -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy Exportable `
-        -Provider 'Microsoft Software Key Storage Provider' -Type Custom -KeyUsage DigitalSignature `
-        -Subject ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()) -CertStoreLocation 'Cert:\CurrentUser\My' `
-        -NotAfter (Get-Date).AddDays($Days)
+    $extensions = @('2.5.29.19={critical}{text}ca=0', '2.5.29.37={text}1.3.6.1.4.1.311.20.2.2',
+        '2.5.29.17={text}upn=offline@example.invalid')
+    $parameters = @{
+        KeyAlgorithm = 'RSA'; KeyLength = 2048; KeyExportPolicy = 'Exportable'
+        Provider = 'Microsoft Software Key Storage Provider'; Type = 'Custom'; KeyUsage = 'DigitalSignature'
+        Subject = ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()); CertStoreLocation = 'Cert:\CurrentUser\My'
+        NotBefore = (Get-Date).AddMinutes(-1); NotAfter = (Get-Date).AddDays($Days)
+    }
+    switch ($Profile)
+    {
+        'Future' { $parameters.NotBefore = (Get-Date).AddDays(1) }
+        'Expired' { $parameters.NotBefore = (Get-Date).AddDays(-3); $parameters.NotAfter = (Get-Date).AddDays(-1) }
+        'MissingBC' { $extensions = @($extensions | Where-Object { $_ -notlike '2.5.29.19=*' }) }
+        'CA' { $extensions[0] = '2.5.29.19={critical}{text}ca=1' }
+        'MissingUPN' { $extensions = @($extensions | Where-Object { $_ -notlike '2.5.29.17=*' }) }
+        'DuplicateUPN' { $extensions[2] = '2.5.29.17={text}upn=one@example.invalid&upn=two@example.invalid' }
+        'WrongEKU' { $extensions[1] = '2.5.29.37={text}1.3.6.1.5.5.7.3.2' }
+        'SigningCA' { $parameters.KeyUsage = @('DigitalSignature', 'CertSign') }
+        'NoSignature' { $parameters.KeyUsage = 'KeyEncipherment' }
+        'PKINIT' { $extensions[1] = '2.5.29.37={text}1.3.6.1.5.2.3.4' }
+    }
+    $parameters.TextExtension = $extensions
+    $certificate = New-SelfSignedCertificate @parameters
     $path = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
     $fixtures.Add($path)
     $certificate.Dispose()
     return $path
+}
+
+function Set-CraftFixtureProfile($Request)
+{
+    $basic = [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new(
+        $false, $false, 0, $true)
+    $Request.CertificateExtensions.Add($basic)
+    $Request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+        [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, $true))
+    $usages = [System.Security.Cryptography.OidCollection]::new()
+    [void]$usages.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.4.1.311.20.2.2'))
+    $eku = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($usages, $false)
+    $Request.CertificateExtensions.Add($eku)
+    $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $san.AddUserPrincipalName('offline@example.invalid')
+    $Request.CertificateExtensions.Add($san.Build())
 }
 
 function Read-CraftSnapshot($Target)
@@ -163,6 +195,7 @@ try
                     ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()), $sourceRsa,
                     [System.Security.Cryptography.HashAlgorithmName]::SHA256,
                     [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+                Set-CraftFixtureProfile $request
                 $certificate = $request.CreateSelfSigned([DateTimeOffset]::Now.AddMinutes(-1),
                     [DateTimeOffset]::Now.AddMinutes(15))
                 $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
@@ -176,7 +209,9 @@ try
         {
             $certificate = New-SelfSignedCertificate @parameters -Type Custom -KeyExportPolicy Exportable `
                 -CertStoreLocation 'Cert:\CurrentUser\My' -Subject ('CN=CRAFT OFFLINE TEST ' + [Guid]::NewGuid()) `
-                -KeyUsage DigitalSignature -NotAfter (Get-Date).AddMinutes(15)
+                -KeyUsage DigitalSignature -NotAfter (Get-Date).AddMinutes(15) `
+                -TextExtension @('2.5.29.19={critical}{text}ca=0', '2.5.29.37={text}1.3.6.1.4.1.311.20.2.2', `
+                    '2.5.29.17={text}upn=offline@example.invalid')
         }
         $script:certificatePath = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
         $fixtures.Add($script:certificatePath)
@@ -294,7 +329,9 @@ try
 
     $certificate = New-SelfSignedCertificate -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable `
         -Type Custom -Subject ('CN=CRAFT NONEXPORTABLE TEST ' + [Guid]::NewGuid()) `
-        -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddMinutes(15)
+        -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddMinutes(15) `
+        -TextExtension @('2.5.29.19={critical}{text}ca=0', '2.5.29.37={text}1.3.6.1.4.1.311.20.2.2', `
+            '2.5.29.17={text}upn=offline@example.invalid')
     $script:certificatePath = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
     $nonexportablePath = $script:certificatePath
     $fixtures.Add($script:certificatePath)
@@ -333,6 +370,18 @@ try
     Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
     Assert ($script:requests -eq $before -and (Test-Path -LiteralPath $reusePath) -and
         ((Read-CraftSnapshot $export) -join ':') -eq $snapshot) 'A current pair was renewed or deleted by default.'
+    $powerShell7 = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+    if ($powerShell7)
+    {
+        $command = "& '" + $scriptPath.Replace("'", "''") + "' OfflineUserLogon '" +
+            $export.Path.Replace("'", "''") + "'; exit " + '$LASTEXITCODE'
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+        $output = & $powerShell7.Source -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1
+        Assert ($LASTEXITCODE -eq 0 -and ($output -join "`n").Contains('Reusing certificate')) `
+            'A real CMD launch from PowerShell 7 could not load the Windows PowerShell modules.'
+        Assert (((Read-CraftSnapshot $export) -join ':') -eq $snapshot) 'PowerShell 7 reuse changed the export.'
+        Write-Host 'PASS: PowerShell 7 CMD launch loads ACL/enrollment modules and reuses output offline'
+    }
     $stored = Get-Item -LiteralPath $reusePath
     $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($stored)
     $keyName = $rsa.Key.KeyName
@@ -394,6 +443,191 @@ try
     }
     finally { if ($null -ne $rsa) { $rsa.Dispose() }; $stored.Dispose() }
     Write-Host 'PASS: deletion preserves other Windows certificates and their shared private keys'
+
+    $container = 'CRAFT.TEST.CSP.' + [Guid]::NewGuid().ToString('N')
+    $dualPaths = @()
+    $containerNames = @()
+    foreach ($spec in @(2, 1))
+    {
+        $parameters = [System.Security.Cryptography.CspParameters]::new(24,
+            'Microsoft Enhanced RSA and AES Cryptographic Provider', $container)
+        $parameters.KeyNumber = $spec
+        $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new(2048, $parameters)
+        $certificate = $null
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+        try
+        {
+            $containerNames += $rsa.CspKeyContainerInfo.UniqueKeyContainerName
+            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+                ('CN=CRAFT OFFLINE TEST DUAL CSP ' + $spec + ' ' + [Guid]::NewGuid()), $rsa,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            Set-CraftFixtureProfile $request
+            $certificate = $request.CreateSelfSigned([DateTimeOffset]::Now.AddMinutes(-1),
+                [DateTimeOffset]::Now.AddDays(60))
+            $store.Open('ReadWrite')
+            $store.Add($certificate)
+            $path = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
+            $fixtures.Add($path)
+            $dualPaths += $path
+        }
+        finally
+        {
+            $store.Dispose()
+            if ($null -ne $certificate) { $certificate.Dispose() }
+            $rsa.Dispose()
+        }
+    }
+    $first = Get-Item -LiteralPath $dualPaths[0]
+    $second = Get-Item -LiteralPath $dualPaths[1]
+    try
+    {
+        Assert ($containerNames[0] -eq $containerNames[1] -and
+            $first.GetPublicKeyString() -ne $second.GetPublicKeyString()) 'Invalid dual-key CSP fixture.'
+    }
+    finally { $first.Dispose(); $second.Dispose() }
+    $script:certificatePath = $dualPaths[0]
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'DualCspKeys')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport | Out-Null
+    Assert (-not (Test-Path -LiteralPath $dualPaths[0]) -and (Test-Path -LiteralPath $dualPaths[1])) `
+        'Deleting the signing certificate removed the exchange certificate.'
+    $second = Get-Item -LiteralPath $dualPaths[1]
+    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($second)
+    try
+    {
+        $rsa.SignData([System.Text.Encoding]::UTF8.GetBytes('DUAL CSP EXCHANGE KEY CHECK'),
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1) | Out-Null
+    }
+    finally { $rsa.Dispose(); $second.Dispose() }
+    Write-Host 'PASS: distinct CSP signing/exchange keys in one container survive certificate deletion'
+
+    $script:certificatePath = New-CraftFixture 20
+    $oldPath = $script:certificatePath
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'ValidateBeforeReplace')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    $snapshot = (Read-CraftSnapshot $export) -join ':'
+    foreach ($profile in @('Future', 'Expired', 'MissingBC', 'CA', 'MissingUPN', 'DuplicateUPN',
+        'WrongEKU', 'SigningCA', 'NoSignature'))
+    {
+        $script:certificatePath = New-CraftFixture 60 $profile
+        Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport }
+        Assert ((Test-Path -LiteralPath $oldPath) -and (Test-Path -LiteralPath $script:certificatePath) -and
+            ((Read-CraftSnapshot $export) -join ':') -eq $snapshot -and
+            -not (Test-Path -LiteralPath (Join-Path $export.Path '.craft-certificate.transaction.json'))) `
+            "Invalid $profile replacement changed the working pair or removed a Windows credential."
+    }
+    $script:certificatePath = New-CraftFixture 60 'PKINIT'
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    Write-Host 'PASS: replacement dates, CA constraints, usages and one UPN are checked before publication/deletion'
+
+    $script:certificatePath = New-CraftFixture 20
+    $oldPath = $script:certificatePath
+    $export = Initialize-CraftCertificateDestination (Join-Path $root 'RetryStoreCleanup')
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    $script:certificatePath = New-CraftFixture 60
+    $newPath = $script:certificatePath
+    $script:failCleanupThumbprint = Split-Path -Leaf $oldPath
+    $script:remover = (Get-Item -LiteralPath Function:\Remove-CraftStoredCertificate).ScriptBlock
+    function Remove-CraftStoredCertificate([string]$Thumbprint)
+    {
+        if ($Thumbprint -eq $script:failCleanupThumbprint) { throw 'Synthetic store cleanup failure.' }
+        & $script:remover $Thumbprint
+    }
+    try
+    {
+        Reject { Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -DeleteAfterExport }
+        $state = [IO.File]::ReadAllText((Join-Path $export.Path '.craft-certificate.json')) | ConvertFrom-Json
+        Assert ((Split-Path -Leaf $oldPath) -in $state.PendingCleanup -and
+            (Split-Path -Leaf $newPath) -in $state.PendingCleanup -and
+            (Test-Path -LiteralPath $oldPath) -and (Test-Path -LiteralPath $newPath)) `
+            'Failed store cleanup lost its pending deletion requests.'
+    }
+    finally { Set-Item -LiteralPath Function:\Remove-CraftStoredCertificate -Value $script:remover }
+    $before = $script:requests
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+    $state = [IO.File]::ReadAllText((Join-Path $export.Path '.craft-certificate.json')) | ConvertFrom-Json
+    Assert ($script:requests -eq $before -and -not (Test-Path -LiteralPath $oldPath) -and
+        -not (Test-Path -LiteralPath $newPath) -and @($state.PendingCleanup).Count -eq 0) `
+        'A retry did not finish pending old/current cleanup without issuing another certificate.'
+    Write-Host 'PASS: failed store cleanup persists and retries both requested deletions on the next run'
+
+    $oldCrashPath = New-CraftFixture 20
+    $newCrashPath = New-CraftFixture 60
+    foreach ($checkpoint in @('Preparing', 'Ready', 'user.pem', 'user.key', '.craft-certificate.json'))
+    {
+        $script:certificatePath = $oldCrashPath
+        $export = Initialize-CraftCertificateDestination (Join-Path $root ('Crash.' + $checkpoint))
+        Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+        $snapshot = (Read-CraftSnapshot $export) -join ':'
+        $child = @'
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$tokens=$null
+$errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('%%SCRIPT%%',[ref]$tokens,[ref]$errors)
+foreach ($definition in $ast.FindAll({param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+},$false)) { . ([scriptblock]::Create($definition.Extent.Text)) }
+function Get-Certificate
+{
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Template,[uri]$Url,[string]$CertStoreLocation)
+    return [pscustomobject]@{Status='Issued';Certificate=Get-Item -LiteralPath '%%CERTIFICATE%%'}
+}
+$source=(Get-Item -LiteralPath Function:\Publish-CraftCertificateExport).ScriptBlock.ToString()
+$source='function Publish-CraftCertificateExport {'+$source+'}'
+$checkpoint='%%CHECKPOINT%%'
+if ($checkpoint -in @('Preparing','Ready'))
+{
+    $needle="Save-CraftExportJson `$Target '.craft-certificate.transaction.json' `$journal"
+    $index=if ($checkpoint -eq 'Preparing') {$source.IndexOf($needle)} else {$source.LastIndexOf($needle)}
+    if ($index -lt 0) {throw 'Missing transaction crash checkpoint.'}
+    $source=$source.Insert($index+$needle.Length,'; [Environment]::Exit(73)')
+}
+else
+{
+    $needle='else { [System.IO.File]::Move((Join-Path $stage $name), $path) }'
+    $crash="; if (`$name -eq '$checkpoint') { [Environment]::Exit(73) }"
+    if (-not $source.Contains($needle)) {throw 'Missing publication crash checkpoint.'}
+    $source=$source.Replace($needle,$needle+$crash)
+}
+. ([scriptblock]::Create($source))
+Initialize-CraftKeyExporter
+$target=Initialize-CraftCertificateDestination '%%DESTINATION%%'
+Invoke-CraftCertificateEnrollment $target 'OfflineUserLogon'
+'@
+        $child = $child.Replace('%%SCRIPT%%', $scriptPath.Replace("'", "''"))
+        $child = $child.Replace('%%CERTIFICATE%%', $newCrashPath.Replace("'", "''"))
+        $child = $child.Replace('%%DESTINATION%%', $export.Path.Replace("'", "''"))
+        $child = $child.Replace('%%CHECKPOINT%%', $checkpoint)
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($child))
+        $executable = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $command = '""' + $executable + '" -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + $encoded + '"'
+        $result = Invoke-Cmd $command
+        Assert ($result.ExitCode -eq 73) ("The $checkpoint crash was not reached: " + $result.Output)
+        Assert (Test-Path -LiteralPath (Join-Path $export.Path '.craft-certificate.transaction.json')) `
+            'A killed exporter left no durable recovery journal.'
+        $before = $script:requests
+        $script:certificatePath = $newCrashPath
+        Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -RenewBeforeDays 0 | Out-Null
+        Assert ($script:requests -eq $before -and
+            -not (Test-Path -LiteralPath (Join-Path $export.Path '.craft-certificate.transaction.json')) -and
+            @(Get-ChildItem -LiteralPath $export.Path -Directory).Count -eq 0) 'Recovery was not complete and offline.'
+        if ($checkpoint -eq '.craft-certificate.json')
+        {
+            $state = [IO.File]::ReadAllText((Join-Path $export.Path '.craft-certificate.json')) | ConvertFrom-Json
+            Assert ($state.Thumbprint -eq (Split-Path -Leaf $newCrashPath) -and
+                -not (Test-Path -LiteralPath $oldCrashPath) -and (Test-Path -LiteralPath $newCrashPath)) `
+                'Recovery rolled back a committed generation or lost its pending cleanup.'
+        }
+        else
+        {
+            Assert (((Read-CraftSnapshot $export) -join ':') -eq $snapshot -and
+                (Test-Path -LiteralPath $oldCrashPath)) 'Recovery did not restore the complete old generation.'
+        }
+    }
+    Write-Host 'PASS: killed exporters recover preparation, ready state and every publication checkpoint'
 
     $script:certificatePath = New-CraftFixture 20
     $oldPath = $script:certificatePath
