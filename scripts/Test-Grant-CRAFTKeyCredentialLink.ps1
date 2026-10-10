@@ -78,6 +78,12 @@ $otherSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-21-111-22
         [System.Security.AccessControl.AccessControlType]::Allow, $attribute,
         [System.DirectoryServices.ActiveDirectorySecurityInheritance]::None)
     Assert (-not (Test-KeyCredentialRule $readOnly $userRule)) "Matcher accepted a read-only rule."
+
+    # A delegation left for a deleted account has a SID that resolves to no name; it must still be compared.
+    $orphanSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-21-111-222-333-999999")
+    $orphanRule = New-KeyCredentialRule $orphanSid $attribute $userClass $true
+    Assert (Test-KeyCredentialRule $orphanRule $orphanRule) "Matcher failed on an unresolvable identity."
+    Assert (-not (Test-KeyCredentialRule $orphanRule $ouRule)) "Matcher confused an orphaned trustee with the agent."
     Write-Host "PASS: delegation rule matching"
 }
 
@@ -100,6 +106,7 @@ $otherSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-21-111-22
     $fixtureQueries = [System.Collections.Generic.List[string]]::new()
     $fixtureAccount = [pscustomobject]@{ SamAccountName = "alice"; DistinguishedName = "CN=alice,DC=fixture" }
     $fixtureResults = @($fixtureAccount)
+    $fixtureComputerResults = @()
     function Get-ADUser
     {
         param($Identity, $LDAPFilter, $ErrorAction)
@@ -108,16 +115,27 @@ $otherSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-21-111-22
         return $fixtureResults
     }
     function Get-ADServiceAccount { param($LDAPFilter, $ErrorAction) }
-    function Get-ADComputer { param($LDAPFilter, $ErrorAction) }
+    function Get-ADComputer { param($LDAPFilter, $ErrorAction) return $fixtureComputerResults }
     Assert ((Resolve-Account "alice@fixture.invalid").SamAccountName -eq "alice") "UPN lookup failed."
     Assert ($fixtureQueries[0] -eq "(userPrincipalName=alice@fixture.invalid)") "UPN was not searched as an attribute."
-    Assert ((Resolve-Account "CN=alice@example,DC=fixture" $true).SamAccountName -eq "alice") "DN was mistaken for a UPN."
+    Assert ((Resolve-Account "CN=alice@example,DC=fixture" $true).SamAccountName -eq "alice") `
+        "DN was mistaken for a UPN."
     [void](Resolve-Account 'alice*)(x=*)@fixture.invalid' $true)
-    Assert ($fixtureQueries[1] -eq '(userPrincipalName=alice\2a\29\28x=\2a\29@fixture.invalid)') "UPN filter injection was possible."
+    Assert ($fixtureQueries[1] -eq '(userPrincipalName=alice\2a\29\28x=\2a\29@fixture.invalid)') `
+        "UPN filter injection was possible."
+    $fixtureComputerResults = @($fixtureAccount)
+    Assert ((Resolve-Account "alice@fixture.invalid").SamAccountName -eq "alice") `
+        "The same account returned by two account cmdlets was mistaken for an ambiguous UPN."
+    $fixtureComputerResults = @()
     foreach ($count in @(0, 2))
     {
         $fixtureResults = @()
-        for ($i = 0; $i -lt $count; $i++) { $fixtureResults += $fixtureAccount }
+        for ($i = 0; $i -lt $count; $i++)
+        {
+            $fixtureResults += [pscustomobject]@{
+                SamAccountName = "alice$i"; DistinguishedName = "CN=alice$i,DC=fixture"
+            }
+        }
         $rejected = $false
         try { Resolve-Account "alice@fixture.invalid" $true | Out-Null }
         catch { $rejected = $_.Exception.Message -like "*exactly one account*" }
@@ -168,7 +186,8 @@ $otherSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-21-111-22
     foreach ($isUser in @($true, $false))
     {
         $rejected = $false
-        try { Assert-UnprivilegedTarget $target.DistinguishedName $isUser $false }
+        $scope = if ($isUser) { $target.DistinguishedName } else { "OU=fixture,DC=fixture" }
+        try { Assert-UnprivilegedTarget $scope $isUser $false }
         catch { $rejected = $_.Exception.Message -like "*privileged SID*" }
         Assert $rejected "Binary Domain Admins membership with adminCount=0 was accepted."
     }

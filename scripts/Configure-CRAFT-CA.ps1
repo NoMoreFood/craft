@@ -1,3 +1,5 @@
+#Requires -Version 5.1
+
 <#
 .SYNOPSIS
     Configures Active Directory Certificate Services (AD CS) and Active Directory
@@ -22,8 +24,11 @@
     3. Verifies narrow agent/template permissions and CA restrictions before publishing or exporting credentials.
     4. Checks/enrolls a KDC certificate only when run on the selected Domain Controller.
     5. Exports an agent certificate only when running as that agent, or preserves a supplied PFX.
-    6. Generates a submitter keytab, CA certificate/CRL, and disabled client configuration.
-    Existing submitter passwords may be reset by ktpass; review before running.
+    6. Exports the CA certificate/CRL and a disabled client configuration.
+    7. Generates the submitter keytab last: ktpass resets that account's password, so nothing that can
+       still fail follows it and a rerun never rotates the key twice.
+    The changes are listed and confirmed once before anything is modified; -WhatIf only lists them and
+    -Confirm:$false suppresses the prompt.
 
 .PARAMETER TemplateName
     Name of the certificate template to create (default: 'CRAFTUser').
@@ -70,7 +75,7 @@
     Prompts securely for ExportPassword. Review account password resets and manual setup before use.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [ValidatePattern("^[A-Za-z][A-Za-z0-9_-]{0,63}$")]
     [string]$TemplateName = "CRAFTUser",
@@ -119,17 +124,23 @@ function Write-Warn([string]$message)
     Write-Host "    [!] $message" -ForegroundColor Yellow
 }
 
-function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments)
+function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments, [switch]$Sensitive)
 {
+    # Native tools report progress on stderr, which Stop would make fatal: judge them by exit code alone.
     $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try
     {
         $global:LASTEXITCODE = $null
-        & $command.Source @Arguments *>$null
+        $output = (& $command.Source @Arguments 2>&1 | ForEach-Object { "$_" }) -join "`n"
         $exitCode = $global:LASTEXITCODE
-        if ($null -eq $exitCode -or $exitCode -ne 0) { throw "$FilePath failed (exit code $exitCode)." }
+        if ($null -eq $exitCode -or $exitCode -ne 0)
+        {
+            # A failure is diagnosed from the tool's own output, except where that output can hold key material.
+            $detail = if ($Sensitive -or -not $output.Trim()) { "." } else { ":`n" + $output.Trim() }
+            throw "$FilePath failed (exit code $exitCode)$detail"
+        }
     }
     finally
     {
@@ -290,7 +301,7 @@ function Export-SubmitterKeytab([string]$Principal, [string]$Account, [string]$P
         "/ptype", "KRB5_NT_PRINCIPAL",
         "/out", $Path
     )
-    Invoke-CheckedCommand "ktpass.exe" $arguments
+    Invoke-CheckedCommand "ktpass.exe" $arguments -Sensitive
     if (-not (Test-Path -LiteralPath $Path) -or (Get-Item -LiteralPath $Path).Length -eq 0)
     {
         throw "Failed to generate submitter.keytab via ktpass.exe"
@@ -484,6 +495,62 @@ function Get-UsableCertificate([string]$Store, [string]$Eku, [string]$DnsName = 
     }
 }
 
+function Export-ClientConfiguration([string]$Directory, $Domain, [string]$TemplateOid, [uri]$Ces,
+    [string]$Agent, [string]$Kdc, [int]$Hours)
+{
+    # Keep both templates in step with source/config/config.example and source/config/krb5.conf.example.
+    $realm = $Domain.DNSRoot.ToUpperInvariant()
+    $tgtHours = [Math]::Min($Hours, 10)
+    @"
+enabled=no
+domain=$($Domain.DNSRoot)
+realm=$realm
+netbios=$($Domain.NetBIOSName)
+template_oid=$TemplateOid
+certificate_cn={user}
+ces_url=$($Ces.AbsoluteUri)
+ces_auth=negotiate
+service_principal=$Agent@$realm
+tgt_seconds=$($tgtHours * 3600)
+renew_seconds=604800
+require_full_tgt_lifetime=yes
+cert_remaining_max_seconds=$($Hours * 3600)
+cert_total_max_seconds=$($Hours * 3600)
+minimum_interval_seconds=60
+"@ | Set-Content -LiteralPath (Join-Path $Directory "config") -Encoding ASCII
+    @"
+[libdefaults]
+    default_realm = $realm
+    dns_lookup_realm = false
+    dns_lookup_kdc = false
+    dns_canonicalize_hostname = false
+    rdns = false
+    allow_weak_crypto = false
+    forwardable = false
+    proxiable = false
+    ticket_lifetime = ${tgtHours}h
+    renew_lifetime = 7d
+    kdc_default_options = 0
+    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+    udp_preference_limit = 1
+
+[realms]
+    $realm = {
+        kdc = $Kdc
+        pkinit_anchors = FILE:/etc/craft/kdc-trust.pem
+        pkinit_pool = FILE:/etc/craft/ca-trust.pem
+        pkinit_revoke = FILE:/etc/craft/kdc-crls.pem
+        pkinit_require_crl_checking = true
+        pkinit_eku_checking = kpKDC
+        pkinit_kdc_hostname = $Kdc
+    }
+
+[domain_realm]
+    .$($Domain.DNSRoot) = $realm
+    $($Domain.DNSRoot) = $realm
+"@ | Set-Content -LiteralPath (Join-Path $Directory "krb5.conf") -Encoding ASCII
+}
+
 Write-Host @"
 ======================================================================
   CRAFT AD CS Automated CA & Template Provisioning Script
@@ -501,6 +568,7 @@ if ($EnrollmentAgentIdentity -ieq $TargetUser)
 }
 Import-Module ActiveDirectory -ErrorAction Stop
 $domain = Get-ADDomain -ErrorAction Stop
+$realmUpper = $domain.DNSRoot.ToUpperInvariant()
 $rootDse = Get-ADRootDSE -ErrorAction Stop
 $configNC = $rootDse.configurationNamingContext
 
@@ -537,6 +605,13 @@ if (Test-Path -LiteralPath $keytabPath)
 }
 Write-Info "Certification Authority     : $CAName ($caConfig)"
 
+$plan = "create any missing '$EnrollmentAgentIdentity' and '$TargetUser' accounts; create or update template " +
+    "'$TemplateName' and its permissions; publish it and EnrollmentAgent on '$CAName'; write exports to " +
+    "'$ExportPath'; and reset the password of '$EnrollmentAgentIdentity' while exporting its keytab"
+if (-not $PSCmdlet.ShouldProcess($domain.DNSRoot, $plan)) { return }
+
+# The single confirmation above covers every step; do not prompt again for each directory change.
+$ConfirmPreference = 'None'
 $ExportPath = Initialize-ExportDirectory $ExportPath
 
 # -----------------------------------------------------------------------------
@@ -590,9 +665,9 @@ else
     # Source template attributes from SmartcardLogon
     $src = [ADSI]"LDAP://CN=SmartcardLogon,$templatesDN"
     $tmpl = $templateContainer.Create("pKICertificateTemplate", "CN=$TemplateName")
-    
-    foreach ($prop in @("flags", "revision", "msPKI-Certificate-Name-Flag", 
-                       "msPKI-Enrollment-Flag", "msPKI-Private-Key-Flag"))
+
+    # Every msPKI-* flag is set explicitly below; only these two come from the source template.
+    foreach ($prop in @("flags", "revision"))
     {
         if ($null -ne $src.Properties[$prop].Value)
         {
@@ -676,6 +751,10 @@ else
     Write-Info "Retaining template OID: $newOid"
 }
 
+# Commit template changes
+$tmpl.SetInfo()
+Write-Info "Template '$TemplateName' saved to Active Directory."
+
 # Ensure msPKI-Enterprise-Oid object exists in CN=OID for CA policy module
 $existingOidObj = Get-ADObject -Filter { msPKI-Cert-Template-OID -eq $newOid } -SearchBase $oidContainerDN
 if (-not $existingOidObj)
@@ -692,10 +771,6 @@ if (-not $existingOidObj)
                  } | Out-Null
     Write-Info "Registered Enterprise OID object: $oidCN"
 }
-
-# Commit template changes
-$tmpl.SetInfo()
-Write-Info "Template '$TemplateName' saved to Active Directory."
 
 # Write template OID to export file for CRAFT
 $newOid | Set-Content -Path (Join-Path $ExportPath "template_oid.txt") -Encoding ASCII
@@ -717,17 +792,7 @@ Publish-CRAFTTemplates $caObj $caConfig $TemplateName $newOid $agentSid.Value $t
 Write-Info "Verified restrictions for '$EnrollmentAgentIdentity', '$TemplateName' and '$AllowedTargetGroup'."
 
 # -----------------------------------------------------------------------------
-# 6. Export Submitter Kerberos Keytab
-# -----------------------------------------------------------------------------
-Write-Step "Generating Kerberos keytab for $EnrollmentAgentIdentity..."
-
-$realmUpper = $domain.DNSRoot.ToUpperInvariant()
-Export-SubmitterKeytab "$EnrollmentAgentIdentity@$realmUpper" `
-    "$($domain.NetBIOSName)\$EnrollmentAgentIdentity" $keytabPath
-Write-Info "Keytab generated successfully at $keytabPath"
-
-# -----------------------------------------------------------------------------
-# 7. Ensure KDC Certificate for Kerberos PKINIT
+# 6. Ensure KDC Certificate for Kerberos PKINIT
 # -----------------------------------------------------------------------------
 Write-Step "Checking Domain Controller KDC certificate..."
 
@@ -741,6 +806,8 @@ else
     $existingKdcCert = Get-UsableCertificate "Cert:\LocalMachine\My" $kdcEku $KdcHost | Select-Object -First 1
     if (-not $existingKdcCert)
     {
+        # Publish through the CA itself here: enrollment follows at once, and a directory write alone
+        # (as used for the CRAFT templates) takes effect only when the CA next refreshes its template list.
         Invoke-CheckedCommand "certutil.exe" @("-config", $caConfig, "-SetCATemplates", "+KerberosAuthentication")
         Invoke-CheckedCommand "certreq.exe" @(
             "-enroll", "-machine", "-q", "-config", $caConfig, "KerberosAuthentication")
@@ -752,7 +819,7 @@ else
 }
 
 # -----------------------------------------------------------------------------
-# 8. Request & Export Enrollment Agent Certificate
+# 7. Request & Export Enrollment Agent Certificate
 # -----------------------------------------------------------------------------
 Write-Step "Generating Enrollment Agent certificate for CRAFT..."
 
@@ -825,7 +892,7 @@ else
 }
 
 # -----------------------------------------------------------------------------
-# 9. Export CA Certificate and CRL
+# 8. Export CA Certificate and CRL
 # -----------------------------------------------------------------------------
 Write-Step "Exporting CA trust certificate and revocation list (CRL)..."
 
@@ -845,70 +912,21 @@ Write-Info "Exported CA Certificate : $caCrtPath"
 Write-Info "Exported CA CRL         : $caCrlPath"
 
 # -----------------------------------------------------------------------------
-# 10. Generate Linux Client Configuration (config)
+# 9. Generate Linux Client Configuration
 # -----------------------------------------------------------------------------
-Write-Step "Generating Linux client configuration ($ExportPath\config)..."
+Write-Step "Generating Linux client configuration in $ExportPath..."
 
-$tgtHours = [Math]::Min($ValidityHours, 10)
-$craftConfContent = @"
-enabled=no
-domain=$($domain.DNSRoot)
-realm=$realmUpper
-netbios=$($domain.NetBIOSName)
-template_oid=$newOid
-certificate_cn={user}
-ces_url=$($CesUrl.AbsoluteUri)
-ces_auth=negotiate
-service_principal=$EnrollmentAgentIdentity@$realmUpper
-tgt_seconds=$($tgtHours * 3600)
-renew_seconds=604800
-require_full_tgt_lifetime=yes
-cert_remaining_max_seconds=$($ValidityHours * 3600)
-cert_total_max_seconds=$($ValidityHours * 3600)
-minimum_interval_seconds=60
-"@
+Export-ClientConfiguration $ExportPath $domain $newOid $CesUrl $EnrollmentAgentIdentity $KdcHost $ValidityHours
+Write-Info "Exported config and krb5.conf to $ExportPath"
 
-$craftConfPath = Join-Path $ExportPath "config"
-$craftConfContent | Set-Content -Path $craftConfPath -Encoding ASCII
+# -----------------------------------------------------------------------------
+# 10. Export Submitter Kerberos Keytab (last: ktpass resets the account password)
+# -----------------------------------------------------------------------------
+Write-Step "Generating Kerberos keytab for $EnrollmentAgentIdentity..."
 
-Write-Info "Exported client configuration to $craftConfPath"
-
-$krb5ConfContent = @"
-[libdefaults]
-    default_realm = $realmUpper
-    dns_lookup_realm = false
-    dns_lookup_kdc = false
-    dns_canonicalize_hostname = false
-    rdns = false
-    allow_weak_crypto = false
-    forwardable = false
-    proxiable = false
-    ticket_lifetime = ${tgtHours}h
-    renew_lifetime = 7d
-    kdc_default_options = 0
-    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
-    udp_preference_limit = 1
-
-[realms]
-    $realmUpper = {
-        kdc = $KdcHost
-        default_domain = $($domain.DNSRoot)
-        pkinit_anchors = FILE:/etc/craft/kdc-trust.pem
-        pkinit_pool = FILE:/etc/craft/ca-trust.pem
-        pkinit_revoke = FILE:/etc/craft/kdc-crls.pem
-        pkinit_require_crl_checking = true
-        pkinit_eku_checking = kpKDC
-        pkinit_kdc_hostname = $KdcHost
-    }
-
-[domain_realm]
-    .$($domain.DNSRoot) = $realmUpper
-    $($domain.DNSRoot) = $realmUpper
-"@
-
-$krb5ConfPath = Join-Path $ExportPath "krb5.conf"
-$krb5ConfContent | Set-Content -Path $krb5ConfPath -Encoding ASCII
-Write-Info "Exported krb5.conf to $krb5ConfPath"
+Export-SubmitterKeytab "$EnrollmentAgentIdentity@$realmUpper" `
+    "$($domain.NetBIOSName)\$EnrollmentAgentIdentity" $keytabPath
+Write-Info "Keytab generated successfully at $keytabPath"
 
 # -----------------------------------------------------------------------------
 # 11. Security Hardening & Enrollment Agent Restrictions Summary

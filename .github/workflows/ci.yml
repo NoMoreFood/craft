@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["almalinux:8", "almalinux:9", "ubuntu:24.04"]
+    steps:
+      # The RHEL family needs gcc-toolset-13 for std::format; its system compilers are GCC 8 and 11.
+      - name: Install build dependencies
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              build-essential cmake pkg-config git ca-certificates clang-format libssl-dev libkrb5-dev \
+              krb5-user krb5-pkinit libcurl4-openssl-dev libxml2-dev libldap-dev libsasl2-dev \
+              libsasl2-modules-gssapi-mit
+          else
+            dnf -y install gcc-toolset-13-gcc-c++ cmake make pkgconf-pkg-config git tar openssl-devel \
+              krb5-devel krb5-workstation krb5-pkinit libcurl-devel libxml2-devel openldap-devel \
+              cyrus-sasl-devel cyrus-sasl-gssapi
+          fi
+      - uses: actions/checkout@v4
+      - name: Build with warnings as errors
+        run: |
+          if [ -f /opt/rh/gcc-toolset-13/enable ]; then . /opt/rh/gcc-toolset-13/enable; fi
+          cmake -S source -B build -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          cmake --build build -j"$(nproc)"
+      - name: Offline tests
+        run: ctest --test-dir build --output-on-failure
+      # The job container is disposable, which the integration harness requires.
+      - name: Detached-maintainer integration tests
+        run: CRAFT_DISPOSABLE_CONTAINER=yes sh source/tests/run-container-tests.sh build
+      - name: Formatting
+        if: matrix.image == 'ubuntu:24.04'
+        run: clang-format --dry-run --Werror source/src/*.hpp source/src/*.cpp source/tests/*.hpp source/tests/*.cpp
+
+  windows:
+    name: Windows PowerShell 5.1
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # These are offline: Active Directory is mocked, and only synthetic certificates are created and removed.
+      - name: Helper script tests
+        shell: powershell
+        run: |
+          .\scripts\Test-Configure-CRAFT-CA.ps1
+          .\scripts\Test-Grant-CRAFTKeyCredentialLink.ps1
+          .\scripts\Test-Request-CRAFT-Certificate.ps1

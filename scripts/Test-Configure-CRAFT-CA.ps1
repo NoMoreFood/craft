@@ -9,7 +9,7 @@ if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
 foreach ($name in @("Invoke-CheckedCommand", "Get-UsableCertificate", "Initialize-ExportDirectory",
     "New-AccountPassword", "Initialize-CRAFTAccount", "Export-SubmitterKeytab", "Assert-EnrollmentTemplateAcl",
     "Set-EnrollmentTemplatePermissions", "Assert-EnrollmentAgentRestrictions", "Assert-CAEnrollmentPolicy",
-    "Publish-CRAFTTemplates"))
+    "Publish-CRAFTTemplates", "Export-ClientConfiguration"))
 {
     $definition = $ast.Find({ param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -116,24 +116,9 @@ foreach ($case in @(
 Write-Host "PASS: provisioning parameter validation"
 
 & {
-    # Execute only the client export block, with synthetic directory and domain data.
-    $start = $ast.EndBlock.Statements | Where-Object {
-        $_.Extent.Text -like 'Write-Step "Generating Linux client configuration*'
-    } | Select-Object -First 1
-    $end = $ast.EndBlock.Statements | Where-Object {
-        $_.Extent.Text -like 'Write-Info "Exported krb5.conf*'
-    } | Select-Object -First 1
-    Assert ($null -ne $start -and $null -ne $end) "Missing client configuration export block."
-    $export = [scriptblock]::Create($ast.Extent.Text.Substring(
-        $start.Extent.StartOffset, $end.Extent.EndOffset - $start.Extent.StartOffset))
-    function Write-Step([string]$Message) {}
-    function Write-Info([string]$Message) {}
+    # Generate the client files from synthetic directory and domain data.
     $domain = [pscustomobject]@{ DNSRoot = 'example.com'; NetBIOSName = 'EXAMPLE' }
-    $realmUpper = 'EXAMPLE.COM'
-    $newOid = '1.3.6.1.4.1.311.21.8.999.1'
-    $EnrollmentAgentIdentity = 'svc-offline-test'
-    $CesUrl = [uri]'https://ces.example.com/service.svc/CES'
-    $KdcHost = 'dc.example.com'
+    $cesUrl = [uri]'https://ces.example.com/service.svc/CES'
     $ExportPath = Join-Path $env:USERPROFILE "CRAFT.Tests.$([Guid]::NewGuid().ToString('N'))"
     [System.IO.Directory]::CreateDirectory($ExportPath) | Out-Null
     try
@@ -141,7 +126,8 @@ Write-Host "PASS: provisioning parameter validation"
         foreach ($case in @(@(1, 1), @(4, 4), @(9, 9), @(10, 10), @(11, 10), @(24, 10)))
         {
             $ValidityHours = $case[0]
-            & $export
+            Export-ClientConfiguration $ExportPath $domain '1.3.6.1.4.1.311.21.8.999.1' $cesUrl `
+                'svc-offline-test' 'dc.example.com' $ValidityHours
             $config = ConvertFrom-StringData ([System.IO.File]::ReadAllText((Join-Path $ExportPath 'config')))
             $krb5 = [System.IO.File]::ReadAllText((Join-Path $ExportPath 'krb5.conf'))
             $ticket = [regex]::Match($krb5, '(?m)^\s*ticket_lifetime\s*=\s*(\d+)h\s*$')
@@ -150,6 +136,13 @@ Write-Host "PASS: provisioning parameter validation"
             Assert ([int]$config.tgt_seconds -eq $case[1] * 3600) "CRAFT and Kerberos ticket lifetimes differ."
             Assert ([int]$config.cert_remaining_max_seconds -eq $ValidityHours * 3600 -and
                 [int]$config.cert_total_max_seconds -eq $ValidityHours * 3600) "Certificate validity caps differ."
+            Assert ($config.realm -ceq 'EXAMPLE.COM' -and $config.domain -ceq 'example.com' -and
+                $config.netbios -ceq 'EXAMPLE' -and $config.template_oid -eq '1.3.6.1.4.1.311.21.8.999.1' -and
+                $config.service_principal -ceq 'svc-offline-test@EXAMPLE.COM' -and
+                $config.ces_url -ceq 'https://ces.example.com/service.svc/CES' -and
+                $krb5 -match '(?m)^\s*kdc = dc\.example\.com\s*$' -and
+                $krb5 -match '(?m)^\s*default_realm = EXAMPLE\.COM\s*$') `
+                "Generated client configuration lost its domain, template, endpoint or KDC."
             Assert ($config.enabled -eq 'no' -and $config.require_full_tgt_lifetime -eq 'yes' -and
                 $config.renew_seconds -eq '604800' -and $krb5 -match '(?m)^\s*renew_lifetime\s*=\s*7d\s*$') `
                 "Generated client configuration lost its strict lifetime or renewal policy."
@@ -204,9 +197,10 @@ Write-Host "PASS: independently generated account passwords and existing account
     $path = Join-Path $root 'submitter.keytab'
     $calls = [System.Collections.Generic.List[object]]::new()
     $writeEmpty = $false
-    function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments)
+    function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments, [switch]$Sensitive)
     {
         Assert ($FilePath -eq 'ktpass.exe') "Unexpected keytab generator."
+        Assert $Sensitive "ktpass prints key material; its output must never be repeated in an error."
         $calls.Add($Arguments)
         $output = $Arguments[[Array]::IndexOf($Arguments, '/out') + 1]
         [System.IO.File]::WriteAllText($output, $(if ($writeEmpty) { '' } else { 'SYNTHETIC-NO-CREDENTIALS' }))
@@ -526,6 +520,17 @@ $topCommands = @($ast.EndBlock.FindAll({ param($node)
 Assert ($topCommands.Count -eq 2 -and $topCommands[0].GetCommandName() -eq 'Publish-CRAFTTemplates') `
     "Submitter credentials can be exported before the CA policy check."
 
+# ktpass resets the account password, so nothing that can still fail may follow the keytab export.
+$afterKeytab = @($ast.EndBlock.Statements | Where-Object {
+    $_.Extent.StartOffset -gt $topCommands[1].Extent.EndOffset
+} | ForEach-Object { $_.Extent.Text.Split()[0] } | Sort-Object -Unique)
+Assert (($afterKeytab -join ',') -eq 'Write-Host,Write-Info') `
+    "A step that can fail follows the irreversible keytab export: $($afterKeytab -join ', ')."
+$gate = $ast.EndBlock.Statements | Where-Object { $_.Extent.Text -like 'if (-not $PSCmdlet.ShouldProcess(*' }
+$firstChange = $ast.EndBlock.Statements | Where-Object { $_.Extent.Text -like '$ExportPath = Initialize-ExportDirectory*' }
+Assert ($gate -and $firstChange -and $gate.Extent.EndOffset -lt $firstChange.Extent.StartOffset) `
+    "The confirmation no longer precedes the first change."
+
 $powerShell = (Get-Process -Id $PID).Path
 Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command", "exit 0")
 Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command",
@@ -536,8 +541,16 @@ try
     Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command",
         "[Console]::Error.WriteLine('SYNTHETIC-NATIVE-ERROR'); exit 7")
 }
-catch { $rejected = $_.Exception.Message -like "*exit code 7*" }
-Assert $rejected "A failing native command was reported as successful."
+catch { $rejected = $_.Exception.Message -like "*exit code 7*SYNTHETIC-NATIVE-ERROR*" }
+Assert $rejected "A failing native command was reported as successful or lost its diagnostic output."
+$rejected = $false
+try
+{
+    Invoke-CheckedCommand $powerShell @("-NoProfile", "-NonInteractive", "-Command",
+        "[Console]::Error.WriteLine('SYNTHETIC-KEY-MATERIAL'); 'SYNTHETIC-KEY-MATERIAL'; exit 7") -Sensitive
+}
+catch { $rejected = $_.Exception.Message -like "*exit code 7*" -and $_.Exception.Message -notlike "*KEY-MATERIAL*" }
+Assert $rejected "A sensitive command's output was repeated in its failure message."
 $rejected = $false
 try { Invoke-CheckedCommand "craft-test-nonexistent-command.exe" @() }
 catch { $rejected = $true }

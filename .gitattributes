@@ -1,2 +1,15 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# cmd.exe resolves batch labels reliably only with CRLF; Windows PowerShell scripts follow suit.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Everything built or run on Linux keeps LF, even in a Windows checkout that is copied or mounted across.
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.sh text eol=lf
+*.in text eol=lf
+CMakeLists.txt text eol=lf
+.clang-format text eol=lf
+source/config/* text eol=lf

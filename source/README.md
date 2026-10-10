@@ -57,7 +57,7 @@ mechanism=key_trust
 kt_dc_url=ldap://dc01.domain.local
 ```
 
-Set `kt_dc_url` to the **writable domain controller that is also the KDC** in `krb5.conf`, so the written key is visible without replication delay. `ldaps://` is also accepted; either way the GSSAPI bind requires an integrity/confidentiality layer. Key Trust does not use `netbios`, `template_oid`, `ces_url`, `ces_auth`, `agent.pem`/`agent.key`, `https-trust.pem` or `https-client.*`. The user-certificate `ca-trust.pem`/`ca-crls.pem` validation is also unused; configure the Kerberos intermediate pool for the KDC chain as described in [shared installation](#shared-linux-installation). It shares the `kdc-trust.pem`, `kdc-crls.pem` and `krb5.conf` that PKINIT uses to validate the KDC, the setuid launcher, the `craft` service account, the `craft-users` group, and `/run/craft` for the per-user issuance lock.
+Set `kt_dc_url` to the **writable domain controller that is also the KDC** in `krb5.conf`, so the written key is visible without replication delay. Only `ldap://` is accepted: the GSSAPI bind supplies the integrity/confidentiality layer, which Active Directory refuses inside TLS. Key Trust does not use `netbios`, `template_oid`, `ces_url`, `ces_auth`, `agent.pem`/`agent.key`, `https-trust.pem` or `https-client.*`. The user-certificate `ca-trust.pem`/`ca-crls.pem` validation is also unused; configure the Kerberos intermediate pool for the KDC chain as described in [shared installation](#shared-linux-installation). It shares the `kdc-trust.pem`, `kdc-crls.pem` and `krb5.conf` that PKINIT uses to validate the KDC, the setuid launcher, the `craft` service account, the `craft-users` group, and `/run/craft` for the per-user issuance lock.
 
 Use an AD schema with `msDS-KeyCredentialLink` and a writable KDC that supports NGC/Key Trust authentication, as provided by Windows Server 2016 or later. The server capability and KDC certificate are prerequisites; a domain-functional-level label alone does not establish them. PKINIT freshness negotiation is handled by the MIT Kerberos plugin, which supports freshness tokens; verify interoperability with the deployed KDC policy. [18,19]
 
@@ -187,7 +187,7 @@ CES must allow **initial enrollment**, not be configured renewal-only. The endpo
 
 ## Build
 
-Required: Linux with `/proc` and memfd support; setuid support is needed for modes 1 and 2; C++20 compiler and standard library with `std::format` (GCC/libstdc++ >= 13.1 or equivalent); CMake >= 3.16; pkg-config; OpenSSL >= 3; MIT Kerberos >= 1.19; libcurl >= 7.62; libxml2 >= 2.9; OpenLDAP and Cyrus SASL development libraries; the **MIT PKINIT plugin at runtime**, plus the **Cyrus SASL GSSAPI plugin for modes 1 and 2**. Use fully patched distribution builds, not merely these minimum API versions.
+Required: Linux with `/proc` and memfd support; setuid support is needed for modes 1 and 2; C++20 compiler and standard library with `std::format` (GCC/libstdc++ >= 13.1 or equivalent; on RHEL 8 and 9 build with `gcc-toolset-13` or later); CMake >= 3.16; pkg-config; OpenSSL >= 1.1.1; MIT Kerberos providing `krb5_marshal_credentials` (1.20, or the RHEL 8.5+/9.0+ builds); libcurl >= 7.61; libxml2 >= 2.9; OpenLDAP and Cyrus SASL development libraries; the **MIT PKINIT plugin at runtime**, plus the **Cyrus SASL GSSAPI plugin for modes 1 and 2**. Use fully patched distribution builds, not merely these minimum API versions.
 
 CMake explicitly selects `-std=c++20`, disables GNU language extensions, and checks the required library facilities before building. A compiler accepting C++20 syntax is not enough when its standard library lacks `std::format`. GCC's implementation table lists formatting support from libstdc++ 13.1. [11]
 
@@ -231,6 +231,7 @@ Create `/etc/craft/config` as `root:root` mode 0644 using the snippet for your m
 | `submitter.keytab` | 1 and 2: service principal for LDAP/GSSAPI; mode 1 also uses it for CES Negotiate | `root:craft`, 0640 |
 | `agent.pem`, `agent.key` | 1: enrollment-agent certificate and matching unencrypted private key | `root:craft`, 0640 |
 | `https-trust.pem` | 1: CES HTTPS trust chain | `root:craft`, 0640 |
+| `https-crls.pem` | 1, optional: CRLs for every CA in the CES server chain; when present, revocation is enforced | `root:craft`, 0640 |
 | `https-client.pem`, `https-client.key` | 1 with mTLS: separate CES transport identity | `root:craft`, 0640 |
 
 The example Kerberos `pkinit_pool` points at `ca-trust.pem`. For mode 2 alone, remove that optional pool if no intermediates are needed, or point it at a root-controlled PEM bundle containing the KDC intermediates, such as `kdc-trust.pem`. This does not disable KDC trust or CRL checks. If supplied home certificates will also be used on that host, install their CA trust and CRLs as required for mode 3.
@@ -376,10 +377,10 @@ klist -c "$KRB5CCNAME"
 # Run the Kerberos-enabled Application Here.
 ```
 
-The optional ordinary wrapper `scripts/with-craft` runs any command with the new cache selected:
+CMake generates the optional ordinary wrapper `with-craft` in the build directory, naming the configured launcher; it runs any command with the new cache selected:
 
 ```sh
-./scripts/with-craft klist
+./build/with-craft klist
 ```
 
 The executable cannot modify a parent shell's environment. The cache belongs to the caller and contains that caller's TGT and session key. Treat it as a sensitive credential; exclude it from backups, sync and indexing where practicable. Existing content at the fixed cache name is intentionally replaced only after successful certificate validation, PKINIT and file publication. Nothing automatically removes an expired cache.
@@ -396,7 +397,7 @@ export KRB5CCNAME="$cache"
 
 The command returns when usable credentials and detached maintenance are ready. It renews TGTs from the cache alone and obtains fresh credentials near the absolute renewal deadline. Ten-hour/seven-day grants normally renew at eight hours and authenticate afresh around day six; actual ticket times set the schedule. Fresh acquisition invokes `craft` and follows the home-pair priority. It reuses a valid supplied pair or invokes the configured enrollment or credential-linking mechanism when both files are absent. Replace a home certificate before expiry; maintenance does not renew that certificate.
 
-Install `craft-maintain` without setuid/setgid on Linux 5.3+ with `/proc`. Configure administrator-controlled system `/etc/krb5.conf` for the same realm, KDC and AES policy as `/etc/craft/krb5.conf`. Renewal ignores user Kerberos overrides. The scheduler must retain background processes in the job cgroup. Home-only refresh works under `no_new_privs`; both privileged mechanisms additionally require later setuid `craft` calls.
+Install `craft-maintain` without setuid/setgid on Linux with `/proc`. It follows the job through a pidfd where the kernel has `pidfd_open` (5.3+) and through the job's `/proc` directory elsewhere, as on RHEL 8. Configure administrator-controlled system `/etc/krb5.conf` for the same realm, KDC and AES policy as `/etc/craft/krb5.conf`. Renewal ignores user Kerberos overrides. The scheduler must retain background processes in the job cgroup. Home-only refresh works under `no_new_privs`; both privileged mechanisms additionally require later setuid `craft` calls.
 
 The watched PID must belong to the caller and last for the job: keep its shell alive, `exec` the job or watch its controller. Maintenance stops with that PID; optional `--max-duration 21d` adds a cutoff. Jobs for one UID coordinate the shared cache, which remains after maintenance stops. Applications must reload refreshed credentials when authenticating again.
 
@@ -407,7 +408,7 @@ Inspect as the same user, using the original watched PID:
 klist -ef -c "$KRB5CCNAME"
 ```
 
-Status reports `ready`, `retrying`, `expired`, `stopped` or `failed`, Unix ticket times and the last error; `next_check=0` means stopped. A successful read does not prove credential health. Private status files remain after exit; events use the `craft-maintain` AUTHPRIV log identity.
+Status reports `ready`, `retrying`, `expired`, `stopped` or `failed`, Unix ticket times and the last error; `next_check=0` means stopped. A successful read does not prove credential health. Private status files remain after exit and are removed by a later maintainer once a week old; events use the `craft-maintain` AUTHPRIV log identity.
 
 Renewal failures preserve the cache and retry without immediate fresh authentication. Missing/expired TGTs, tickets that cannot extend near expiry and renewal-window rollover require fresh credentials. Failed fresh acquisitions share a cooldown from one minute to one hour, including home-certificate failures. Startup requires a usable TGT; later failures appear in status/logs and do not stop the job. Keep CRLs, the selected certificate credentials and KDC connectivity current.
 

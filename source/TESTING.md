@@ -52,15 +52,16 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 
 The native `craft-maintain-tests` harness uses synthetic caches and an issuer copied from `craft-tests`.
 Run it separately from CTest in a disposable Linux container; it refuses ordinary accounts or mismatched issuers.
-After building, prepare and run it inside that container:
+After building, prepare and run it inside that container, from `source/`:
 
 ```sh
-useradd --create-home --shell /bin/sh craft-maintain-test
-chmod 0700 /home/craft-maintain-test
-install -o root -g root -m 0755 build/craft-tests /usr/local/bin/craft
-printf '[libdefaults]\n dns_lookup_kdc = false\n udp_preference_limit = 1\n[realms]\n DOMAIN.LOCAL = {\n  kdc = 127.0.0.1:9\n }\n' > /etc/krb5.conf
-runuser -u craft-maintain-test -- build/craft-maintain-tests build/craft-maintain build/craft-tests
+CRAFT_DISPOSABLE_CONTAINER=yes sh tests/run-container-tests.sh build
 ```
+
+The script creates the `craft-maintain-test` account, installs `craft-tests` as the synthetic issuer and writes an
+`/etc/krb5.conf` whose KDC refuses connections. It then runs the harness twice: against `craft-maintain`, and
+against `craft-maintain-proc`, the same program forced onto the `/proc` job watch that kernels without
+`pidfd_open` (RHEL 8) use.
 
 Checks cover startup/closed pipes, status, job-exit/duration cleanup, credential expiry/rollover, concurrent starts,
 shared backoff, cancellation and unsafe caches. The KDC address intentionally refuses connections to verify renewal

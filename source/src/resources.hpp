@@ -1,10 +1,10 @@
 #pragma once
+
+// Ownership of C library resources, plus the Kerberos handles, ticket checks and cache encoding shared by the
+// worker and the maintainer.
 #include "common.hpp"
 #include <memory>
 #include <krb5.h>
-#include <openssl/asn1.h>
-#include <openssl/crypto.h>
-#include <openssl/x509.h>
 
 namespace craft
 {
@@ -15,7 +15,6 @@ struct Deleter
 {
     void operator()(T *value) const noexcept
     {
-        // Free managed C pointer if non-null.
         if (value) (void)Free(value);
     }
 };
@@ -31,13 +30,11 @@ template <class Owner> class Out
 public:
     explicit Out(Owner &owner) : owner_(owner)
     {
-        // Verify target pointer is uninitialized.
         need(!owner_, "C output would overwrite an owned resource");
     }
 
     ~Out() noexcept
     {
-        // Adopt out-parameter value into managed owner.
         owner_.reset(value_);
     }
 
@@ -47,39 +44,14 @@ public:
 
     operator typename Owner::pointer *() noexcept
     {
-        // Expose address of internal raw pointer.
         return &value_;
     }
 };
 
 template <class Owner> [[nodiscard]] auto out(Owner &owner)
 {
-    // Create RAII out-adapter for C API output parameter.
     return Out<Owner>(owner);
 }
-
-// Free OpenSSL stacks and their elements as one owned resource.
-inline void free_extensions(STACK_OF(X509_EXTENSION) * p) noexcept
-{
-    // Free OpenSSL extension stack and elements.
-    sk_X509_EXTENSION_pop_free(p, X509_EXTENSION_free);
-}
-
-inline void free_certificates(STACK_OF(X509) * p) noexcept
-{
-    // Free OpenSSL certificate stack and elements.
-    sk_X509_pop_free(p, X509_free);
-}
-
-inline void free_asn1_sequence(STACK_OF(ASN1_TYPE) * p) noexcept
-{
-    // Free ASN1 sequence stack and elements.
-    sk_ASN1_TYPE_pop_free(p, ASN1_TYPE_free);
-}
-
-using Extensions = Owned<STACK_OF(X509_EXTENSION), free_extensions>;
-using Certificates = Owned<STACK_OF(X509), free_certificates>;
-using Asn1Sequence = Owned<STACK_OF(ASN1_TYPE), free_asn1_sequence>;
 
 // Carry the owning Kerberos context in each deleter; destroy handles before the context.
 template <class T, auto Free> struct KrbDeleter
@@ -88,7 +60,6 @@ template <class T, auto Free> struct KrbDeleter
 
     void operator()(T *value) const noexcept
     {
-        // Free Kerberos handle within associated context.
         if (value) (void)Free(context, value);
     }
 };
@@ -97,29 +68,40 @@ template <class T, auto Free> using KrbOwned = std::unique_ptr<T, KrbDeleter<T, 
 
 template <class T, auto Free> [[nodiscard]] auto krb_owner(krb5_context context, T *value = nullptr)
 {
-    // Construct context-bound Kerberos RAII owner.
     return KrbOwned<T, Free>(value, {context});
 }
 
 inline void krb_check(krb5_context ctx, krb5_error_code code, std::string_view operation)
 {
-    // Check Kerberos API status and fail with diagnostic error message.
     if (!code) return;
-    if (!ctx) fail(std::string(operation));
+    if (!ctx) fail(operation);
     auto message = krb_owner<const char, krb5_free_error_message>(ctx, krb5_get_error_message(ctx, code));
     fail(std::format("{}: {}", operation, message ? message.get() : "Kerberos error"));
 }
 
 using KrbContext = Owned<std::remove_pointer_t<krb5_context>, krb5_free_context>;
 using KrbCache = KrbOwned<std::remove_pointer_t<krb5_ccache>, krb5_cc_destroy>;
+using KrbPrincipal = KrbOwned<std::remove_pointer_t<krb5_principal>, krb5_free_principal>;
+
+inline KrbPrincipal parse_principal(krb5_context ctx, const std::string &name)
+{
+    KrbPrincipal principal(nullptr, {ctx});
+    krb_check(ctx, krb5_parse_name(ctx, name.c_str(), out(principal)), "parse Kerberos principal");
+    return principal;
+}
+
+inline KrbPrincipal tgs_principal(krb5_context ctx, std::string_view realm)
+{
+    return parse_principal(ctx, std::format("krbtgt/{0}@{0}", realm));
+}
 
 // Restrict both transport and user initial credentials to interoperable AES enctypes.
 inline constexpr std::array AES_TYPES{ENCTYPE_AES256_CTS_HMAC_SHA1_96, ENCTYPE_AES128_CTS_HMAC_SHA1_96};
 
 // Enforce prohibited ticket flags across issuance and maintenance.
-inline constexpr auto PROHIBITED_TKT_FLAGS =
-    TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PROXIABLE |
-    TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE | TKT_FLG_POSTDATED | TKT_FLG_INVALID;
+inline constexpr auto PROHIBITED_TKT_FLAGS = TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PROXIABLE |
+                                             TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE | TKT_FLG_POSTDATED |
+                                             TKT_FLG_INVALID;
 
 inline constexpr bool is_aes(krb5_enctype type) noexcept
 {
@@ -143,12 +125,16 @@ inline krb5_enctype ticket_enctype(krb5_context ctx, const krb5_data &encoded)
     return ticket->enc_part.enctype;
 }
 
+// A ticket without an explicit start time is valid from its authentication time.
+inline int64_t start_time(const krb5_ticket_times &times) noexcept
+{
+    return times.starttime ? times.starttime : times.authtime;
+}
+
 inline void u32(Bytes &b, uint32_t n)
 {
-    b.push_back(static_cast<unsigned char>(n >> 24));
-    b.push_back(static_cast<unsigned char>(n >> 16));
-    b.push_back(static_cast<unsigned char>(n >> 8));
-    b.push_back(static_cast<unsigned char>(n));
+    for (int shift = 24; shift >= 0; shift -= 8)
+        b.push_back(static_cast<unsigned char>(n >> shift));
 }
 
 inline void counted(Bytes &b, const krb5_data &d)
@@ -160,21 +146,21 @@ inline void counted(Bytes &b, const krb5_data &d)
 inline void append_cache_credential(krb5_context ctx, Bytes &b, krb5_creds &cred)
 {
     krb5_data *marshaled = nullptr;
-    ScopeExit free_marshaled([&]() noexcept
-    {
-        // Securely erase and release Kerberos data buffer.
-        if (!marshaled) return;
-        if (marshaled->data) OPENSSL_cleanse(marshaled->data, marshaled->length);
-        krb5_free_data(ctx, marshaled);
-    });
+    ScopeExit free_marshaled(
+        [&]() noexcept
+        {
+            if (!marshaled) return;
+            if (marshaled->data) ::explicit_bzero(marshaled->data, marshaled->length);
+            krb5_free_data(ctx, marshaled);
+        });
     need(krb5_marshal_credentials(ctx, &cred, &marshaled) == 0, "serialize TGT failed");
     need(b.size() + marshaled->length <= MAX_BLOB, "TGT cache exceeds size limit");
     b.insert(b.end(), marshaled->data, marshaled->data + marshaled->length);
 }
 
+// Write the version 4 FILE header and default principal; MIT serializes each credential record.
 inline Bytes file_cache(krb5_context ctx, krb5_creds &cred)
 {
-    // Write the v4 FILE header and principal; let MIT serialize the credential record.
     Bytes b{5, 4, 0, 0};
     krb5_principal p = cred.client;
     u32(b, static_cast<uint32_t>(krb5_princ_type(ctx, p)));

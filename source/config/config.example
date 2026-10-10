@@ -20,6 +20,8 @@ mechanism=enrollment
 # KEY TRUST (mechanism=key_trust): writable domain controller for msDS-KeyCredentialLink.
 # Use the SAME DC that serves as the KDC in krb5.conf so the written key is seen immediately.
 # Requires service_principal and submitter.keytab below for the LDAP/GSSAPI bind.
+# Only ldap:// is accepted: the bind's GSSAPI layer protects the connection, and
+# Active Directory refuses that layer inside TLS (ldaps://).
 # kt_dc_url=ldap://dc01.domain.local
 
 # ENROLLMENT (mechanism=enrollment) only: use the actual template msPKI-Cert-Template-OID,
@@ -33,6 +35,9 @@ template_oid=1.3.6.1.4.1.311.21.8.999.1
 certificate_cn={user}
 
 # ENROLLMENT only: AD CS CES endpoint, not legacy /certsrv. Replace with the real endpoint.
+# It must be a plain https:// URL without credentials, query or fragment. The server is
+# verified against https-trust.pem only; add an optional https-crls.pem bundle to also
+# require an unrevoked CES server chain (it must then cover every CA in that chain).
 ces_url=https://ces.domain.local/IssuingCA_CES_Kerberos/service.svc/CES
 ces_auth=negotiate
 # Directory/submission account for the LDAP/GSSAPI bind. Required by both fallbacks:
@@ -44,6 +49,7 @@ service_principal=svc-linux-enroll@DOMAIN.LOCAL
 #
 # Active Directory Global Catalog lookup configuration (optional).
 # Defaults: gc_url=ldap://<domain>:3268, gc_base_dn derived from domain (e.g. DC=domain,DC=local).
+# gc_url must likewise be an ldap:// URL.
 # gc_url=ldap://domain.local:3268
 # gc_base_dn=DC=domain,DC=local
 

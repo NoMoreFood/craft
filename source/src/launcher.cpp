@@ -1,8 +1,5 @@
-// CRAFT entry point; certificate, network, and Kerberos processing stays in the worker.
+// CRAFT entry point; certificate, network and Kerberos processing stays in the worker.
 #include "common.hpp"
-#include <sys/wait.h>
-#include <signal.h>
-#include <iostream>
 using namespace craft;
 
 int main(int argc, char **)
@@ -13,27 +10,18 @@ int main(int argc, char **)
         const uid_t uid = getuid();
         const gid_t gid = getgid();
         need(argc == 1, "usage: craft (no arguments)");
-        need(uid != 0 && (geteuid() == uid || geteuid() == 0),
-             "run directly as a non-root user");
+        need(uid != 0 && (geteuid() == uid || geteuid() == 0), "run directly as a non-root user");
         need(getegid() == gid, "launcher must not be setgid");
         sysneed(clearenv() == 0, "clearenv");
         no_core();
         sigset_t empty;
         sigemptyset(&empty);
         sysneed(sigprocmask(SIG_SETMASK, &empty, nullptr) == 0, "reset signal mask");
-        for (int signum : {SIGPIPE, SIGCHLD, SIGALRM})
+        for (const int signum : {SIGPIPE, SIGCHLD, SIGALRM})
             signal(signum, SIG_DFL);
         alarm(120);
 
-        // Ensure standard file descriptors 0-2 are open to prevent descriptor reuse.
-        for (int fd = 0; fd < 3; ++fd)
-        {
-            if (fcntl(fd, F_GETFD) >= 0) continue;
-            Fd null(open("/dev/null", fd == 0 ? O_RDONLY : O_WRONLY));
-            sysneed(null.get() >= 0, "open /dev/null");
-            if (null.get() != fd) sysneed(dup2(null.get(), fd) == fd, "dup standard descriptor");
-            else (void)null.release();
-        }
+        ensure_standard_streams();
         close_from(3);
         sysneed(chdir("/") == 0, "chdir /");
 
@@ -44,70 +32,46 @@ int main(int argc, char **)
         sysneed(count >= 0, "getgroups");
         std::vector<gid_t> groups(static_cast<size_t>(count));
         if (count) sysneed(getgroups(count, groups.data()) == count, "getgroups");
-        const Fd binary = root_open(WORKER, false, true);
+        const Fd binary = root_open(WORKER, Trusted::Worker);
         const auto uidarg = std::to_string(uid);
+        const pid_t launcher = getpid();
 
+        // Run the fixed worker as `account` and publish the cache it returns. In home mode the worker first
+        // reports whether the caller supplied a certificate pair; false means the fallback is needed.
         const auto run_worker = [&](const Account &account, bool home)
         {
-            // Open a private channel and execute the trusted worker in the selected account.
-            std::array<int, 2> descriptors{};
-            sysneed(pipe2(descriptors.data(), O_CLOEXEC) == 0, "worker pipe");
-            Fd reader(descriptors[0]), writer(descriptors[1]);
-            const pid_t parent = getpid(), child = fork();
-            sysneed(child >= 0, "fork");
-            if (child == 0)
-            {
-                try
+            Pipe channel = make_pipe();
+            Child worker(fork_child(
+                [&]() -> int
                 {
-                    // Redirect standard I/O streams before relinquishing elevated credentials.
-                    sysneed(dup2(writer.get(), STDOUT_FILENO) == STDOUT_FILENO, "worker stdout");
-                    const Fd null(open("/dev/null", O_RDONLY));
-                    sysneed(null.get() >= 0, "worker stdin");
-                    sysneed(dup2(null.get(), STDIN_FILENO) == STDIN_FILENO, "worker stdin dup");
-                    if (binary.get() != 3) sysneed(dup3(binary.get(), 3, O_CLOEXEC) == 3, "worker executable fd");
-                    close_from(4);
-                    if (geteuid() == 0)
-                        drop(account.uid, home ? gid : account.gid,
-                             home ? std::span<const gid_t>(groups) : std::span<const gid_t>{});
-                    else
-                        sysneed(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0, "no_new_privs");
+                    // Redirect the standard streams before relinquishing elevated credentials.
+                    {
+                        const Fd null(open("/dev/null", O_RDONLY));
+                        sysneed(null.get() >= 0 && dup2(null.get(), STDIN_FILENO) == STDIN_FILENO &&
+                                    dup2(channel.writer.get(), STDOUT_FILENO) == STDOUT_FILENO,
+                                "worker standard streams");
+                    }
+                    keep_only({binary.get()});
+                    if (geteuid() != 0) sysneed(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0, "no_new_privs");
+                    else if (home) drop(account.uid, gid, groups);
+                    else drop(account.uid, account.gid);
                     sysneed(prctl(PR_SET_PDEATHSIG, SIGKILL) == 0, "worker parent-death signal");
-                    need(getppid() == parent, "launcher disappeared");
+                    need(getppid() == launcher, "launcher disappeared");
 
-                    // Execute worker binary using verified descriptor with minimal sanitized environment.
-                    auto args = std::to_array<char *>({const_cast<char *>(WORKER),
-                                                       const_cast<char *>(home ? "--home" : uidarg.c_str()),
-                                                       const_cast<char *>(home ? uidarg.c_str() :
-                                                                                caller.name.c_str()),
-                                                       home ? const_cast<char *>(caller.name.c_str()) : nullptr,
-                                                       nullptr});
-                    char path[] = "PATH=/usr/bin:/bin", lang[] = "LANG=C", homevar[] = "HOME=/nonexistent";
-                    char krb[] = "KRB5_CONFIG=/etc/craft/krb5.conf";
-                    auto env = std::to_array<char *>({path, lang, homevar, krb, nullptr});
-                    fexecve(3, args.data(), env.data());
-                    fail("exec fixed worker failed");
-                }
-                catch (const std::exception &error)
-                {
-                    dprintf(STDERR_FILENO, "craft: %s\n", error.what());
-                    _exit(1);
-                }
-            }
-
-            writer = Fd();
-            ScopeExit reap([&]() noexcept
+                    // Execute the verified descriptor with an empty environment; the worker sets its own.
+                    const char *args[] = {WORKER,
+                                          home ? "--home" : uidarg.c_str(),
+                                          home ? uidarg.c_str() : caller.name.c_str(),
+                                          home ? caller.name.c_str() : nullptr,
+                                          nullptr};
+                    char *environment[] = {nullptr};
+                    fexecve(3, const_cast<char **>(args), environment);
+                    sysfail("exec fixed worker");
+                }));
+            channel.writer = Fd();
+            const auto finish = [&]
             {
-                kill(child, SIGKILL);
-                waitpid_retry(child, nullptr);
-            });
-            const auto wait_worker = [&]
-            {
-                int status{};
-                const pid_t waited = waitpid_retry(child, &status, 0);
-                sysneed(waited == child, "waitpid");
-                reap.release();
-                need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-                     "credential acquisition failed; existing cache was not replaced");
+                need(worker.wait(), "credential acquisition failed; existing cache was not replaced");
             };
 
             // Read only the source-selection byte while elevated; credentials require a permanent drop.
@@ -116,33 +80,32 @@ int main(int argc, char **)
                 unsigned char selected{};
                 ssize_t length;
                 do
-                {
-                    length = read(reader.get(), &selected, 1);
-                } while (length < 0 && errno == EINTR);
+                    length = read(channel.reader.get(), &selected, 1);
+                while (length < 0 && errno == EINTR);
                 need(length == 1 && selected <= 1,
                      "user certificate selection failed; existing cache was not replaced");
                 if (!selected)
                 {
-                    wait_worker();
+                    finish();
                     return false;
                 }
             }
             if (geteuid() == 0) drop(uid, gid, groups);
-            auto cache = read_all(reader.get());
+            auto cache = read_all(channel.reader.get());
             ScopeExit erase([&]() noexcept { wipe(cache); });
-            reader = Fd();
-            wait_worker();
+            channel.reader = Fd();
+            finish();
 
-            // Validate ticket cache format and publish atomically to the caller's home.
+            // Validate the ticket cache header and publish atomically under the cache lock.
             need(cache.size() > 4 && cache[0] == 5 && cache[1] == 4,
                  "worker returned no valid FILE-cache header");
             const Fd directory = caller_home(caller), lock = cache_lock(directory.get(), CACHE_LOCK);
-            publish_cache(caller, cache);
-            std::cout << std::format("FILE:{}/{}\n", caller.home, CACHE_NAME);
+            publish_cache(directory.get(), cache);
+            write_all(STDOUT_FILENO, byte_view(std::format("FILE:{}/{}\n", caller.home, CACHE_NAME)));
             return true;
         };
 
-        // Prefer home credentials entirely under the caller; enrollment alone needs the service account.
+        // Prefer home credentials entirely under the caller; only the fallback needs the service account.
         if (run_worker(caller, true)) return 0;
         need(geteuid() == 0,
              "no ~/.config/craft/user.pem/user.key pair; the configured fallback (enrollment or Key Trust) "
@@ -154,7 +117,7 @@ int main(int argc, char **)
     }
     catch (const std::exception &error)
     {
-        std::cerr << "craft: " << error.what() << '\n';
+        dprintf(STDERR_FILENO, "craft: %s\n", error.what());
         return 1;
     }
 }

@@ -109,6 +109,7 @@ function Resolve-Account([string]$Identity, [bool]$UserOnly = $false)
         {
             & $command -LDAPFilter "(userPrincipalName=$escaped)" -ErrorAction Stop
         })
+        $accounts = @($accounts | Sort-Object -Property DistinguishedName -Unique)
         if ($accounts.Count -ne 1) { throw "Account UPN '$Identity' did not resolve to exactly one account." }
         return $accounts[0]
     }
@@ -152,7 +153,8 @@ function New-KeyCredentialRule([System.Security.Principal.SecurityIdentifier]$Si
 
 function Test-KeyCredentialRule($Rule, $Expected)
 {
-    # Match only the explicit rule this helper grants, preserving other scopes and permissions.
+    # Match only the explicit rule this helper grants, preserving other scopes and permissions. Both rules
+    # carry SID identities, so an account that no longer resolves to a name cannot stop the comparison.
     return -not $Rule.IsInherited -and
         $Rule.AccessControlType -eq $Expected.AccessControlType -and
         $Rule.ActiveDirectoryRights -eq $Expected.ActiveDirectoryRights -and
@@ -161,8 +163,7 @@ function Test-KeyCredentialRule($Rule, $Expected)
         $Rule.InheritedObjectType -eq $Expected.InheritedObjectType -and
         $Rule.InheritanceFlags -eq $Expected.InheritanceFlags -and
         $Rule.PropagationFlags -eq $Expected.PropagationFlags -and
-        $Rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq
-            $Expected.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        $Rule.IdentityReference.Value -eq $Expected.IdentityReference.Value
 }
 
 function Assert-UnprivilegedTarget([string]$DistinguishedName, [bool]$IsUser, [bool]$Force)
@@ -280,7 +281,8 @@ Write-Info "msDS-KeyCredentialLink : $attributeGuid"
 $aclPath = "AD:\$targetDN"
 $acl = Get-Acl -Path $aclPath
 $rule = New-KeyCredentialRule $trusteeSid $attributeGuid $userClassGuid (-not $isUser)
-$existing = @($acl.Access | Where-Object { Test-KeyCredentialRule $_ $rule })
+$existing = @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) |
+    Where-Object { Test-KeyCredentialRule $_ $rule })
 
 if ($Remove)
 {
@@ -309,11 +311,14 @@ if ($existing.Count)
     return
 }
 $acl.AddAccessRule($rule)
-if ($PSCmdlet.ShouldProcess($targetDN, "Grant msDS-KeyCredentialLink write to $($trustee.SamAccountName)"))
+
+# Report a delegation only when it was applied: -WhatIf or a declined prompt changes nothing.
+if (-not $PSCmdlet.ShouldProcess($targetDN, "Grant msDS-KeyCredentialLink write to $($trustee.SamAccountName)"))
 {
-    Set-Acl -Path $aclPath -AclObject $acl
-    Write-Info "Delegation granted (ReadProperty, WriteProperty on msDS-KeyCredentialLink only)."
+    return
 }
+Set-Acl -Path $aclPath -AclObject $acl
+Write-Info "Delegation granted (ReadProperty, WriteProperty on msDS-KeyCredentialLink only)."
 
 Write-Host @"
 
@@ -326,6 +331,7 @@ Scope           : $(if ($isUser) { "this user object" } else { "descendant user 
 Permission      : ReadProperty, WriteProperty on msDS-KeyCredentialLink
 
 This write authorizes Key Trust authentication as the target account(s).
+The privileged-account check ran once, now: accounts added to this scope later inherit the delegation.
 Keep privileged accounts outside the delegated scope and review membership regularly.
 Revoke with -Remove. See docs/04-Key-Credential-Link-Delegation.md.
 ======================================================================

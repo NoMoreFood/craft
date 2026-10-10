@@ -35,6 +35,9 @@ GOTO Options
 SET PSModulePath=%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" ^
     -NoLogo -NoProfile -NonInteractive -Command ^
+    "if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {" ^
+    "Write-Warning 'This host runs unsigned PowerShell in Constrained Language Mode. Sign a .ps1 copy of this file and run that copy; see its help notes.';" ^
+    "exit 1 };" ^
     "$craftOptions = @{TemplateName=$env:CRAFT_CERTIFICATE_TEMPLATE.Trim([char]34);" ^
     "Destination=$env:CRAFT_CERTIFICATE_DESTINATION.Trim([char]34);" ^
     "DeleteAfterExport=($env:CRAFT_CERTIFICATE_DELETE -eq '1');" ^
@@ -99,6 +102,10 @@ EXIT /B 64
 .NOTES
     Windows PowerShell 5.x, .NET Framework 4.6 or newer, and the Windows PKI module are required.
     The CMD wrapper uses built-in Windows PowerShell modules even when invoked from PowerShell 7.
+    The wrapper runs this file as an unsigned in-memory script. Where AppLocker or WDAC script rules put
+    such scripts in Constrained Language Mode it stops with a warning: copy the file to
+    Request-CRAFT-Certificate.ps1, sign that copy with a trusted code-signing certificate, and run it with
+    -TemplateName, -Destination, -RenewBeforeDays, -DeleteAfterExport and -WhatIf.
     Transfer the pair to the Linux user's ~/.config/craft and set user.key permissions to 0600.
     Linux trust anchors/CRLs and KDC mapping must accept the issuing CA and certificate.
     Exit codes: 0 success/preview, 1 failure, 2 pending approval, 64 CMD usage error.
@@ -196,7 +203,7 @@ namespace Craft
             return node;
         }
 
-        private static X509Extension RequiredExtension(X509Certificate2 certificate, string oid)
+        private static X509Extension FindExtension(X509Certificate2 certificate, string oid, bool required)
         {
             X509Extension result = null;
             foreach (X509Extension extension in certificate.Extensions)
@@ -205,7 +212,8 @@ namespace Craft
                 if (result != null) throw new InvalidOperationException("Duplicate certificate extension: " + oid);
                 result = extension;
             }
-            if (result == null) throw new InvalidOperationException("Missing certificate extension: " + oid);
+            if (result == null && required)
+                throw new InvalidOperationException("Missing certificate extension: " + oid);
             return result;
         }
 
@@ -215,13 +223,17 @@ namespace Craft
             if (current && (certificate.NotBefore.ToUniversalTime() > DateTime.UtcNow ||
                 certificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow.AddSeconds(60)))
                 throw new InvalidOperationException("Certificate must be currently valid for at least 60 seconds.");
-            X509BasicConstraintsExtension basic = new X509BasicConstraintsExtension(
-                RequiredExtension(certificate, "2.5.29.19"), false);
+
+            // An end-entity certificate may omit basicConstraints, as stock AD CS templates do; one that is
+            // present must not describe a CA. The key-usage check below rules out certificate signing.
+            X509Extension constraints = FindExtension(certificate, "2.5.29.19", false);
+            X509BasicConstraintsExtension basic = constraints == null
+                ? null : new X509BasicConstraintsExtension(constraints, false);
             X509KeyUsageExtension usage = new X509KeyUsageExtension(
-                RequiredExtension(certificate, "2.5.29.15"), false);
+                FindExtension(certificate, "2.5.29.15", true), false);
             X509EnhancedKeyUsageExtension eku = new X509EnhancedKeyUsageExtension(
-                RequiredExtension(certificate, "2.5.29.37"), false);
-            if (basic.CertificateAuthority || basic.HasPathLengthConstraint ||
+                FindExtension(certificate, "2.5.29.37", true), false);
+            if ((basic != null && (basic.CertificateAuthority || basic.HasPathLengthConstraint)) ||
                 (usage.KeyUsages & X509KeyUsageFlags.DigitalSignature) == 0 ||
                 (usage.KeyUsages & (X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign)) != 0 ||
                 !eku.EnhancedKeyUsages.Cast<Oid>().Any(oid => oid.Value == "1.3.6.1.4.1.311.20.2.2" ||
@@ -229,7 +241,7 @@ namespace Craft
                 throw new InvalidOperationException("Use a non-CA digital-signature logon certificate.");
 
             // Require exactly one UTF8String Microsoft UPN otherName, including valid nested DER framing.
-            byte[] san = RequiredExtension(certificate, "2.5.29.17").RawData;
+            byte[] san = FindExtension(certificate, "2.5.29.17", true).RawData;
             byte[] upnOid = { 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x03 };
             int cursor = 0, count = 0;
             DerNode names = ReadDer(san, ref cursor, san.Length);
@@ -786,10 +798,10 @@ function Invoke-CraftCertificateEnrollment($Target, [string]$Template,
         $result = Get-Certificate @parameters
         if ([string]$result.Status -eq 'Pending')
         {
-            $error = [System.InvalidOperationException]::new(
+            $pending = [System.InvalidOperationException]::new(
                 'Certificate approval is pending in the Windows request store; existing exports were retained.')
-            $error.Data['CraftExitCode'] = 2
-            throw $error
+            $pending.Data['CraftExitCode'] = 2
+            throw $pending
         }
         if ([string]$result.Status -ne 'Issued' -or $null -eq $result.Certificate)
         {

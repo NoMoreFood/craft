@@ -159,7 +159,20 @@ try
     $command = '""' + $scriptPath + '""'
     $result = Invoke-Cmd $command
     Assert ($result.ExitCode -eq 64) 'Missing CMD arguments did not return the usage status.'
-    Write-Host 'PASS: CMD and Windows PowerShell previews preserve arguments without enrollment or files'
+
+    # A site that enforces script signing runs a signed .ps1 copy instead of the CMD wrapper.
+    $copy = Join-Path $env:TEMP ('Request-CRAFT-Certificate.' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    [System.IO.File]::Copy($scriptPath, $copy)
+    try
+    {
+        $output = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $copy `
+            -TemplateName $template -Destination $preview -RenewBeforeDays 2 -WhatIf 2>&1
+        Assert ($LASTEXITCODE -eq 0 -and ($output -join "`n").Contains($template) -and
+            ($output -join "`n").Contains('less than 2 day(s)')) 'A .ps1 copy of the helper did not run as a script.'
+        Assert (-not (Test-Path -LiteralPath $root)) 'The .ps1 copy preview changed the filesystem.'
+    }
+    finally { [System.IO.File]::Delete($copy) }
+    Write-Host 'PASS: CMD, Windows PowerShell and .ps1-copy previews preserve arguments without enrollment or files'
 
     Initialize-CraftKeyExporter
     $target = Initialize-CraftCertificateDestination $root
@@ -507,7 +520,7 @@ try
     $export = Initialize-CraftCertificateDestination (Join-Path $root 'ValidateBeforeReplace')
     Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
     $snapshot = (Read-CraftSnapshot $export) -join ':'
-    foreach ($profile in @('Future', 'Expired', 'MissingBC', 'CA', 'MissingUPN', 'DuplicateUPN',
+    foreach ($profile in @('Future', 'Expired', 'CA', 'MissingUPN', 'DuplicateUPN',
         'WrongEKU', 'SigningCA', 'NoSignature'))
     {
         $script:certificatePath = New-CraftFixture 60 $profile
@@ -519,6 +532,18 @@ try
     }
     $script:certificatePath = New-CraftFixture 60 'PKINIT'
     Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' | Out-Null
+
+    # Stock AD CS end-entity templates omit basicConstraints; such a certificate is a valid replacement.
+    $script:certificatePath = New-CraftFixture 90 'MissingBC'
+    Invoke-CraftCertificateEnrollment $export 'OfflineUserLogon' -RenewBeforeDays 3650 | Out-Null
+    $pem = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        (Read-Pem (Join-Path $export.Path 'user.pem') 'CERTIFICATE'))
+    try
+    {
+        Assert ($pem.Thumbprint -eq (Split-Path -Leaf $script:certificatePath)) `
+            'A certificate without basicConstraints was not accepted as the replacement.'
+    }
+    finally { $pem.Dispose() }
     Write-Host 'PASS: replacement dates, CA constraints, usages and one UPN are checked before publication/deletion'
 
     $script:certificatePath = New-CraftFixture 20
