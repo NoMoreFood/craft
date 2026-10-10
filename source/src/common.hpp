@@ -330,7 +330,8 @@ inline std::string root_text(const std::string &path, size_t maximum = 65536)
 struct Mapping
 {
     uid_t uid;
-    std::string name, upn;
+    std::string name, upn, dn;
+    std::string object_ref = {};
 };
 
 inline std::string domain_to_dn(std::string_view domain)
@@ -393,6 +394,23 @@ inline pid_t waitpid_retry(pid_t pid, int *status = nullptr, int options = 0)
 }
 
 // Generate unpredictable names from the kernel random source.
+inline Bytes random_bytes(size_t count)
+{
+    need(count <= MAX_BLOB, "random input exceeds size limit");
+    Bytes bytes(count);
+    auto remaining = std::span(bytes);
+
+    // Collect cryptographically strong random bytes from the kernel source.
+    while (!remaining.empty())
+    {
+        const auto n = getrandom(remaining.data(), remaining.size(), 0);
+        if (n < 0 && errno == EINTR) continue;
+        sysneed(n > 0, "getrandom");
+        remaining = remaining.subspan(static_cast<size_t>(n));
+    }
+    return bytes;
+}
+
 inline std::string random_hex(size_t count = 16)
 {
     need(count <= MAX_BLOB, "random input exceeds size limit");

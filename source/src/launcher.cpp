@@ -145,7 +145,8 @@ int main(int argc, char **)
         // Prefer home credentials entirely under the caller; enrollment alone needs the service account.
         if (run_worker(caller, true)) return 0;
         need(geteuid() == 0,
-             "no ~/.config/craft/user.pem/user.key pair; enrollment requires the setuid-root launcher");
+             "no ~/.config/craft/user.pem/user.key pair; the configured fallback (enrollment or Key Trust) "
+             "requires the setuid-root launcher");
         const Account service = service_account();
         need(uid != service.uid, "invalid calling account");
         run_worker(service, false);

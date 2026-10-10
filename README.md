@@ -1,15 +1,15 @@
 # CRAFT: Certificate Request Agent for Tickets
 
-CRAFT obtains Kerberos credentials noninteractively from a trusted, administrator-managed Linux endpoint, including a host that is not domain-joined. Users can supply a certificate and private key in their home directory for an entirely unprivileged workflow. When that pair is absent, an authorized deployment can enroll a short-lived certificate on the user's behalf. Both paths support unattended scripts and Kerberos-aware applications without retaining the user's AD password.
+CRAFT obtains Kerberos credentials noninteractively from a trusted, administrator-managed Linux endpoint, including a host that is not domain-joined. Users can supply a certificate and private key in their home directory for an entirely unprivileged workflow. When that pair is absent, an authorized deployment can obtain a short-lived credential on the user's behalf — either by CA enrollment-on-behalf-of or by a temporary directory Key Trust key. All paths support unattended scripts and Kerberos-aware applications without retaining the user's AD password.
 
-This supports automation alongside MFA-protected interactive sign-in. CRAFT does not perform an MFA challenge or establish that the user completed one. Authentication depends on the supplied certificate and KDC account mapping, or on administrator-authorized enrollment and CA restrictions.
+This supports automation alongside MFA-protected interactive sign-in. CRAFT does not perform an MFA challenge or establish that the user completed one. Authentication depends on the supplied certificate and KDC account mapping, on administrator-authorized enrollment and CA restrictions, or on a narrowly delegated `msDS-KeyCredentialLink` write.
 
 ## How it works
 
 1. Resolve the invoking Linux user's real UID, NSS username and home directory.
-2. Look for `~/.config/craft/user.pem` and `~/.config/craft/user.key` using the caller's permissions. A complete pair takes priority; partial, unsafe or invalid inputs fail without enrollment fallback.
-3. If both files are absent, use the configured enrollment path: resolve the AD UPN, generate a temporary RSA key and EOBO request, and obtain a certificate through CES and the CA.
-4. Validate the selected certificate and key against the applicable certificate policy, configured trust chain and current CRLs.
+2. Look for `~/.config/craft/user.pem` and `~/.config/craft/user.key` using the caller's permissions. A complete pair takes priority; partial, unsafe or invalid inputs fail without a fallback.
+3. If both files are absent, use the configured privileged fallback. `mechanism=enrollment` resolves the AD UPN, generates a temporary RSA key and EOBO request, and obtains a certificate through CES and the CA. `mechanism=key_trust` writes a temporary self-signed key to the caller's `msDS-KeyCredentialLink`, authenticates through Key Trust PKINIT, and removes it — no CA, CES or enrollment agent.
+4. Validate the selected certificate and key against the applicable certificate policy, configured trust chain and current CRLs (the Key Trust self-signed key is authorized by the directory write, not a CA chain).
 5. Use MIT Kerberos PKINIT for `<Linux username>@<configured realm>`. The KDC enforces certificate-to-account mapping; CRAFT checks the returned TGT.
 6. Atomically publish a mode-0600 `.krb5cc_craft` cache in the invoking user's home.
 
@@ -49,6 +49,7 @@ Certificate loading, validation, PKINIT and cache publication run as the caller.
 - Home-directory PEM credentials take priority and work with a non-setuid installation.
 - Detached TGT renewal and fresh authentication for long-running jobs, using the selected certificate source.
 - AD CS enrollment-on-behalf-of using an administrator-provisioned enrollment-agent certificate.
+- Key Trust fallback that writes a temporary key to `msDS-KeyCredentialLink`, authenticates, and removes it, with no CA, CES or enrollment agent, governed by narrowly delegated directory write access.
 - HTTP Negotiate or mutual TLS for CES transport, with LDAP/GSSAPI directory lookup.
 - Enrollment validates the directory-resolved UPN; home certificates rely on KDC mapping to the fixed caller principal.
 - AES128/AES256 Kerberos encryption, ten-hour requested TGT validity, and seven-day requested renewal.
@@ -90,9 +91,11 @@ export KRB5CCNAME="$cache"
 | [Validation and tests](source/TESTING.md) | Offline tests, recorded lab results, and live acceptance checks |
 | [Security review notes](source/SECURITY.md) | Trust assumptions, implemented controls, and limitations |
 | [Enrollment agent restrictions](docs/03-Enrollment-Agent-Restrictions.md) | CA authorization, privileged-account exclusion, key custody, and denial tests |
+| [Key Trust delegation](docs/04-Key-Credential-Link-Delegation.md) | `msDS-KeyCredentialLink` authorization boundary, least-privilege delegation, cleanup, and denial tests |
 | [Process overview](docs/01-CRAFT-Process-Overview.docx) | Enrollment, service tickets, and credential lifecycle ([PDF](docs/01-CRAFT-Process-Overview.pdf)) |
 | [Configuration and validation](docs/02-CRAFT-Configuration-and-Validation.docx) | Certificate profile and lab acceptance ([PDF](docs/02-CRAFT-Configuration-and-Validation.pdf)) |
 | [Windows provisioning helper](scripts/Configure-CRAFT-CA.ps1) | Optional partial CA/template setup for a lab |
+| [Key Trust delegation helper](scripts/Grant-CRAFTKeyCredentialLink.ps1) | Least-privilege `msDS-KeyCredentialLink` delegation to the service account on an OU or user |
 | [Windows certificate helper](scripts/Request-CRAFT-Certificate.cmd) | User enrollment and PEM export for the home-certificate workflow |
 
 ### Diagrams

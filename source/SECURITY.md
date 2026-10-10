@@ -9,7 +9,9 @@ In enrollment mode, resolving a Unix username against Active Directory delegates
 
 Restrict the enrollment agent at the CA to a dedicated template and approved recipient group. Local policy checks are defense in depth, not a replacement for CA restrictions. Do not authorize privileged AD administrators in the initial deployment. Protect and audit UID/name lifecycle, NSS providers, root accounts and the service account.
 
-See [Enrollment Agent Restrictions](../docs/03-Enrollment-Agent-Restrictions.md) for CA policy, privileged-account exclusion, credential custody, and live denial tests.
+In Key Trust mode (`mechanism=key_trust`), the service account writes a temporary NGC key to the caller's `msDS-KeyCredentialLink`, authenticates with Key Trust PKINIT, and removes the key. Writing that attribute on an account is equivalent to authenticating as it; the delegated write scope is the authorization boundary, and no CA, enrollment agent or certificate template is involved. Delegate only ReadProperty/WriteProperty on that one attribute over a dedicated OU of ordinary users, keep privileged accounts out of that scope, and keep the service account unable to rewrite its own delegation. CRAFT removes the key on every exit path and logs a CRITICAL AUTHPRIV event if removal fails; a residual key is a standing credential until cleared. The self-signed certificate used for this PKINIT is not CA-verified because the directory write, not a chain, authorizes it.
+
+See [Enrollment Agent Restrictions](../docs/03-Enrollment-Agent-Restrictions.md) for CA policy and [Key Trust Delegation](../docs/04-Key-Credential-Link-Delegation.md) for the `msDS-KeyCredentialLink` authorization boundary, privileged-account exclusion, credential custody, and live denial tests.
 
 ## Lifetime and Encryption Policy
 
@@ -44,7 +46,8 @@ Enrollment generates temporary user certificate/key material and does not export
 - Parent writes as caller, unique mode-0600 staging file, atomic fixed-name replacement, no target-symlink following.
 - HTTPS peer/name verification, no redirects or proxy environment, no explicitly enabled Basic/NTLM authentication. Directory access uses the separately provisioned keytab over LDAP/GSSAPI in both CES modes.
 - Home files: fixed NSS paths, caller ownership, safe directories, private key permissions, regular files, no symlinks/extra hard links and bounded reads.
-- Both modes: matching key, non-CA/logon usage, current certificate validity, CA trust and CRLs. Enrollment additionally checks agent authorization profile, directory UPN, template and short validity.
+- Both certificate modes: matching key, non-CA/logon usage, current certificate validity, CA trust and CRLs. Enrollment additionally checks agent authorization profile, directory UPN, template and short validity.
+- Key Trust: integrity/confidentiality-protected GSSAPI LDAP bind to the configured writable DC, single-value add that preserves other key credentials, directory-UPN-checked self-signed identity, and mandatory removal of the temporary key on success and failure, with a CRITICAL log if it cannot be removed.
 - PKINIT certificate/private key and pinned KDC trust; rejecting password prompter; explicit TGT flags, principal, AES session/envelope and actual lifetime validation.
 - Bounded network payloads, forbidden XML DTD/entity declarations, per-user issuance lock/interval for enrollment, execution deadlines, CPU/address-space limits, no core dumps and non-dumpable processes.
 - No private key or TGT printed in diagnostics. The home worker first sends a selection byte; subsequent stdout pipe data is credentials; the launcher's stdout is only the cache name.
@@ -65,4 +68,4 @@ Follow [TESTING.md](TESTING.md). A successful build or synthetic cryptographic t
 
 ## Immediate Disable
 
-Set `enabled=no` or remove execute permission to disable fresh acquisition through both paths. Removing only the setuid bit disables enrollment fallback; a valid home pair can still authenticate. Stop renewal by sending SIGTERM to active maintainers' recorded `maintainer_pid`. Revoke affected enrollment-agent/transport credentials if compromise is suspected. Issued tickets can remain valid until expiry; deleting a cache is not revocation. Review CA/CES/KDC/AUTHPRIV logs and follow your incident-response process.
+Set `enabled=no` or remove execute permission to disable fresh acquisition through every path. Removing only the setuid bit disables both privileged fallbacks; a valid home pair can still authenticate. Stop renewal by sending SIGTERM to active maintainers' recorded `maintainer_pid`. Revoke affected enrollment-agent/transport credentials if compromise is suspected. For Key Trust, revoke the delegation (`Grant-CRAFTKeyCredentialLink.ps1 -Remove`), rotate `submitter.keytab`, and clear any residual `msDS-KeyCredentialLink` values on affected accounts. Issued tickets can remain valid until expiry; deleting a cache, clearing a key credential or rotating a keytab is not ticket revocation. Review CA/CES/KDC/directory/AUTHPRIV logs and follow your incident-response process.

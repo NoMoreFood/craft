@@ -5,11 +5,14 @@
 #include <signal.h>
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
+#include <openssl/bn.h>
 #include <openssl/cms.h>
+#include <openssl/core_names.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
+#include <openssl/sha.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <curl/curl.h>
@@ -73,7 +76,7 @@ inline std::string objtext(const ASN1_OBJECT *o)
     return s;
 }
 
-enum class CertificateSource { Enrollment, Home };
+enum class CertificateSource { Enrollment, Home, KeyTrust };
 
 struct Config
 {
@@ -82,6 +85,8 @@ struct Config
     std::string gc_url, gc_base_dn;
     uint32_t tgt = 36000, renew = 604800, cert_remaining = 36000, cert_total = 36000, interval = 60;
     bool require_full_tgt_lifetime = true;
+    std::string mechanism = "enrollment", kt_dc_url;
+    CertificateSource source = CertificateSource::Enrollment;
 };
 
 // Parse a strict configuration independently of privileged file access.
@@ -98,6 +103,8 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
                                         "ces_url",
                                         "ces_auth",
                                         "service_principal",
+                                        "mechanism",
+                                        "kt_dc_url",
                                         "certificate_cn",
                                         "require_full_tgt_lifetime",
                                         "tgt_seconds",
@@ -124,19 +131,34 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
         return i->second;
     };
     need(get("enabled") == "yes", "service disabled; review configuration and set enabled=yes");
-    const auto enrollment_value = [&](const char *key)
+
+    // The caller's hint selects home versus the privileged fallback; configuration picks the fallback mechanism.
+    std::string mechanism = "enrollment";
+    if (source != CertificateSource::Home)
     {
-        return source == CertificateSource::Enrollment ? get(key) : std::string{};
+        if (v.contains("mechanism")) mechanism = v["mechanism"];
+        need(mechanism == "enrollment" || mechanism == "key_trust",
+             "mechanism must be enrollment or key_trust");
+        source = mechanism == "key_trust" ? CertificateSource::KeyTrust : CertificateSource::Enrollment;
+    }
+    const bool directory = source != CertificateSource::Home;         // service account and LDAP/GSSAPI
+    const bool enrollment = source == CertificateSource::Enrollment;  // CA, CES and enrollment agent
+    const bool key_trust = source == CertificateSource::KeyTrust;     // msDS-KeyCredentialLink
+    const auto when = [&](bool required, const char *key)
+    {
+        return required ? get(key) : std::string{};
     };
-    Config c{.domain = get("domain"),
-             .realm = get("realm"),
-             .netbios = enrollment_value("netbios"),
-             .template_oid = enrollment_value("template_oid"),
-             .ces_url = enrollment_value("ces_url"),
-             .ces_auth = enrollment_value("ces_auth"),
-             .service_principal = enrollment_value("service_principal"),
-             .gc_url = {},
-             .gc_base_dn = {}};
+    Config c;
+    c.domain = get("domain");
+    c.realm = get("realm");
+    c.netbios = when(enrollment, "netbios");
+    c.template_oid = when(enrollment, "template_oid");
+    c.ces_url = when(enrollment, "ces_url");
+    c.ces_auth = when(enrollment, "ces_auth");
+    c.service_principal = when(directory, "service_principal");
+    c.mechanism = mechanism;
+    c.kt_dc_url = when(key_trust, "kt_dc_url");
+    c.source = source;
 
     // Validate domain syntax and length limits using regex
     need(c.domain.size() < 254 && c.realm.size() < 254 && c.netbios.size() <= 15, "domain value too long");
@@ -147,13 +169,17 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     const static std::regex netbios_re(R"(^[A-Z0-9_-]+$)");
     need(std::regex_match(c.domain, domain_re), "domain must be lowercase DNS syntax");
     need(std::regex_match(c.realm, realm_re), "realm must be uppercase DNS syntax");
-    if (source == CertificateSource::Enrollment)
+    if (enrollment)
     {
         need(std::regex_match(c.netbios, netbios_re), "invalid NetBIOS domain");
         Obj oid(OBJ_txt2obj(c.template_oid.c_str(), 1));
         sslneed(oid != nullptr, "invalid template OID");
         need(c.ces_auth == "negotiate" || c.ces_auth == "mtls", "ces_auth must be negotiate or mtls");
     }
+    if (key_trust)
+        need((c.kt_dc_url.starts_with("ldap://") || c.kt_dc_url.starts_with("ldaps://")) &&
+                 c.kt_dc_url.size() < 256,
+             "kt_dc_url must be an ldap:// or ldaps:// URL for the writable domain controller");
     if (v.contains("gc_url")) c.gc_url = v["gc_url"];
     else c.gc_url = "ldap://" + c.domain + ":3268";
     if (v.contains("gc_base_dn")) c.gc_base_dn = v["gc_base_dn"];
@@ -332,11 +358,11 @@ inline UserIdentity load_user_identity(const UserIdentityFiles &files)
     return identity;
 }
 
-inline Key generate_key()
+inline Key generate_key(int bits = 3072)
 {
     Owned<EVP_PKEY_CTX, EVP_PKEY_CTX_free> ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr));
     sslneed(ctx && EVP_PKEY_keygen_init(ctx.get()) > 0 &&
-                EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), 3072) > 0,
+                EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), bits) > 0,
             "RSA key generation init");
     Key key;
     sslneed(EVP_PKEY_keygen(ctx.get(), out(key)) > 0, "RSA key generation");
@@ -434,6 +460,181 @@ inline Bytes request_der(X509_REQ *req)
     auto p = b.data();
     sslneed(i2d_X509_REQ(req, &p) == n, "CSR DER");
     return b;
+}
+
+// --- Key Trust (msDS-KeyCredentialLink) credential construction, per MS-ADTS 2.2.20. ---
+
+inline Bytes sha256(ByteView data)
+{
+    Bytes digest(SHA256_DIGEST_LENGTH);
+    unsigned length = 0;
+    Owned<EVP_MD_CTX, EVP_MD_CTX_free> ctx(EVP_MD_CTX_new());
+    sslneed(ctx && EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr) == 1 &&
+                EVP_DigestUpdate(ctx.get(), data.data(), data.size()) == 1 &&
+                EVP_DigestFinal_ex(ctx.get(), digest.data(), &length) == 1 && length == digest.size(),
+            "SHA-256 digest");
+    return digest;
+}
+
+inline void le16(Bytes &b, uint16_t value)
+{
+    b.push_back(static_cast<unsigned char>(value));
+    b.push_back(static_cast<unsigned char>(value >> 8));
+}
+
+inline void le32(Bytes &b, uint32_t value)
+{
+    for (int shift = 0; shift < 32; shift += 8) b.push_back(static_cast<unsigned char>(value >> shift));
+}
+
+inline void le64(Bytes &b, uint64_t value)
+{
+    for (int shift = 0; shift < 64; shift += 8) b.push_back(static_cast<unsigned char>(value >> shift));
+}
+
+// Serialize an RSA public key as a CNG BCRYPT_RSAPUBLIC_BLOB ("RSA1"); this is the Key Trust key material.
+inline Bytes rsa_public_blob(EVP_PKEY *key)
+{
+    need(EVP_PKEY_base_id(key) == EVP_PKEY_RSA, "Key Trust requires an RSA key");
+    Owned<BIGNUM, BN_free> modulus, exponent;
+    sslneed(EVP_PKEY_get_bn_param(key, OSSL_PKEY_PARAM_RSA_N, out(modulus)) == 1 &&
+                EVP_PKEY_get_bn_param(key, OSSL_PKEY_PARAM_RSA_E, out(exponent)) == 1,
+            "read RSA public parameters");
+    const int mod_len = BN_num_bytes(modulus.get()), exp_len = BN_num_bytes(exponent.get());
+    sslneed(mod_len > 0 && exp_len > 0, "RSA parameter length");
+    Bytes blob{'R', 'S', 'A', '1'};
+    le32(blob, static_cast<uint32_t>(BN_num_bits(modulus.get())));
+    le32(blob, static_cast<uint32_t>(exp_len));
+    le32(blob, static_cast<uint32_t>(mod_len));
+    le32(blob, 0); // cbPrime1
+    le32(blob, 0); // cbPrime2
+    const size_t header = blob.size();
+    blob.resize(header + static_cast<size_t>(exp_len) + static_cast<size_t>(mod_len));
+    sslneed(BN_bn2bin(exponent.get(), blob.data() + header) == exp_len &&
+                BN_bn2bin(modulus.get(), blob.data() + header + exp_len) == mod_len,
+            "encode RSA public blob");
+    return blob;
+}
+
+// Build a version-2 Key Credential Link blob advertising a single NGC (Key Trust) key.
+inline Bytes key_credential_blob(EVP_PKEY *key, ByteView device_id, time_t now)
+{
+    need(device_id.size() == 16, "device identifier must be a 16-byte GUID");
+    const auto entry = [](Bytes &b, unsigned char identifier, ByteView value)
+    {
+        need(value.size() <= 0xffff, "key credential entry too large");
+        le16(b, static_cast<uint16_t>(value.size()));
+        b.push_back(identifier);
+        b.insert(b.end(), value.begin(), value.end());
+    };
+    const Bytes material = rsa_public_blob(key);
+    const uint64_t filetime = (static_cast<uint64_t>(now) + 11644473600ULL) * 10000000ULL;
+    Bytes stamp;
+    le64(stamp, filetime);
+
+    // KeyHash covers every entry following it; build that tail first, then prepend KeyID and KeyHash.
+    Bytes tail;
+    entry(tail, 0x03, material);          // KeyMaterial
+    entry(tail, 0x04, Bytes{0x01});       // KeyUsage = NGC
+    entry(tail, 0x05, Bytes{0x00});       // KeySource = Active Directory
+    entry(tail, 0x06, device_id);         // DeviceId
+    entry(tail, 0x07, Bytes{0x01, 0x02}); // CustomKeyInformation: Version 1, MFA_NOT_USED
+    entry(tail, 0x08, stamp);             // KeyApproximateLastLogonTimeStamp
+    entry(tail, 0x09, stamp);             // KeyCreationTime
+
+    Bytes blob;
+    le32(blob, 0x00000200);              // Version 2
+    entry(blob, 0x01, sha256(material)); // KeyID = SHA-256(KeyMaterial)
+    entry(blob, 0x02, sha256(tail));     // KeyHash = SHA-256(subsequent entries)
+    blob.insert(blob.end(), tail.begin(), tail.end());
+    return blob;
+}
+
+// Represent the blob as the DN-Binary value stored in msDS-KeyCredentialLink.
+inline std::string dn_binary(ByteView blob, const std::string &dn)
+{
+    need(!dn.empty() && dn.find_first_of("\r\n") == std::string::npos, "invalid key credential object DN");
+    constexpr std::string_view hex = "0123456789ABCDEF";
+    std::string text;
+    text.reserve(blob.size() * 2);
+    for (unsigned char byte : blob)
+    {
+        text += hex[byte >> 4];
+        text += hex[byte & 15];
+    }
+    return std::format("B:{}:{}:{}", text.size(), text, dn);
+}
+
+struct KeyTrustPair
+{
+    Cert leaf;
+    Cert ca;
+};
+
+// Build a short-lived PKINIT leaf issued by an ephemeral local CA so MIT Kerberos includes the leaf in CMS SignedData.
+inline KeyTrustPair make_key_trust_pair(EVP_PKEY *key, const std::string &cn, const std::string &upn, uint32_t validity)
+{
+    Key ca_key = generate_key(2048);
+    Cert ca(X509_new());
+    sslneed(ca && X509_set_version(ca.get(), 2) == 1, "CA initialize");
+    Bytes ca_serial = random_bytes(16);
+    ca_serial[0] &= 0x7f;
+    Owned<BIGNUM, BN_free> ca_bn(BN_bin2bn(ca_serial.data(), static_cast<int>(ca_serial.size()), nullptr));
+    sslneed(ca_bn && BN_to_ASN1_INTEGER(ca_bn.get(), X509_get_serialNumber(ca.get())) != nullptr, "CA serial");
+    sslneed(X509_gmtime_adj(X509_getm_notBefore(ca.get()), -300) != nullptr &&
+                X509_gmtime_adj(X509_getm_notAfter(ca.get()), static_cast<long>(validity + 3600)) != nullptr,
+            "CA validity");
+    Owned<X509_NAME, X509_NAME_free> ca_name(X509_NAME_new());
+    sslneed(ca_name && X509_NAME_add_entry_by_txt(ca_name.get(), "CN", MBSTRING_ASC,
+                                                  reinterpret_cast<const unsigned char *>("CRAFT Key Trust CA"),
+                                                  -1, -1, 0) == 1,
+            "CA subject");
+    sslneed(X509_set_subject_name(ca.get(), ca_name.get()) == 1 &&
+                X509_set_issuer_name(ca.get(), ca_name.get()) == 1 && X509_set_pubkey(ca.get(), ca_key.get()) == 1,
+            "CA identity");
+    const auto add_ca = [&](Ext e)
+    {
+        sslneed(e && X509_add_ext(ca.get(), e.get(), -1) == 1, "CA extension");
+    };
+    add_ca(Ext(X509V3_EXT_conf_nid(
+        nullptr, nullptr, NID_basic_constraints, const_cast<char *>("critical,CA:TRUE"))));
+    add_ca(Ext(X509V3_EXT_conf_nid(
+        nullptr, nullptr, NID_key_usage, const_cast<char *>("critical,keyCertSign,cRLSign"))));
+    sslneed(X509_sign(ca.get(), ca_key.get(), EVP_sha256()) > 0, "CA sign");
+
+    Cert c(X509_new());
+    sslneed(c && X509_set_version(c.get(), 2) == 1, "leaf initialize");
+    Bytes serial = random_bytes(16);
+    serial[0] &= 0x7f;
+    Owned<BIGNUM, BN_free> bn(BN_bin2bn(serial.data(), static_cast<int>(serial.size()), nullptr));
+    sslneed(bn && BN_to_ASN1_INTEGER(bn.get(), X509_get_serialNumber(c.get())) != nullptr, "leaf serial");
+    sslneed(X509_gmtime_adj(X509_getm_notBefore(c.get()), -300) != nullptr &&
+                X509_gmtime_adj(X509_getm_notAfter(c.get()), static_cast<long>(validity)) != nullptr,
+            "leaf validity");
+    Owned<X509_NAME, X509_NAME_free> name(X509_NAME_new());
+    sslneed(name && X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC,
+                                               reinterpret_cast<const unsigned char *>(cn.data()),
+                                               static_cast<int>(cn.size()), -1, 0) == 1,
+            "leaf subject");
+    sslneed(X509_set_subject_name(c.get(), name.get()) == 1 &&
+                X509_set_issuer_name(c.get(), ca_name.get()) == 1 && X509_set_pubkey(c.get(), key) == 1,
+            "leaf identity");
+    const auto add = [&](Ext e)
+    {
+        sslneed(e && X509_add_ext(c.get(), e.get(), -1) == 1, "leaf extension");
+    };
+    Bytes text(upn.begin(), upn.end());
+    add(raw_extension("2.5.29.17", der(0x30, der(0xa0, join(oid_der(UPN_OID), der(0xa0, der(0x0c, text)))))));
+    add(Ext(X509V3_EXT_conf_nid(
+        nullptr, nullptr, NID_basic_constraints, const_cast<char *>("critical,CA:FALSE"))));
+    add(Ext(X509V3_EXT_conf_nid(
+        nullptr, nullptr, NID_key_usage, const_cast<char *>("critical,digitalSignature"))));
+    add(Ext(X509V3_EXT_conf_nid(nullptr,
+                                nullptr,
+                                NID_ext_key_usage,
+                                const_cast<char *>("clientAuth,1.3.6.1.4.1.311.20.2.2,1.3.6.1.5.2.3.4"))));
+    sslneed(X509_sign(c.get(), ca_key.get(), EVP_sha256()) > 0, "leaf signature");
+    return {std::move(c), std::move(ca)};
 }
 
 // Sign enrollment on behalf of the fixed requester using the enrollment-agent key.
@@ -589,7 +790,7 @@ inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Conf
              "EKUs");
     else
         need(has(SMARTCARD_OID) || has(PKINIT_CLIENT_OID),
-             "user certificate needs Smart Card Logon or PKINIT Client Authentication EKU");
+             "certificate needs Smart Card Logon or PKINIT Client Authentication EKU");
     int critical = 0;
     Owned<ASN1_BIT_STRING, ASN1_BIT_STRING_free> ku(
         static_cast<ASN1_BIT_STRING *>(X509_get_ext_d2i(c, NID_key_usage, &critical, nullptr)));
@@ -599,10 +800,13 @@ inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Conf
     const auto upn = certificate_upn(c);
     time_t now = time(nullptr), start = as_time(X509_get0_notBefore(c)), end = as_time(X509_get0_notAfter(c));
     need(start <= now && end > now + 60, "certificate is not currently valid for at least 60 seconds");
-    if (source == CertificateSource::Enrollment)
+    if (source != CertificateSource::Home)
     {
         const std::string expected_upn = m.upn.empty() ? (m.name + "@" + cfg.domain) : m.upn;
-        need(upn == expected_upn, "user certificate UPN differs from Active Directory UPN");
+        need(upn == expected_upn, "certificate UPN differs from the directory userPrincipalName");
+    }
+    if (source == CertificateSource::Enrollment)
+    {
         need(certificate_template(c) == cfg.template_oid, "CA returned the wrong certificate template");
         need(end - start > 0 && end - start <= cfg.cert_total,
              "CA issued a certificate with excessive total validity");
@@ -1017,7 +1221,7 @@ inline void validate_tgt(krb5_context ctx,
 
 // Request the configured TGT independently; the DC alone decides what lifetime it can issue.
 inline Bytes
-get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *key, time_t cert_end)
+get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *key, time_t cert_end, X509 *ca = nullptr)
 {
     Bio certbio(BIO_new(BIO_s_mem())), keybio(BIO_new(BIO_s_mem()));
     sslneed(certbio && keybio, "PKINIT BIO allocate");
@@ -1065,8 +1269,20 @@ get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *
     krb5_get_init_creds_opt_set_preauth_list(opts.get(), &pa, 1);
     k.check(krb5_get_init_creds_opt_set_pa(k.ctx(), opts.get(), "X509_user_identity", identity.c_str()),
             "set PKINIT certificate and key");
+    Fd anchor_fd;
+    std::string anchor_str = "FILE:" + path("kdc-trust.pem");
+    if (ca != nullptr)
+    {
+        Bio cabio(BIO_new(BIO_s_mem()));
+        sslneed(cabio && PEM_write_bio_X509(cabio.get(), ca) == 1, "serialize CA anchor");
+        Bytes cab = biobytes(cabio.get());
+        std::string anchor_data = root_text(path("kdc-trust.pem"));
+        anchor_data.append(reinterpret_cast<const char *>(cab.data()), cab.size());
+        anchor_fd = memory_file("craft-anchors", byte_view(anchor_data));
+        anchor_str = std::format("FILE:/proc/self/fd/{}", anchor_fd.get());
+    }
     k.check(krb5_get_init_creds_opt_set_pa(
-                k.ctx(), opts.get(), "X509_anchors", ("FILE:" + path("kdc-trust.pem")).c_str()),
+                k.ctx(), opts.get(), "X509_anchors", anchor_str.c_str()),
             "set KDC trust anchors");
 
     // NULL password plus refusing all prompts: no password/keytab fallback for users.
@@ -1141,13 +1357,13 @@ inline int ldap_sasl_interact(LDAP *, unsigned, void *, void *in) noexcept
     return LDAP_SUCCESS;
 }
 
-inline Mapping lookup_ad_user(const Config &cfg, uid_t uid, const std::string &name)
+// Establish an integrity-protected LDAP connection bound as the directory service account.
+inline ScopedLdap ldap_connect(const std::string &url)
 {
-    need(simple_name(name), "invalid username for directory query");
     ScopedLdap ld;
-    int rc = ldap_initialize(out(ld), cfg.gc_url.c_str());
+    int rc = ldap_initialize(out(ld), url.c_str());
     need(rc == LDAP_SUCCESS && ld,
-         std::format("LDAP initialize failed for {}: {}", cfg.gc_url, ldap_err2string(rc)));
+         std::format("LDAP initialize failed for {}: {}", url, ldap_err2string(rc)));
     int version = LDAP_VERSION3;
     const ber_len_t min_ssf = 1;
     struct timeval tv{10, 0};
@@ -1157,44 +1373,177 @@ inline Mapping lookup_ad_user(const Config &cfg, uid_t uid, const std::string &n
              ldap_set_option(ld.get(), LDAP_OPT_TIMEOUT, &tv) == LDAP_OPT_SUCCESS &&
              ldap_set_option(ld.get(), LDAP_OPT_X_SASL_SSF_MIN, &min_ssf) == LDAP_OPT_SUCCESS,
          "LDAP protocol, timeout or integrity options rejected");
-
     rc = ldap_sasl_interactive_bind_s(
         ld.get(), nullptr, "GSSAPI", nullptr, nullptr, LDAP_SASL_QUIET, ldap_sasl_interact, nullptr);
-    need(rc == LDAP_SUCCESS,
-         std::format("LDAP GSSAPI bind failed to {}: {}", cfg.gc_url, ldap_err2string(rc)));
+    need(rc == LDAP_SUCCESS, std::format("LDAP GSSAPI bind failed to {}: {}", url, ldap_err2string(rc)));
+    return ld;
+}
 
-    std::string base_dn = cfg.gc_base_dn.empty() ? domain_to_dn(cfg.domain) : cfg.gc_base_dn;
+// Resolve the caller's unique directory object, returning its distinguished name and userPrincipalName.
+inline Mapping directory_lookup(LDAP *ld, const Config &cfg, const std::string &base_dn, uid_t uid,
+                                const std::string &name)
+{
+    need(simple_name(name), "invalid username for directory query");
+    struct timeval tv{10, 0};
     std::string filter = std::format("(&(objectCategory=person)(objectClass=user)(sAMAccountName={}))", name);
-    const char *attrs[] = {"userPrincipalName", nullptr};
-
+    const char *attrs[] = {"userPrincipalName", cfg.source == CertificateSource::KeyTrust ? "objectGUID" : nullptr,
+                           nullptr};
     ScopedLdapMsg res;
-    rc = ldap_search_ext_s(ld.get(),
-                           base_dn.c_str(),
-                           LDAP_SCOPE_SUBTREE,
-                           filter.c_str(),
-                           const_cast<char **>(attrs),
-                           0,
-                           nullptr,
-                           nullptr,
-                           &tv,
-                           2,
-                           out(res));
+    int rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter.c_str(),
+                               const_cast<char **>(attrs), 0, nullptr, nullptr, &tv, 2, out(res));
     need(rc == LDAP_SUCCESS && res, std::format("LDAP search failed: {}", ldap_err2string(rc)));
 
-    int count = ldap_count_entries(ld.get(), res.get());
+    int count = ldap_count_entries(ld, res.get());
     need(count > 0, std::format("user '{}' not found in Active Directory", name));
     need(count == 1, std::format("ambiguous user '{}': multiple Active Directory entries found", name));
 
-    LDAPMessage *entry = ldap_first_entry(ld.get(), res.get());
+    LDAPMessage *entry = ldap_first_entry(ld, res.get());
     need(entry != nullptr, "failed to get LDAP entry");
+    Owned<char, ldap_memfree> dn(ldap_get_dn(ld, entry));
+    need(dn && *dn.get(), "Active Directory entry has no distinguished name");
 
-    Owned<berval *, ldap_value_free_len> upn_vals(ldap_get_values_len(ld.get(), entry, "userPrincipalName"));
+    Owned<berval *, ldap_value_free_len> upn_vals(ldap_get_values_len(ld, entry, "userPrincipalName"));
     need(!upn_vals || ldap_count_values_len(upn_vals.get()) <= 1,
          "Active Directory entry has multiple userPrincipalName values");
     const auto *upn = upn_vals ? *upn_vals : nullptr;
     const auto upn_str = upn && upn->bv_len ? std::string(upn->bv_val, upn->bv_len) : name + "@" + cfg.domain;
+    Mapping mapping{.uid = uid, .name = name, .upn = upn_str, .dn = std::string(dn.get())};
+    if (cfg.source == CertificateSource::KeyTrust)
+    {
+        // Address both the account and its DN-Binary reference by immutable GUID across moves and renames.
+        Owned<berval *, ldap_value_free_len> guids(ldap_get_values_len(ld, entry, "objectGUID"));
+        need(guids && ldap_count_values_len(guids.get()) == 1 && guids.get()[0]->bv_len == 16,
+             "Active Directory entry has no valid objectGUID");
+        mapping.object_ref = "<GUID=";
+        for (size_t i = 0; i < 16; ++i)
+            mapping.object_ref += std::format("{:02x}", static_cast<unsigned char>(guids.get()[0]->bv_val[i]));
+        mapping.object_ref += ">";
+    }
+    return mapping;
+}
 
-    return Mapping{.uid = uid, .name = name, .upn = upn_str};
+inline Mapping lookup_ad_user(const Config &cfg, uid_t uid, const std::string &name)
+{
+    const auto ld = ldap_connect(cfg.gc_url);
+    const auto base_dn = cfg.gc_base_dn.empty() ? domain_to_dn(cfg.domain) : cfg.gc_base_dn;
+    return directory_lookup(ld.get(), cfg, base_dn, uid, name);
+}
+
+// Add or remove exactly one Key Trust value, leaving any other key credentials on the object untouched.
+inline void modify_key_credential(LDAP *ld, const std::string &dn, const std::string &value, bool add)
+{
+    std::string editable = value;
+    char *values[] = {editable.data(), nullptr};
+    LDAPMod mod{};
+    mod.mod_op = add ? LDAP_MOD_ADD : LDAP_MOD_DELETE;
+    mod.mod_type = const_cast<char *>("msDS-KeyCredentialLink");
+    mod.mod_values = values;
+    LDAPMod *mods[] = {&mod, nullptr};
+    const int rc = ldap_modify_ext_s(ld, dn.c_str(), mods, nullptr, nullptr);
+    if (!add && rc == LDAP_NO_SUCH_ATTRIBUTE) return;
+    need(rc == LDAP_SUCCESS,
+         std::format("{} msDS-KeyCredentialLink failed: {}", add ? "add" : "remove", ldap_err2string(rc)));
+}
+
+// Retry cleanup with a fresh connection and report a residual credential if the directory remains unavailable.
+inline bool detach_key_credential(const Config &cfg, LDAP *ld, const std::string &dn,
+                                  const std::string &value) noexcept
+{
+    try
+    {
+        modify_key_credential(ld, dn, value, false);
+        return true;
+    }
+    catch (const std::exception &)
+    {
+        // The live connection may have failed; fall through to a fresh bind before giving up.
+    }
+    try
+    {
+        const auto fresh = ldap_connect(cfg.kt_dc_url);
+        modify_key_credential(fresh.get(), dn, value, false);
+        return true;
+    }
+    catch (const std::exception &error)
+    {
+        openlog("craft", LOG_PID, LOG_AUTHPRIV);
+        syslog(LOG_CRIT,
+               "CRITICAL: could not remove temporary msDS-KeyCredentialLink from %s; remove it manually (%s)",
+               dn.c_str(), error.what());
+        closelog();
+        std::cerr << "craft-worker: CRITICAL: failed to remove the temporary key credential from "
+                  << sanitize_ascii(dn) << "; remove it manually\n";
+    }
+    return false;
+}
+
+// Arm independent cleanup before attempting the write, including writes whose LDAP response is lost.
+inline Fd start_key_credential_cleanup(const Config &cfg, const std::string &object_ref,
+                                      const std::string &value, pid_t &child, int lock_fd)
+{
+    std::array<int, 2> control{}, ready{};
+    sysneed(pipe2(control.data(), O_CLOEXEC) == 0, "key cleanup pipe");
+    Fd reader(control[0]), trigger(control[1]);
+    sysneed(pipe2(ready.data(), O_CLOEXEC) == 0, "key cleanup readiness pipe");
+    Fd ready_reader(ready[0]), ready_writer(ready[1]);
+    child = fork();
+    sysneed(child >= 0, "key cleanup fork");
+    if (child == 0)
+    {
+        try
+        {
+            // Survive worker alarms, terminal signals and launcher death while retaining the issuance lock.
+            alarm(0);
+            sysneed(prctl(PR_SET_PDEATHSIG, 0) == 0, "key cleanup parent-death signal");
+            for (int signum : {SIGALRM, SIGINT, SIGTERM, SIGHUP, SIGPIPE, SIGXCPU})
+                sysneed(signal(signum, SIG_IGN) != SIG_ERR, "key cleanup signal disposition");
+            const int saved_lock = lock_fd >= 0 ? fcntl(lock_fd, F_DUPFD_CLOEXEC, 6) : -1;
+            sysneed(lock_fd < 0 || saved_lock >= 0, "key cleanup lock duplicate");
+            sysneed(dup2(reader.get(), 3) == 3 && dup2(ready_writer.get(), 4) == 4,
+                    "key cleanup descriptors");
+            if (saved_lock >= 0) sysneed(dup2(saved_lock, 5) == 5, "key cleanup lock");
+            else (void)close(5);
+            close_from(6);
+            const Fd null(open("/dev/null", O_RDWR));
+            sysneed(null.get() >= 0 && dup2(null.get(), STDIN_FILENO) == STDIN_FILENO &&
+                        dup2(null.get(), STDOUT_FILENO) == STDOUT_FILENO,
+                    "key cleanup standard descriptors");
+
+            // Bind our own connection; inherited LDAP sockets must never be shared after fork.
+            const auto ld = ldap_connect(cfg.kt_dc_url);
+            const unsigned char armed = 1;
+            write_all(4, {&armed, 1});
+            (void)close(4);
+            unsigned char ignored;
+            ssize_t count;
+            do { count = read(3, &ignored, 1); } while (count < 0 && errno == EINTR);
+            const bool removed = detach_key_credential(cfg, ld.get(), object_ref, value);
+            _exit(removed ? 0 : 1);
+        }
+        catch (const std::exception &error)
+        {
+            openlog("craft", LOG_PID, LOG_AUTHPRIV);
+            syslog(LOG_CRIT, "key cleanup failed for %s: %s", object_ref.c_str(), error.what());
+            closelog();
+            _exit(1);
+        }
+    }
+    reader = Fd();
+    ready_writer = Fd();
+    const auto armed = read_all(ready_reader.get(), 1);
+    need(armed == Bytes{1}, "key cleanup process could not be armed");
+    return trigger;
+}
+
+// Release credentials only after the independent process confirms successful removal.
+inline void finish_key_credential_cleanup(Fd &trigger, pid_t &child)
+{
+    trigger = Fd();
+    int status{};
+    const pid_t pid = std::exchange(child, -1);
+    sysneed(waitpid_retry(pid, &status) == pid, "wait for key cleanup");
+    need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+         "temporary key credential cleanup failed; existing cache was not replaced");
 }
 } // namespace craft
 
@@ -1239,57 +1588,103 @@ int main(int argc, char **argv)
         }
         else
         {
-            // Restrict enrollment credentials to the dedicated account.
+            // Restrict the privileged fallback (enrollment or Key Trust) to the dedicated account.
             const Account svc = service_account();
             need(requesting_uid != svc.uid && getuid() == svc.uid && geteuid() == svc.uid &&
                      getgid() == svc.gid && getegid() == svc.gid,
-                 "enrollment worker must run with dedicated account credentials");
+                 "privileged worker must run with dedicated account credentials");
         }
 
-        // Balance enrollment transport initialization across every normal or exceptional exit.
-        if (!home) need(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK, "curl initialize");
-        ScopeExit cleanup_curl([home]() noexcept { if (!home) curl_global_cleanup(); });
-        const auto source = home ? CertificateSource::Home : CertificateSource::Enrollment;
-        Config cfg = config(source);
-        UserIdentity identity;
+        // Resolve the configuration first; it selects the fallback mechanism when no home pair is present.
+        Config cfg = config(home ? CertificateSource::Home : CertificateSource::Enrollment);
+        const CertificateSource source = cfg.source;
+
+        // Only CA enrollment uses libcurl/CES; balance its initialization across normal and exceptional exits.
+        if (source == CertificateSource::Enrollment)
+            need(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK, "curl initialize");
+        ScopeExit cleanup_curl([source]() noexcept
+                               { if (source == CertificateSource::Enrollment) curl_global_cleanup(); });
+
         Fd lock;
-        if (home) identity = load_user_identity(files);
-        else lock = rate_limit(requesting_uid, cfg.interval);
+        if (!home) lock = rate_limit(requesting_uid, cfg.interval);
         root_open(path("kdc-trust.pem"));
         root_open(path("kdc-crls.pem"));
 
-        // Keep the caller principal fixed; the KDC enforces certificate-to-account mapping for home credentials.
+        // Keep the caller principal fixed; the KDC enforces certificate-to-account mapping in every mode.
         Kerberos krb;
-        Mapping m{.uid = requesting_uid, .name = name, .upn = {}};
-        if (source == CertificateSource::Enrollment)
-        {
-            // Verify the agent and enroll a fresh certificate for the fixed directory identity.
-            Cert agent = load_cert("agent.pem");
-            Key agent_key = load_key("agent.key");
-            need(has_eku(agent.get(), AGENT_OID), "agent certificate lacks Certificate Request Agent EKU");
-            sslneed(X509_check_private_key(agent.get(), agent_key.get()) == 1, "agent key mismatch");
-            verify_chain(agent.get());
-            krb.acquire_transport(cfg);
-            m = lookup_ad_user(cfg, requesting_uid, name);
-            const auto cn = common_name(cfg, name, m.upn);
-            identity.key = generate_key();
-            Req req = make_request(identity.key.get(), m.upn, cfg.template_oid, cn);
-            Bytes cms = wrap_eobo(req.get(), agent.get(), agent_key.get(), cfg.netbios + "\\" + name);
-            const std::string response = send_ces(cfg, soap_request(cfg, cms));
-            identity.certificate = parse_response(response, identity.key.get());
-        }
-
-        // Validate the selected identity before requesting and returning the TGT.
-        verify_chain(identity.certificate.get());
-        time_t end = validate_leaf(identity.certificate.get(), identity.key.get(), m, cfg, source);
-        Bytes result = get_tgt(krb, cfg, m, identity.certificate.get(), identity.key.get(), end);
+        Mapping m{.uid = requesting_uid, .name = name, .upn = {}, .dn = {}};
+        UserIdentity identity;
+        Bytes result;
         ScopeExit erase([&]() noexcept { wipe(result); });
+        time_t end = 0;
+        {
+            // Acquire and validate the certificate identity, publishing no Key Trust key beyond this scope.
+            ScopedLdap kt_ld;
+            Cert kt_ca;
+            Fd kt_trigger;
+            pid_t kt_cleanup_pid = -1;
+            ScopeExit kt_cleanup([&]() noexcept
+            {
+                // Closing the pipe also triggers cleanup when acquisition throws.
+                kt_trigger = Fd();
+                if (kt_cleanup_pid > 0) (void)waitpid_retry(kt_cleanup_pid);
+            });
+
+            if (home)
+            {
+                identity = load_user_identity(files);
+            }
+            else if (source == CertificateSource::Enrollment)
+            {
+                // Verify the agent and enroll a fresh certificate for the fixed directory identity.
+                Cert agent = load_cert("agent.pem");
+                Key agent_key = load_key("agent.key");
+                need(has_eku(agent.get(), AGENT_OID), "agent certificate lacks Certificate Request Agent EKU");
+                sslneed(X509_check_private_key(agent.get(), agent_key.get()) == 1, "agent key mismatch");
+                verify_chain(agent.get());
+                krb.acquire_transport(cfg);
+                m = lookup_ad_user(cfg, requesting_uid, name);
+                const auto cn = common_name(cfg, name, m.upn);
+                identity.key = generate_key();
+                Req req = make_request(identity.key.get(), m.upn, cfg.template_oid, cn);
+                Bytes cms = wrap_eobo(req.get(), agent.get(), agent_key.get(), cfg.netbios + "\\" + name);
+                const std::string response = send_ces(cfg, soap_request(cfg, cms));
+                identity.certificate = parse_response(response, identity.key.get());
+            }
+            else
+            {
+                // Key Trust: write a public key to the directory, authenticate, then remove it.
+                krb.acquire_transport(cfg);
+                kt_ld = ldap_connect(cfg.kt_dc_url);
+                m = directory_lookup(kt_ld.get(), cfg, domain_to_dn(cfg.domain), requesting_uid, name);
+                identity.key = generate_key(2048);
+                auto pair = make_key_trust_pair(
+                    identity.key.get(), common_name(cfg, name, m.upn), m.upn, cfg.tgt + 3600);
+                identity.certificate = std::move(pair.leaf);
+                kt_ca = std::move(pair.ca);
+                const Bytes blob = key_credential_blob(identity.key.get(), Bytes(16, 0), time(nullptr));
+                const std::string value = dn_binary(blob, m.object_ref);
+                kt_trigger = start_key_credential_cleanup(cfg, m.object_ref, value, kt_cleanup_pid, lock.get());
+                modify_key_credential(kt_ld.get(), m.object_ref, value, true);
+            }
+
+            // The Key Trust certificate is authorized by the directory write, not a CA chain.
+            if (source != CertificateSource::KeyTrust) verify_chain(identity.certificate.get());
+            end = validate_leaf(identity.certificate.get(), identity.key.get(), m, cfg, source);
+            result = get_tgt(krb, cfg, m, identity.certificate.get(), identity.key.get(), end, kt_ca.get());
+
+            // Remove the Key Trust key immediately, before any credential bytes leave this process.
+            if (kt_cleanup_pid > 0) finish_key_credential_cleanup(kt_trigger, kt_cleanup_pid);
+        }
+        const char *origin = source == CertificateSource::Home       ? "home"
+                             : source == CertificateSource::KeyTrust ? "key_trust"
+                                                                     : "enrollment";
         openlog("craft", LOG_PID, LOG_AUTHPRIV);
         syslog(LOG_NOTICE,
                "issued TGT uid=%lu user=%s certificate_source=%s certificate_expiry=%lld",
                static_cast<unsigned long>(m.uid),
                m.name.c_str(),
-               source == CertificateSource::Home ? "home" : "enrollment",
+               origin,
                static_cast<long long>(end));
         closelog();
         write_all(STDOUT_FILENO, result);

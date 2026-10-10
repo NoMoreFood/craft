@@ -1,8 +1,8 @@
 # CRAFT - Certificate Request Agent for Tickets
 
-CRAFT obtains Kerberos credentials noninteractively from a trusted, administrator-managed Linux endpoint, including a host that is not domain-joined. Users can supply a certificate and private key in their home directory for an entirely unprivileged workflow. When that pair is absent, an authorized deployment can enroll a short-lived certificate on the user's behalf. Both paths support unattended scripts and Kerberos-aware applications without retaining the user's AD password.
+CRAFT obtains Kerberos credentials noninteractively from a trusted, administrator-managed Linux endpoint, including a host that is not domain-joined. Users can supply a certificate and private key in their home directory for an entirely unprivileged workflow. When that pair is absent, an authorized deployment can obtain a short-lived credential on the user's behalf — either by CA enrollment-on-behalf-of or by a temporary directory Key Trust key. All paths support unattended scripts and Kerberos-aware applications without retaining the user's AD password.
 
-This supports automation alongside MFA-protected interactive sign-in. CRAFT does not perform an MFA challenge or establish that the user completed one. Authentication depends on the supplied certificate and KDC account mapping, or on administrator-authorized enrollment and CA restrictions.
+This supports automation alongside MFA-protected interactive sign-in. CRAFT does not perform an MFA challenge or establish that the user completed one. Authentication depends on the supplied certificate and KDC account mapping, on administrator-authorized enrollment and CA restrictions, or on a narrowly delegated `msDS-KeyCredentialLink` write.
 
 ## Access Active Directory Resources
 
@@ -14,6 +14,7 @@ After authentication, the user selects the resulting credential cache for an app
 - [Configuration and validation](docs/02-CRAFT-Configuration-and-Validation.docx) ([PDF](docs/02-CRAFT-Configuration-and-Validation.pdf)): both certificate profiles, installation and lab acceptance.
 - [Build and installation guide](source/README.md): C++20 project, configuration, dependencies and tests.
 - [Windows lab provisioning helper](scripts/Configure-CRAFT-CA.ps1): partial CA/template setup; review before use.
+- [Key Trust delegation helper](scripts/Grant-CRAFTKeyCredentialLink.ps1) and [its authorization boundary](docs/04-Key-Credential-Link-Delegation.md): least-privilege `msDS-KeyCredentialLink` delegation for the `key_trust` fallback.
 - [Windows certificate helper](scripts/Request-CRAFT-Certificate.cmd): request a user certificate from an eligible CA and export the home PEM pair without elevation.
 
 ## Components and Paths
@@ -23,8 +24,8 @@ After authentication, the user selects the resulting credential cache for an app
 | Launcher / worker / maintainer | `craft` / `craft-worker` / `craft-maintain` |
 | Public configuration and trust | `/etc/craft/`, root-controlled and readable by callers |
 | Optional home certificate and key | `~/.config/craft/user.pem` / `user.key` |
-| Enrollment runtime | `/run/craft/`, needed only for enrollment |
-| Enrollment service account/group / caller group | `craft` / `craft-users`; unnecessary for a home-only installation |
+| Privileged fallback runtime | `/run/craft/`, needed by enrollment and Key Trust |
+| Service account/group / caller group | `craft` / `craft-users`; used by enrollment and Key Trust; unnecessary for a home-only installation |
 | Credential cache | `.krb5cc_craft` in the caller's trusted home |
 | Optional wrapper | `with-craft` |
 
@@ -40,9 +41,9 @@ On repeat runs, the helper reuses its pair until less than one calendar month re
 
 Replacements must pass the local CRAFT certificate-profile checks before publication. The helper recovers interrupted file updates, retries pending certificate cleanup, and preserves private-key containers shared by other certificates. The CMD entry point uses Windows PowerShell's built-in modules when invoked from PowerShell 7.
 
-When neither file exists, an enrollment-enabled installation uses its dedicated service account, directory lookup, enrollment-agent signature and CES. This path requires the compiled setuid launcher and CA recipient restrictions. See [enrollment installation](source/README.md#enrollment-installation). A home-only installation reports that enrollment is unavailable when no pair exists.
+When neither file exists, a privileged installation uses a configured fallback through its dedicated service account. `mechanism=enrollment` uses directory lookup, an enrollment-agent signature and CES; see [enrollment installation](source/README.md#enrollment-installation) and [enrollment agent restrictions](docs/03-Enrollment-Agent-Restrictions.md). `mechanism=key_trust` writes a temporary key to the caller's `msDS-KeyCredentialLink`, authenticates with Key Trust PKINIT and removes it, with no CA, CES or enrollment agent; see [Key Trust installation](source/README.md#key-trust-installation) and [Key Trust delegation](docs/04-Key-Credential-Link-Delegation.md). Both fallbacks require the compiled setuid launcher. A home-only installation reports that the fallback is unavailable when no pair exists.
 
-Both paths request `<Linux username>@<configured realm>` and validate the returned ticket. The KDC decides whether the selected certificate maps to that account; home mode does not query the directory UPN.
+All paths request `<Linux username>@<configured realm>` and validate the returned ticket. The KDC decides whether the selected certificate or Key Trust key maps to that account; home mode does not query the directory UPN.
 
 ## Long-running jobs
 
@@ -59,6 +60,8 @@ The `.krb5cc_craft` cache persists in either mode and contains the TGT and sessi
 Both workflows request a ten-hour initial TGT and seven-day renewal window, with AES256/AES128 session and ticket encryption. The KDC controls the grant; certificate/key lifetime can constrain initial validity. Strict mode rejects shortened grants without replacing the cache. `require_full_tgt_lifetime=no` explicitly accepts shorter grants with a warning.
 
 Enrollment pins the configured template, directory-resolved UPN and all three client EKUs, with a default ten-hour total certificate-validity cap including backdating. Home mode accepts ordinary certificate validity and templates, requires Smart Card Logon or PKINIT Client Authentication EKU, a valid UPN SAN, digitalSignature usage, matching key, CA:FALSE, trusted chain and current CRLs. Its KDC mapping and returned-principal checks bind authentication to the caller's Linux username and configured realm.
+
+Key Trust generates a short-lived self-signed certificate for the directory-resolved UPN, checks the same logon usage and key match, and relies on the `msDS-KeyCredentialLink` key the KDC validates rather than a CA chain. It requires a domain that supports Key Trust (NGC) authentication and a narrowly delegated attribute write, and removes the temporary key after authentication. All paths still request `<Linux username>@<realm>` and validate the returned ticket.
 
 `certificate_cn={user}` controls only an enrollment CSR. Supported tokens are `{user}`, `{upn}` and `{domain}`. It does not alter a supplied home certificate or the Kerberos principal.
 

@@ -292,10 +292,35 @@ static void helper_tests()
         const std::string text = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
         const auto cfg = parse_config(text, CertificateSource::Home);
         need(cfg.domain == "domain.local" && cfg.realm == "DOMAIN.LOCAL" && cfg.service_principal.empty() &&
-                 cfg.ces_url.empty() && cfg.tgt == 36000 && cfg.renew == 604800, "home configuration policy");
+                 cfg.ces_url.empty() && cfg.tgt == 36000 && cfg.renew == 604800 &&
+                 cfg.source == CertificateSource::Home, "home configuration policy");
         rejects([&] { parse_config(text); });
         rejects([] { parse_config("enabled=no\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n",
                                  CertificateSource::Home); });
+    });
+
+    test("key trust mechanism selects the directory path without CA settings", [] {
+        const std::string base = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                 "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n"
+                                 "kt_dc_url=ldap://dc.domain.local\n";
+        const auto cfg = parse_config(base);
+        need(cfg.source == CertificateSource::KeyTrust && cfg.kt_dc_url == "ldap://dc.domain.local" &&
+                 cfg.service_principal == "svc@DOMAIN.LOCAL" && cfg.ces_url.empty() &&
+                 cfg.template_oid.empty() && cfg.netbios.empty(),
+             "key trust configuration policy");
+
+        // Both the writable DC URL and the directory service principal are mandatory for key trust.
+        rejects([&] { parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                   "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n"); });
+        rejects([&] { parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                   "mechanism=key_trust\nkt_dc_url=ldap://dc.domain.local\n"); });
+        rejects([&] { parse_config(base.substr(0, base.find("kt_dc_url=")) + "kt_dc_url=http://dc\n"); });
+        rejects([&] { parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                   "mechanism=shadow\nservice_principal=svc@DOMAIN.LOCAL\n"); });
+        need(parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\nmechanism=key_trust\n"
+                          "service_principal=svc@DOMAIN.LOCAL\nkt_dc_url=ldaps://dc.domain.local\n").source ==
+                 CertificateSource::KeyTrust,
+             "ldaps writable DC URL accepted");
     });
 
     test("configuration rejects disabled missing unknown and duplicate settings", [&] {
@@ -1223,8 +1248,11 @@ int main(int argc, char **argv)
                .cert_remaining = 36000,
                .cert_total = 36000,
                .interval = 60,
-               .require_full_tgt_lifetime = true};
-    Mapping map{.uid = 1001, .name = "alice", .upn = "alice@domain.local"};
+               .require_full_tgt_lifetime = true,
+               .mechanism = "enrollment",
+               .kt_dc_url = {},
+               .source = CertificateSource::Enrollment};
+    Mapping map{.uid = 1001, .name = "alice", .upn = "alice@domain.local", .dn = "CN=alice,DC=domain,DC=local"};
 
     Req req = make_request(key.get(), "alice@domain.local", cfg.template_oid, common_name(cfg, "alice", map.upn));
     Cert leaf = fixture(key.get(), req.get()), agent = fixture(other.get());
@@ -1451,6 +1479,72 @@ int main(int argc, char **argv)
         krb5_free_cred_contents(ctx, &output);
         output = {};
         need(krb5_cc_next_cred(ctx, cc.get(), &cursor, &output) == KRB5_CC_END, "extra credentials");
+    });
+
+    test("key credential blob encodes an NGC RSA key with hash integrity", [&] {
+        const Bytes device(16, 0);
+        const auto now = time(nullptr);
+        const Bytes blob = key_credential_blob(key.get(), device, now);
+        need(blob.size() > 8 && blob[0] == 0x00 && blob[1] == 0x02 && blob[2] == 0 && blob[3] == 0,
+             "key credential version 2 header");
+
+        // Walk the length-identifier-value entries and index them by identifier.
+        std::map<int, Bytes> entries;
+        size_t header = 0, pos = 4;
+        while (pos + 3 <= blob.size())
+        {
+            const size_t length = blob[pos] | (static_cast<size_t>(blob[pos + 1]) << 8);
+            const int id = blob[pos + 2];
+            need(pos + 3 + length <= blob.size(), "key credential entry bounds");
+            entries[id] = Bytes(blob.begin() + pos + 3, blob.begin() + pos + 3 + length);
+            if (id == 0x02) header = pos + 3 + length; // KeyMaterial and following entries begin here
+            pos += 3 + length;
+        }
+        need(pos == blob.size(), "key credential has trailing bytes");
+        for (int id : {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09})
+            need(entries.contains(id), "key credential missing a required entry");
+        need(entries[0x04] == Bytes{0x01} && entries[0x05] == Bytes{0x00}, "NGC key usage and AD source");
+        need(entries[0x06] == device, "device identifier");
+        need(entries[0x07] == Bytes{0x01, 0x02}, "software key must record single-credential provisioning");
+        need(entries[0x01] == sha256(entries[0x03]), "KeyID is SHA-256 of the key material");
+        need(entries[0x02] == sha256(ByteView(blob).subspan(header)), "KeyHash covers subsequent entries");
+        need(entries[0x03].size() > 8 &&
+                 std::string(entries[0x03].begin(), entries[0x03].begin() + 4) == "RSA1",
+             "key material is a BCRYPT_RSAPUBLIC_BLOB");
+        rejects([&] { key_credential_blob(key.get(), Bytes(15, 0), now); });
+    });
+
+    test("DN-Binary value frames the hex blob length and object DN", [&] {
+        const Bytes blob{0xde, 0xad, 0xbe, 0xef};
+        need(dn_binary(blob, "CN=alice,DC=domain,DC=local") == "B:8:DEADBEEF:CN=alice,DC=domain,DC=local",
+             "DN-Binary encoding");
+        rejects([&] { dn_binary(blob, "bad\nDN"); });
+        rejects([&] { dn_binary(blob, ""); });
+    });
+
+    test("key trust certificate pair passes logon validation without a CA chain", [&] {
+        Key fresh = generate_key(2048);
+        auto pair = make_key_trust_pair(fresh.get(), "alice", "alice@domain.local", 36000 + 3600);
+        Cert &c = pair.leaf;
+        Cert &ca = pair.ca;
+        const Mapping kmap{
+            .uid = 1001, .name = "alice", .upn = "alice@domain.local", .dn = "CN=alice,DC=domain,DC=local"};
+        need(X509_NAME_cmp(X509_get_subject_name(ca.get()), X509_get_issuer_name(ca.get())) == 0,
+             "CA certificate is self-signed");
+        need(X509_NAME_cmp(X509_get_issuer_name(c.get()), X509_get_subject_name(ca.get())) == 0,
+             "leaf issuer matches ephemeral CA");
+        need(certificate_upn(c.get()) == "alice@domain.local", "key trust UPN SAN");
+        need(has_eku(c.get(), SMARTCARD_OID) && has_eku(c.get(), PKINIT_CLIENT_OID), "key trust EKUs");
+        need(validate_leaf(c.get(), fresh.get(), kmap, cfg, CertificateSource::KeyTrust) > time(nullptr),
+             "key trust certificate rejected");
+
+        // The key trust certificate must still fail the CA enrollment checks.
+        rejects([&] { validate_leaf(c.get(), fresh.get(), kmap, cfg, CertificateSource::Enrollment); });
+
+        // Key trust binds to the directory-resolved UPN; a mismatch must fail.
+        Mapping bad = kmap;
+        bad.upn = "bob@domain.local";
+        rejects([&] { validate_leaf(c.get(), fresh.get(), bad, cfg, CertificateSource::KeyTrust); });
     });
 
     revision_tests(cfg, map, key.get(), req.get(), leaf.get());

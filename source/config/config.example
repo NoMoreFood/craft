@@ -2,7 +2,7 @@
 # Public policy is readable by callers; keep keys/keytabs separately private.
 # Home mode needs enabled/domain/realm and shared ticket policy only.
 # A caller-owned ~/.config/craft/user.pem and user.key pair takes priority.
-# Enrollment settings below are required only when that pair is absent.
+# The fallback settings below are required only when that pair is absent.
 # Full-line comments only. Shipped disabled; review all placeholders.
 enabled=no
 
@@ -10,7 +10,20 @@ domain=domain.local
 realm=DOMAIN.LOCAL
 netbios=DOMAIN
 
-# Use the actual template msPKI-Cert-Template-OID, not its display name.
+# FALLBACK MECHANISM used when no home pair is present: enrollment (default) or key_trust.
+#   enrollment: enrollment-agent EOBO through the CA and CES (template/CES settings below).
+#   key_trust:  write a temporary self-signed key to the caller's msDS-KeyCredentialLink,
+#               PKINIT with it, then remove it (no CA, CES, template or enrollment agent).
+# Both fallbacks need the setuid launcher, the dedicated service account and /run/craft.
+mechanism=enrollment
+
+# KEY TRUST (mechanism=key_trust): writable domain controller for msDS-KeyCredentialLink.
+# Use the SAME DC that serves as the KDC in krb5.conf so the written key is seen immediately.
+# Requires service_principal and submitter.keytab below for the LDAP/GSSAPI bind.
+# kt_dc_url=ldap://dc01.domain.local
+
+# ENROLLMENT (mechanism=enrollment) only: use the actual template msPKI-Cert-Template-OID,
+# not its display name.
 template_oid=1.3.6.1.4.1.311.21.8.999.1
 
 # ENROLLMENT CSR CN: {user}, {upn}, {domain} supported.
@@ -19,10 +32,11 @@ template_oid=1.3.6.1.4.1.311.21.8.999.1
 # This does not change the directory UPN or authorize enrollee-supplied identities.
 certificate_cn={user}
 
-# AD CS CES endpoint, not legacy /certsrv. Replace with the real endpoint.
+# ENROLLMENT only: AD CS CES endpoint, not legacy /certsrv. Replace with the real endpoint.
 ces_url=https://ces.domain.local/IssuingCA_CES_Kerberos/service.svc/CES
 ces_auth=negotiate
-# Enrollment with either CES mode requires this principal and submitter.keytab for LDAP/GSSAPI.
+# Directory/submission account for the LDAP/GSSAPI bind. Required by both fallbacks:
+# enrollment (directory UPN lookup and CES Negotiate) and key_trust (msDS-KeyCredentialLink write).
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 
 # Alternative: ces_auth=mtls and a CES client-certificate endpoint, with

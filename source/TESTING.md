@@ -10,6 +10,7 @@ The synthetic fixtures cover:
 - Pinned UPN/template/key checks; certificates with and without a CA-supplied SID extension; missing/duplicate/malformed identities, missing client EKUs, non-CA constraints, wrong usage, expiry and ten-hour validity caps.
 - Home-pair selection and filesystem checks: absent versus partial pairs, caller identity, permissions, symlink/FIFO refusal, bounded reads, opened-inode replacement and malformed/encrypted PEM rejection.
 - Home-only configuration without enrollment settings; ordinary certificate lifetime/template acceptance with logon usage, identity shape and expiry validation.
+- Key Trust configuration selection (`mechanism=key_trust`) without CA settings, mandatory `kt_dc_url`/`service_principal`, and rejection of bad URLs and unknown mechanisms; MS-ADTS 2.2.20 Key Credential blob encoding (version, entry framing, KeyID/KeyHash SHA-256 integrity, NGC usage, AD source, BCRYPT_RSAPUBLIC_BLOB); DN-Binary framing; and ephemeral Key Trust certificate pair construction passing logon validation without a CA chain while failing the enrollment checks and a UPN mismatch.
 - Dynamic Global Catalog settings parsing, domain-to-DN formatting, integer bounds, configuration flags and custom CN substitutions.
 - Ten-hour requested/granted initial lifetime, seven-day renewal lifetime checks, strict short-grant refusal and explicit shorter-grant warnings; renewable and non-renewable validation; ticket flags, principal, key length and AES128/AES256 session/envelope validation; RC4 rejection.
 - Exception-safe C output adoption, resource ownership, secret-buffer erasure, bounded I/O, sealed memfd behavior, WSTEP parsing and malformed/DTD/oversized responses.
@@ -18,7 +19,7 @@ The synthetic fixtures cover:
 
 The test tickets use the literal marker `NOT-A-REAL-TICKET` as ciphertext. These are local parser/policy fixtures, not forged working tickets, authenticated Kerberos exchanges or proof that a Windows KDC grants the requested lifetime. No real user credentials, CA enrollment or domain-controller traffic was used.
 
-Offline tests do not exercise LDAP/GSSAPI, live EOBO/CES, Windows SID issuance, real-PKI CRL chains, memfd-backed PKINIT, effective DC policy, or ten-hour-certificate/ten-hour-TGT/seven-day-renewal interoperability. They also do not exercise the installed setuid/fexecve/drop boundary. Validate those separately in a configured lab; offline success does not establish production readiness.
+Offline tests do not exercise LDAP/GSSAPI, live EOBO/CES, Windows SID issuance, real-PKI CRL chains, memfd-backed PKINIT, live `msDS-KeyCredentialLink` writes or Key Trust PKINIT, effective DC policy, or ten-hour-certificate/ten-hour-TGT/seven-day-renewal interoperability. They also do not exercise the installed setuid/fexecve/drop boundary. Validate those separately in a configured lab; offline success does not establish production readiness.
 
 ## Build and Unit Tests
 
@@ -102,7 +103,10 @@ From the repository root in Windows PowerShell, run the offline helper checks:
 ```powershell
 .\scripts\Test-Configure-CRAFT-CA.ps1
 .\scripts\Test-Request-CRAFT-Certificate.ps1
+.\scripts\Test-Grant-CRAFTKeyCredentialLink.ps1
 ```
+
+`Test-Grant-CRAFTKeyCredentialLink.ps1` runs offline: it parses the delegation helper, exercises the least-privilege access-rule construction (exactly ReadProperty/WriteProperty on `msDS-KeyCredentialLink`, user-scoped versus OU-inherited), the rule matcher (rejecting other trustees, other attributes, Deny and read-only rules), and the mutually exclusive target parameters. It reads and modifies no Active Directory objects.
 
 The provisioning checks cover parameters, native commands and certificate selection. The request/export checks use newly created synthetic current-user certificates and mocked enrollment. They exercise the CMD and PowerShell options/preview paths, matching RSA/CSP/ECDSA PEM exports, encrypted-export-only and nonexportable keys, private file ACLs, unchanged-pair reuse, the calendar-month/custom renewal window, optional certificate/key deletion with shared-key preservation, changed-file/template protection, pending/denied requests, concurrent exports, junction refusal and rollback after publication failure. OpenSSL parsing is also checked when Git for Windows supplies OpenSSL. The fixtures and their private keys are removed at completion.
 
@@ -143,3 +147,14 @@ The checks below cover enrollment deployments. Complete the home-workflow checks
 10. Review AUTHPRIV/CA/CES/KDC logs. Document CRL refresh, credential rotation, account lifecycle, CA capacity, cache exclusions from backups, ticket expiry, operational disable and incident-response procedures.
 
 Do not keep increasing lifetime caps simply to accommodate an unexpectedly long-lived default template. Review and fix the CA-side short-lived issuance policy.
+
+## Key Trust Acceptance Checks
+
+Complete these in addition to the common KDC/cache and privilege-boundary checks when using `mechanism=key_trust`. Use a lab domain at the 2016 functional level or later with a current KDC certificate, and disposable, non-privileged accounts. See [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
+
+1. Delegate the `msDS-KeyCredentialLink` write to the service account over a dedicated OU of ordinary users with `Grant-CRAFTKeyCredentialLink.ps1`; confirm the resulting ACE grants only ReadProperty/WriteProperty on that one attribute and nothing else. Set `kt_dc_url` to the writable DC that `krb5.conf` names as the KDC.
+2. Run `craft` as an approved user in the OU. Confirm the worker binds over SASL/GSSAPI with an integrity/confidentiality layer, adds exactly one value to `msDS-KeyCredentialLink`, obtains a ten-hour AES256 TGT with the expected flags and renewal window, and then removes the value. Inspect `Get-ADUser <user> -Properties msDS-KeyCredentialLink` before, during (from the DC) and after; only legitimate keys must remain.
+3. Confirm an account outside the delegated scope, and any privileged account, is refused the directory write and yields no TGT. Confirm the helper refuses to delegate over privileged targets and default containers without `-Force`.
+4. Interrupt or fail PKINIT (for example, a wrong KDC or a replication-delayed replica in `kt_dc_url`) and confirm the temporary key is still removed, the cache is preserved, and failures are logged. Verify a residual key triggers the CRITICAL AUTHPRIV event naming the object.
+5. Revoke the delegation (`-Remove`) and confirm fresh acquisition fails after the ACL change propagates; evaluate already-issued tickets separately. Rotate `submitter.keytab` and confirm the bind fails without it.
+6. Determine whether the KDC enforces the PKINIT freshness extension (RFC 8070); if so, Key Trust is unavailable here because CRAFT does not perform a freshness round trip. Audit directory event 5136 for the attribute changes and correlate with DC event 4768 and CRAFT's `certificate_source=key_trust` AUTHPRIV events.

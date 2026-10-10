@@ -39,5 +39,11 @@ if(BUILD_TESTING)
   target_link_libraries(craft-tests PRIVATE PkgConfig::DEPS)
   target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds)
   add_test(NAME offline-tests COMMAND craft-tests)
+  add_executable(craft-key-trust-tests tests/key-trust.cpp)
+  target_link_libraries(craft-key-trust-tests PRIVATE PkgConfig::DEPS)
+  target_link_options(craft-key-trust-tests PRIVATE
+    -Wl,--wrap=ldap_initialize,--wrap=ldap_set_option,--wrap=ldap_sasl_interactive_bind_s
+    -Wl,--wrap=ldap_modify_ext_s,--wrap=ldap_unbind_ext_s)
+  add_test(NAME key-trust-cleanup COMMAND craft-key-trust-tests)
 endif()
 # Intentionally no automatic setuid install target. Review before privileged install.
