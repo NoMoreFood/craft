@@ -66,17 +66,15 @@ inline Fd watch_process(pid_t pid, uid_t uid)
     const Fd status(open(std::format("/proc/{}/status", pid).c_str(), O_RDONLY | O_CLOEXEC));
     sysneed(status.get() >= 0, "read watched process identity");
     const auto bytes = read_all(status.get(), 65536);
-    std::istringstream input(std::string(bytes.begin(), bytes.end()));
-    std::string line;
+    const std::string_view text(reinterpret_cast<const char *>(bytes.data()), bytes.size());
     bool matches = false;
-    while (std::getline(input, line))
+    const auto pos = text.find("\nUid:\t");
+    if (pos != text.npos)
     {
-        if (!line.starts_with("Uid:")) continue;
-        std::istringstream fields(line.substr(4));
         uint64_t real = UINT64_MAX;
-        fields >> real;
-        matches = real == uid;
-        break;
+        const auto start = pos + 6;
+        const auto [ptr, ec] = std::from_chars(text.data() + start, text.data() + text.size(), real);
+        matches = (ec == std::errc{} && real == uid);
     }
     need(matches && !exited(descriptor.get()), "watched process must be live and belong to the caller");
     return descriptor;
@@ -122,20 +120,15 @@ inline Schedule schedule(const krb5_creds *tgt, time_t now)
 
 inline void check(krb5_context ctx, krb5_error_code code, std::string_view operation)
 {
-    if (!code) return;
-    if (!ctx) fail(std::string(operation));
-    auto message = krb_owner<const char, krb5_free_error_message>(ctx, krb5_get_error_message(ctx, code));
-    fail(std::format("{}: {}", operation, message ? message.get() : "Kerberos error"));
+    krb_check(ctx, code, operation);
 }
 
 inline void validate_cached_tgt(krb5_context ctx, const krb5_creds &tgt,
                                 krb5_principal client, krb5_principal server, time_t now)
 {
-    constexpr auto prohibited = TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PROXIABLE |
-                                TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE | TKT_FLG_POSTDATED | TKT_FLG_INVALID;
     const int64_t start = tgt.times.starttime ? tgt.times.starttime : tgt.times.authtime;
     need(krb5_principal_compare(ctx, tgt.client, client) && krb5_principal_compare(ctx, tgt.server, server) &&
-             (tgt.ticket_flags & TKT_FLG_PRE_AUTH) && !(tgt.ticket_flags & prohibited) &&
+             (tgt.ticket_flags & TKT_FLG_PRE_AUTH) && !(tgt.ticket_flags & PROHIBITED_TKT_FLAGS) &&
              tgt.times.authtime > 0 && start >= tgt.times.authtime && start <= now + 300 &&
              tgt.times.endtime > start &&
              ((tgt.ticket_flags & TKT_FLG_RENEWABLE) ? tgt.times.renew_till >= tgt.times.endtime
@@ -219,13 +212,12 @@ inline void enroll()
     ScopeExit cleanup([&]() noexcept
     {
         kill(child, SIGKILL);
-        while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+        waitpid_retry(child, nullptr);
     });
     writer = Fd();
     const auto diagnostics = read_all(reader.get(), 8192);
     int status{};
-    pid_t waited;
-    do waited = waitpid(child, &status, 0); while (waited < 0 && errno == EINTR);
+    const pid_t waited = waitpid_retry(child, &status, 0);
     sysneed(waited == child, "wait for issuer");
     cleanup.release();
     need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
@@ -319,9 +311,7 @@ inline void update(const Account &caller, const std::string &expected, Result &r
             }
             result.retry = std::min(3600U, 60U << failures);
             const auto text = std::format("{} {}\n", now + result.retry, std::min(failures + 1, 7U));
-            sysneed(lseek(retry.get(), 0, SEEK_SET) == 0 && ftruncate(retry.get(), 0) == 0,
-                    "update enrollment retry state");
-            write_all(retry.get(), byte_view(text));
+            write_truncated(retry.get(), byte_view(text));
             result.retry = std::min(result.retry, plan.delay);
             lock = Fd();
             enroll();
@@ -410,9 +400,8 @@ inline Result run_update(const Account &caller, const std::string &expected,
         }
         catch (const std::exception &error)
         {
-            std::snprintf(result.error, sizeof(result.error), "%s", error.what());
-            for (char &c : result.error)
-                if (c && static_cast<unsigned char>(c) < 32) c = ' ';
+            const auto clean = sanitize_ascii(error.what());
+            std::snprintf(result.error, sizeof(result.error), "%s", clean.c_str());
         }
         const auto count = write(writer.get(), &result, sizeof(result));
         _exit(count == sizeof(result) ? 0 : 1);
@@ -423,7 +412,7 @@ inline Result run_update(const Account &caller, const std::string &expected,
     {
         kill(-child, SIGKILL);
         kill(child, SIGKILL);
-        while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+        waitpid_retry(child, nullptr);
     });
     const auto until = std::min(Clock::now() + std::chrono::seconds(150), deadline);
     while (!stopping && Clock::now() < until && !exited(watch))
@@ -440,8 +429,7 @@ inline Result run_update(const Account &caller, const std::string &expected,
         const auto count = read(reader.get(), &result, sizeof(result));
         need(count == sizeof(result), "maintenance operation returned no complete result");
         int status{};
-        pid_t waited;
-        do waited = waitpid(child, &status, 0); while (waited < 0 && errno == EINTR);
+        const pid_t waited = waitpid_retry(child, &status, 0);
         sysneed(waited == child, "reap maintenance operation");
         cleanup.release();
         need(WIFEXITED(status) && WEXITSTATUS(status) == 0, "maintenance operation failed");
@@ -549,8 +537,7 @@ inline void detach(const Account &caller, const Options &option, Fd watch)
     }
     writer = Fd();
     int status{};
-    pid_t waited;
-    do waited = waitpid(child, &status, 0); while (waited < 0 && errno == EINTR);
+    const pid_t waited = waitpid_retry(child, &status, 0);
     sysneed(waited == child, "reap startup process");
     need(WIFEXITED(status) && WEXITSTATUS(status) == 0, "background startup failed");
     std::array<pollfd, 2> descriptors{{{watch.get(), POLLIN, 0}, {reader.get(), POLLIN, 0}}};

@@ -8,6 +8,7 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/random.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <pwd.h>
@@ -175,6 +176,22 @@ inline void write_all(int fd, ByteView bytes)
         sysneed(count > 0, "write");
         bytes = bytes.subspan(static_cast<size_t>(count));
     }
+}
+
+inline void write_truncated(int fd, ByteView bytes)
+{
+    // Rewind, truncate and rewrite file descriptor contents atomically.
+    sysneed(::lseek(fd, 0, SEEK_SET) == 0 && ::ftruncate(fd, 0) == 0, "truncate file");
+    write_all(fd, bytes);
+}
+
+inline std::string sanitize_ascii(std::string_view text, size_t max_len = 500)
+{
+    // Bound diagnostic string length and replace control characters in-place.
+    std::string s(text.substr(0, max_len));
+    for (char &c : s)
+        if (static_cast<unsigned char>(c) < 32 || c == 127) c = ' ';
+    return s;
 }
 
 inline Bytes read_all(int fd, size_t maximum = MAX_BLOB)
@@ -367,6 +384,14 @@ inline void drop(uid_t uid, gid_t gid, std::span<const gid_t> groups = {})
     no_core();
 }
 
+inline pid_t waitpid_retry(pid_t pid, int *status = nullptr, int options = 0)
+{
+    // Re-invoke waitpid across interrupted system calls until status is collected.
+    pid_t waited;
+    do waited = ::waitpid(pid, status, options); while (waited < 0 && errno == EINTR);
+    return waited;
+}
+
 // Generate unpredictable names from the kernel random source.
 inline std::string random_hex(size_t count = 16)
 {
@@ -393,6 +418,25 @@ inline std::string random_hex(size_t count = 16)
         result += hex[byte & 15];
     }
     return result;
+}
+
+inline std::string random_uuid()
+{
+    // Generate RFC 4122 version 4 UUID formatted as canonical lowercase string.
+    Bytes bytes(16);
+    auto remaining = std::span(bytes);
+    while (!remaining.empty())
+    {
+        const auto n = getrandom(remaining.data(), remaining.size(), 0);
+        if (n < 0 && errno == EINTR) continue;
+        sysneed(n > 0, "getrandom");
+        remaining = remaining.subspan(static_cast<size_t>(n));
+    }
+    bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0f) | 0x40); // Version 4
+    bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3f) | 0x80); // Variant 1 (RFC 4122)
+    return std::format("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                       bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                       bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
 }
 
 // Open the caller-owned cache directory after privilege has been relinquished.

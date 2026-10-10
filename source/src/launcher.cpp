@@ -40,7 +40,6 @@ int main(int argc, char **)
         // Resolve the real UID and retain only validated worker inputs.
         const Account caller = lookup_uid(uid);
         need(simple_name(caller.name), "invalid calling account");
-        need(lookup_uid(uid).name == caller.name, "runtime UID/name changed; administrator review required");
         const int count = getgroups(0, nullptr);
         sysneed(count >= 0, "getgroups");
         std::vector<gid_t> groups(static_cast<size_t>(count));
@@ -99,16 +98,12 @@ int main(int argc, char **)
             ScopeExit reap([&]() noexcept
             {
                 kill(child, SIGKILL);
-                while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+                waitpid_retry(child, nullptr);
             });
             const auto wait_worker = [&]
             {
                 int status{};
-                pid_t waited;
-                do
-                {
-                    waited = waitpid(child, &status, 0);
-                } while (waited < 0 && errno == EINTR);
+                const pid_t waited = waitpid_retry(child, &status, 0);
                 sysneed(waited == child, "waitpid");
                 reap.release();
                 need(WIFEXITED(status) && WEXITSTATUS(status) == 0,

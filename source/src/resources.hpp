@@ -101,11 +101,25 @@ template <class T, auto Free> [[nodiscard]] auto krb_owner(krb5_context context,
     return KrbOwned<T, Free>(value, {context});
 }
 
+inline void krb_check(krb5_context ctx, krb5_error_code code, std::string_view operation)
+{
+    // Check Kerberos API status and fail with diagnostic error message.
+    if (!code) return;
+    if (!ctx) fail(std::string(operation));
+    auto message = krb_owner<const char, krb5_free_error_message>(ctx, krb5_get_error_message(ctx, code));
+    fail(std::format("{}: {}", operation, message ? message.get() : "Kerberos error"));
+}
+
 using KrbContext = Owned<std::remove_pointer_t<krb5_context>, krb5_free_context>;
 using KrbCache = KrbOwned<std::remove_pointer_t<krb5_ccache>, krb5_cc_destroy>;
 
 // Restrict both transport and user initial credentials to interoperable AES enctypes.
 inline constexpr std::array AES_TYPES{ENCTYPE_AES256_CTS_HMAC_SHA1_96, ENCTYPE_AES128_CTS_HMAC_SHA1_96};
+
+// Enforce prohibited ticket flags across issuance and maintenance.
+inline constexpr auto PROHIBITED_TKT_FLAGS =
+    TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PROXIABLE |
+    TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE | TKT_FLG_POSTDATED | TKT_FLG_INVALID;
 
 inline constexpr bool is_aes(krb5_enctype type) noexcept
 {

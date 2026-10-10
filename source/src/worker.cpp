@@ -462,14 +462,24 @@ inline Bytes wrap_eobo(X509_REQ *req, X509 *agent, EVP_PKEY *agent_key, const st
 }
 
 // Read certificate extensions while rejecting absent or ambiguous identity bindings.
-inline bool has_eku(X509 *cert, const std::string &oid)
+inline std::vector<std::string> certificate_ekus(X509 *cert)
 {
     int critical{};
     Owned<EXTENDED_KEY_USAGE, EXTENDED_KEY_USAGE_free> usages(
         static_cast<EXTENDED_KEY_USAGE *>(X509_get_ext_d2i(cert, NID_ext_key_usage, &critical, nullptr)));
-    return usages &&
-           std::ranges::any_of(std::views::iota(0, sk_ASN1_OBJECT_num(usages.get())),
-                               [&](int i) { return objtext(sk_ASN1_OBJECT_value(usages.get(), i)) == oid; });
+    if (!usages) return {};
+    std::vector<std::string> result;
+    const int count = sk_ASN1_OBJECT_num(usages.get());
+    result.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i)
+        result.push_back(objtext(sk_ASN1_OBJECT_value(usages.get(), i)));
+    return result;
+}
+
+inline bool has_eku(X509 *cert, const std::string &oid)
+{
+    const auto ekus = certificate_ekus(cert);
+    return std::ranges::find(ekus, oid) != ekus.end();
 }
 
 inline Bytes extension_bytes(X509 *x, const char *oid)
@@ -568,12 +578,17 @@ inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Conf
     Owned<BASIC_CONSTRAINTS, BASIC_CONSTRAINTS_free> bc(
         static_cast<BASIC_CONSTRAINTS *>(X509_get_ext_d2i(c, NID_basic_constraints, &bc_critical, nullptr)));
     need(bc && !bc->ca && !bc->pathlen && X509_check_ca(c) == 0, "user certificate needs CA:FALSE");
+    const auto ekus = certificate_ekus(c);
+    const auto has = [&](std::string_view oid)
+    {
+        return std::ranges::find(ekus, oid) != ekus.end();
+    };
     if (source == CertificateSource::Enrollment)
-        need(has_eku(c, SMARTCARD_OID) && has_eku(c, CLIENT_AUTH_OID) && has_eku(c, PKINIT_CLIENT_OID),
+        need(has(SMARTCARD_OID) && has(CLIENT_AUTH_OID) && has(PKINIT_CLIENT_OID),
              "issued certificate needs Smart Card Logon, Client Authentication and PKINIT Client Authentication "
              "EKUs");
     else
-        need(has_eku(c, SMARTCARD_OID) || has_eku(c, PKINIT_CLIENT_OID),
+        need(has(SMARTCARD_OID) || has(PKINIT_CLIENT_OID),
              "user certificate needs Smart Card Logon or PKINIT Client Authentication EKU");
     int critical = 0;
     Owned<ASN1_BIT_STRING, ASN1_BIT_STRING_free> ku(
@@ -637,13 +652,7 @@ inline constexpr char ENROLL_NS[] = "http://schemas.microsoft.com/windows/pki/20
 // Construct the WSTEP request carrying the complete signed CMS token.
 inline std::string soap_request(const Config &c, ByteView cms)
 {
-    std::string id = random_hex();
-    id[12] = '4';
-    id[16] = "89ab"[(id[16] >= 'a' ? id[16] - 'a' + 10 : id[16] - '0') & 3];
-    id.insert(20, "-");
-    id.insert(16, "-");
-    id.insert(12, "-");
-    id.insert(8, "-");
+    const std::string id = random_uuid();
 
     // The complete CMS, including the signed requestername, is the PKCS7 token.
     return std::string("<?xml version=\"1.0\" encoding=\"utf-8\"?>") + "<s:Envelope xmlns:s=\"" + SOAP_NS +
@@ -689,15 +698,9 @@ inline std::string node_text(xmlNodePtr node)
     return reinterpret_cast<const char *>(text.get());
 }
 
-inline std::string safe_message(std::string s)
+inline std::string safe_message(std::string_view s)
 {
-    // Bound error message size and sanitize non-printable control characters
-    if (s.size() > 500)
-    {
-        s.resize(500);
-    }
-    const static std::regex control_re(R"([\x00-\x1f\x7f])");
-    return std::regex_replace(s, control_re, " ");
+    return sanitize_ascii(s);
 }
 
 inline Owned<xmlDoc, xmlFreeDoc> parse_soap(const std::string &body)
@@ -787,12 +790,9 @@ public:
         return context_.get();
     }
 
-    void check(krb5_error_code code, const std::string &operation) const
+    void check(krb5_error_code code, std::string_view operation) const
     {
-        if (!code) return;
-        auto message =
-            krb_owner<const char, krb5_free_error_message>(ctx(), krb5_get_error_message(ctx(), code));
-        fail(operation + ": " + (message ? message.get() : "unknown Kerberos error"));
+        krb_check(ctx(), code, operation);
     }
 
     void acquire_transport(const Config &c)
@@ -965,11 +965,8 @@ inline void validate_tgt(krb5_context ctx,
     need(krb5_principal_compare(ctx, creds.client, principal) &&
              krb5_principal_compare(ctx, creds.server, tgs),
          "KDC returned unexpected principal or non-TGT credentials");
-    constexpr auto prohibited = TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PROXIABLE |
-                                TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE |
-                                TKT_FLG_POSTDATED | TKT_FLG_INVALID;
     need((creds.ticket_flags & TKT_FLG_PRE_AUTH) && (creds.ticket_flags & TKT_FLG_INITIAL) &&
-             !(creds.ticket_flags & prohibited),
+             !(creds.ticket_flags & PROHIBITED_TKT_FLAGS),
          "KDC returned prohibited flags or no initial/preauthentication flag");
     if (cfg.renew > 0)
     {
@@ -1038,7 +1035,9 @@ get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *
     ScopeExit erase_key([&]() noexcept { wipe(kb); });
     Fd certfd = memory_file("craft-cert", cb), keyfd = memory_file("craft-key", kb);
     wipe(kb);
+    erase_key.release();
     clear_key_bio();
+    erase_bio.release();
     const auto identity = std::format("FILE:/proc/self/fd/{},/proc/self/fd/{}", certfd.get(), keyfd.get());
     auto principal = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(k.ctx());
     auto tgs = krb_owner<std::remove_pointer_t<krb5_principal>, krb5_free_principal>(k.ctx());
@@ -1077,22 +1076,15 @@ get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *
         "user PKINIT");
     validate_tgt(k.ctx(), cfg, creds, principal.get(), tgs.get(), requested_at, time(nullptr));
     const auto outer = ticket_enctype(k.ctx(), creds.ticket);
-    if (creds.times.renew_till > 0)
-    {
-        std::cerr << std::format(
-            "craft-worker: TGT expires at Unix {} (renewable until Unix {}); session enctype={}; ticket enctype={}\n",
-            creds.times.endtime,
-            creds.times.renew_till,
-            creds.keyblock.enctype,
-            outer);
-    }
-    else
-    {
-        std::cerr << std::format("craft-worker: TGT expires at Unix {}; session enctype={}; ticket enctype={}\n",
-                                 creds.times.endtime,
-                                 creds.keyblock.enctype,
-                                 outer);
-    }
+    const auto renew_str = creds.times.renew_till > 0
+        ? std::format(" (renewable until Unix {})", creds.times.renew_till)
+        : "";
+    std::cerr << std::format(
+        "craft-worker: TGT expires at Unix {}{}; session enctype={}; ticket enctype={}\n",
+        creds.times.endtime,
+        renew_str,
+        creds.keyblock.enctype,
+        outer);
     return file_cache(k.ctx(), creds);
 }
 
@@ -1121,14 +1113,8 @@ inline Fd rate_limit(uid_t uid, uint32_t interval)
              "per-user enrollment rate limit reached");
     }
     std::string t = std::to_string(now) + "\n";
-    sysneed(lseek(f.get(), 0, SEEK_SET) == 0 && ftruncate(f.get(), 0) == 0, "update issuance lock");
-    write_all(f.get(), byte_view(t));
+    write_truncated(f.get(), byte_view(t));
     return f;
-}
-
-inline Fd rate_limit(const Mapping &m, uint32_t interval)
-{
-    return rate_limit(m.uid, interval);
 }
 
 inline void free_ldap(LDAP *ld) noexcept
