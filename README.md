@@ -18,13 +18,13 @@ All modes request `<Linux username>@<configured realm>`. The KDC authenticates t
 
 All modes need administrator-controlled Linux Kerberos configuration, KDC trust and current CRLs. Modes 1 and 3 also validate the user certificate against configured CA trust and CRLs. Mode 2 authenticates the user through the linked public key and still validates the KDC certificate.
 
-![CRAFT selects the supplied home pair first, then the configured privileged mechanism only when both files are absent.](output/pdf/svg/01-system-overview.svg)
+![CRAFT selects the supplied home pair first, then the configured privileged mechanism only when both files are absent.](docs/diagrams/01-system-overview.svg)
 
 ## Mode 1: Privileged certificate enrollment
 
 Linux orchestrates directory lookup, fresh RSA key generation, an enrollment-on-behalf-of (EOBO) request signed by the enrollment agent, certificate issuance through CES and the CA, and then PKINIT for the user. The generated user certificate and private key are temporary on Linux; CA issuance records persist.
 
-![Privileged enrollment: Linux resolves the caller, enrolls through CES and AD CS, then obtains a user TGT through PKINIT.](output/pdf/svg/02-enrollment-sequence.svg)
+![Privileged enrollment: Linux resolves the caller, enrolls through CES and AD CS, then obtains a user TGT through PKINIT.](docs/diagrams/02-enrollment-sequence.svg)
 
 Follow [mode 1 setup](source/README.md#mode-1-setup-privileged-certificate-enrollment) and [enrollment-agent restrictions](docs/03-Enrollment-Agent-Restrictions.md). Administrators configure the template, agent, CES transport, directory keytab, trusted issuers and CRLs, and CA-enforced recipient restrictions.
 
@@ -34,7 +34,7 @@ The service account uses its keytab for LDAP/GSSAPI and, with `ces_auth=negotiat
 
 Linux orchestrates acquisition without enrolling a user certificate: the service account binds to a writable DC, resolves the caller's AD account, adds one temporary public-key credential to `msDS-KeyCredentialLink`, and performs Key Trust PKINIT against that same DC. CRAFT removes its entry before publishing the TGT and preserves existing keys. Failed cleanup blocks cache publication and reports the residual credential for administrator action.
 
-![Privileged credential linking: Linux adds a temporary AD key, obtains a user TGT through Key Trust PKINIT, removes the key, and publishes the cache.](output/pdf/svg/03-credential-linking-sequence.svg)
+![Privileged credential linking: Linux adds a temporary AD key, obtains a user TGT through Key Trust PKINIT, removes the key, and publishes the cache.](docs/diagrams/03-credential-linking-sequence.svg)
 
 Follow [mode 2 setup](source/README.md#mode-2-setup-privileged-credential-linking) and [Key Trust delegation](docs/04-Key-Credential-Link-Delegation.md). Delegate only the required attribute access over approved ordinary users. This path requires no user-certificate CA enrollment, CES, enrollment agent or user template; it still requires a PKINIT-capable KDC with a trusted KDC certificate and current CRLs.
 
@@ -42,7 +42,7 @@ Follow [mode 2 setup](source/README.md#mode-2-setup-privileged-credential-linkin
 
 Run the Windows certificate helper as the intended domain user without elevation to enroll and export the certificate. Linux uses the transferred certificate and matching unencrypted private key at `~/.config/craft/user.pem` and `user.key` for PKINIT. CRAFT runs as the caller and leaves the supplied PEM files in place. Users replace the pair before certificate expiry.
 
-![Unprivileged mode: enroll and export a certificate on Windows, securely transfer the PEM pair to Linux, and run CRAFT as the user for PKINIT.](output/pdf/svg/04-windows-exported-certificate.svg)
+![Unprivileged mode: enroll and export a certificate on Windows, securely transfer the PEM pair to Linux, and run CRAFT as the user for PKINIT.](docs/diagrams/04-windows-exported-certificate.svg)
 
 Follow [mode 3 setup](source/README.md#mode-3-setup-unprivileged-windows-exported-certificate), including the [Windows certificate helper](scripts/Request-CRAFT-Certificate.cmd). Host installation and public trust configuration require an administrator, but Linux acquisition needs no setuid bit, service account, keytab, LDAP lookup, CES or `/run/craft`.
 
@@ -108,16 +108,16 @@ Stopping maintenance, removing a linked key or deleting a certificate does not r
 
 ### Diagram sources and downloads
 
-| Diagram | Image | Editable vector |
-| --- | --- | --- |
-| Three-mode selection | [PNG](output/pdf/png/craft-diagram-1.png) | [SVG](output/pdf/svg/01-system-overview.svg) |
-| Mode 1: enrollment and PKINIT | [PNG](output/pdf/png/craft-diagram-2.png) | [SVG](output/pdf/svg/02-enrollment-sequence.svg) |
-| Mode 2: credential linking and PKINIT | [PNG](output/pdf/png/craft-diagram-3.png) | [SVG](output/pdf/svg/03-credential-linking-sequence.svg) |
-| Mode 3: Windows export and unprivileged PKINIT | [PNG](output/pdf/png/craft-diagram-4.png) | [SVG](output/pdf/svg/04-windows-exported-certificate.svg) |
-| Credential timing | [PNG](output/pdf/png/craft-diagram-5.png) | [SVG](output/pdf/svg/05-credential-timing.svg) |
-| Long-running job maintenance | [PNG](output/pdf/png/craft-diagram-6.png) | [SVG](output/pdf/svg/06-job-maintenance.svg) |
+| Diagram | Editable SVG |
+| --- | --- |
+| Three-mode selection | [SVG](docs/diagrams/01-system-overview.svg) |
+| Mode 1: enrollment and PKINIT | [SVG](docs/diagrams/02-enrollment-sequence.svg) |
+| Mode 2: credential linking and PKINIT | [SVG](docs/diagrams/03-credential-linking-sequence.svg) |
+| Mode 3: Windows export and unprivileged PKINIT | [SVG](docs/diagrams/04-windows-exported-certificate.svg) |
+| Credential timing | [SVG](docs/diagrams/05-credential-timing.svg) |
+| Long-running job maintenance | [SVG](docs/diagrams/06-job-maintenance.svg) |
 
-[All diagrams (PDF)](output/pdf/CRAFT-Timing-and-Architecture.pdf) · [Diagram generator](output/pdf/build_craft_diagrams.py) · [Word guide generator](docs/build_craft_guides.py)
+[All diagrams (PDF)](docs/CRAFT-Diagrams.pdf) · [Diagram generator](docs/build_craft_diagrams.py) · [Word guide generator](docs/build_craft_guides.py)
 
 ## Project status
 

@@ -12,7 +12,7 @@ These restrictions govern **mode 1, privileged certificate enrollment**; follow 
 
 A home-only installation can omit the service account, its private credentials and setuid entirely. Supplied certificates remain governed by their issuing authority, revocation policy and KDC mapping. The CRAFT enrollment recipient allowlist does not authorize or revoke a certificate issued through another path. Removing the launcher setuid bit prevents both privileged mechanisms but does not disable home authentication. Set `enabled=no` or remove execute access to stop fresh acquisition through all modes; existing tickets and renewals remain separate.
 
-![Three-mode selection: the supplied home pair takes priority over the configured privileged mechanism.](../output/pdf/svg/01-system-overview.svg)
+![Three-mode selection: the supplied home pair takes priority over the configured privileged mechanism.](diagrams/01-system-overview.svg)
 
 ## What the agent can do
 

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 import math
 import os
 from pathlib import Path
 from xml.etree import ElementTree as ET
-
-from pdf2image import convert_from_path
 
 from reportlab.lib.colors import HexColor
 from reportlab.pdfbase import pdfmetrics
@@ -17,7 +14,7 @@ from reportlab.pdfgen import canvas
 
 
 ROOT = Path(__file__).resolve().parent
-SVG_DIR = ROOT / "svg"
+SVG_DIR = ROOT / "diagrams"
 WIDTH, HEIGHT = 1600, 1000
 SCALE = 0.72
 NS = "http://www.w3.org/2000/svg"
@@ -582,14 +579,9 @@ def home_certificate(pdf):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--poppler-path", help="Directory containing pdftoppm and pdfinfo")
-    args = parser.parse_args()
     fonts()
     SVG_DIR.mkdir(parents=True, exist_ok=True)
-    png_dir = ROOT / "png"
-    png_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = ROOT / "CRAFT-Timing-and-Architecture.pdf"
+    pdf_path = ROOT / "CRAFT-Diagrams.pdf"
     pdf = canvas.Canvas(str(pdf_path), pagesize=(WIDTH * SCALE, HEIGHT * SCALE), pageCompression=1)
     pdf.setTitle("CRAFT operating modes and ticket lifecycle")
     pdf.setAuthor("CRAFT")
@@ -598,15 +590,11 @@ def main():
         'Windows PEM, renewal and maintenance'
     ))
     pdf.setCreator("CRAFT vector diagram builder")
-    diagrams = [(overview, 1), (acquisition, 2), (credential_linking, 3),
-                (home_certificate, 4), (timing, 5), (maintenance, 6)]
-    for page, _ in diagrams:
+    diagrams = (overview, acquisition, credential_linking, home_certificate, timing, maintenance)
+    for page in diagrams:
         page(pdf)
     pdf.save()
-    pages = convert_from_path(str(pdf_path), dpi=100, poppler_path=args.poppler_path)
-    for image, (_, number) in zip(pages, diagrams, strict=True):
-        image.save(png_dir / f"craft-diagram-{number}.png")
-    print(f"Created {pdf_path} and {len(diagrams)} matching SVG/PNG diagrams")
+    print(f"Created {pdf_path} and {len(diagrams)} matching SVG diagrams in {SVG_DIR}")
 
 
 if __name__ == "__main__":

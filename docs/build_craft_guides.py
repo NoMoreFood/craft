@@ -1,9 +1,12 @@
 """Build the Word guides from the operating-mode diagrams and setup references.
 
-Run from the repository root after output/pdf/build_craft_diagrams.py.
+Run from the repository root after docs/build_craft_diagrams.py.
+Requires python-docx, pdf2image and Poppler; --poppler-path selects its binary directory.
 Export the resulting DOCX files to PDF with Word and inspect the rendered pages.
 """
 
+import argparse
+from io import BytesIO
 from pathlib import Path
 
 from docx import Document
@@ -13,6 +16,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
+from pdf2image import convert_from_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,9 +27,9 @@ SETUP = [
     "source/README.md#mode-3-setup-unprivileged-windows-exported-certificate",
 ]
 FLOW = [
-    "output/pdf/svg/02-enrollment-sequence.svg",
-    "output/pdf/svg/03-credential-linking-sequence.svg",
-    "output/pdf/svg/04-windows-exported-certificate.svg",
+    "docs/diagrams/02-enrollment-sequence.svg",
+    "docs/diagrams/03-credential-linking-sequence.svg",
+    "docs/diagrams/04-windows-exported-certificate.svg",
 ]
 
 
@@ -75,6 +79,9 @@ def new_document(path, title, subtitle):
     for child in list(doc._element.body):
         if child.tag != qn("w:sectPr"):
             doc._element.body.remove(child)
+    for relation in list(doc.part.rels.values()):
+        if relation.reltype.endswith("/hyperlink"):
+            doc.part.drop_rel(relation.rId)
     dimensions(doc.sections[0])
     for name in ("Normal", "Title", "Subtitle", "Heading 1", "Heading 2", "Caption", "Small Note"):
         style = doc.styles[name]
@@ -188,7 +195,7 @@ def table(doc, headers, rows, widths):
     return t
 
 
-def figure_page(doc, mode, title, description):
+def figure_page(doc, mode, title, description, image):
     section = doc.add_section(WD_SECTION_START.NEW_PAGE)
     dimensions(section, landscape=True)
     doc.add_heading(title, 1)
@@ -197,7 +204,10 @@ def figure_page(doc, mode, title, description):
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_after = Pt(2)
     p.paragraph_format.keep_with_next = True
-    shape = p.add_run().add_picture(str(ROOT / f"output/pdf/png/craft-diagram-{mode + 1}.png"), width=Inches(9.5))
+    picture = BytesIO()
+    image.save(picture, format="PNG")
+    picture.seek(0)
+    shape = p.add_run().add_picture(picture, width=Inches(9.5))
     shape._inline.docPr.set("descr", description)
     caption = doc.add_paragraph(description, "Caption")
     caption.paragraph_format.space_after = Pt(0)
@@ -217,7 +227,7 @@ def license_and_references(doc):
     p.add_run(" for the terms and warranty disclaimer.")
 
 
-def process_guide():
+def process_guide(images):
     path = ROOT / "docs/01-CRAFT-Process-Overview.docx"
     doc = new_document(path,
         "CRAFT Linux Operating Modes and Tickets",
@@ -266,7 +276,7 @@ def process_guide():
     ))
     links(doc,
         [("Three-mode selection diagram",
-        "output/pdf/svg/01-system-overview.svg"),
+        "docs/diagrams/01-system-overview.svg"),
         ("Build and install",
         "source/README.md#build")])
     paragraph(doc, (
@@ -279,17 +289,17 @@ def process_guide():
         'Linux resolves the user, enrolls a restricted certificate through CES '
         "and AD CS, then obtains the user's TGT through PKINIT. The generated "
         'user pair is temporary; CA records remain.'
-    ))
+    ), images[0])
     figure_page(doc, 2, "Mode 2 privileged credential linking", (
         'Linux uses a delegated directory write and Key Trust PKINIT against the '
         'same writable DC. Cleanup must succeed before cache publication. A '
         'residual key after an outage needs administrator removal.'
-    ))
+    ), images[1])
     figure_page(doc, 3, "Mode 3 unprivileged Windows exported certificate", (
         'Windows enrollment and export precede secure PEM transfer. Linux '
         "validates the supplied pair and obtains the user's TGT as the caller. "
         'The PEM pair remains and must be replaced before expiry.'
-    ))
+    ), images[2])
     section = doc.add_section(WD_SECTION_START.NEW_PAGE)
     dimensions(section)
     doc.add_heading("Identity trust and credential storage", 1)
@@ -409,7 +419,7 @@ def process_guide():
         [("Maintenance setup and status",
         "source/README.md#long-running-jobs"),
         ("Credential timing diagram",
-        "output/pdf/svg/05-credential-timing.svg")])
+        "docs/diagrams/05-credential-timing.svg")])
     license_and_references(doc)
     doc.save(path)
     print(f"Created {path}")
@@ -848,5 +858,10 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
 
 
 if __name__ == "__main__":
-    process_guide()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--poppler-path", help="Directory containing pdftoppm and pdfinfo")
+    args = parser.parse_args()
+    images = convert_from_path(str(ROOT / "docs/CRAFT-Diagrams.pdf"), dpi=100,
+                               first_page=2, last_page=4, poppler_path=args.poppler_path)
+    process_guide(images)
     configuration_guide()

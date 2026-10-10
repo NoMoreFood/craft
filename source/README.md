@@ -21,13 +21,13 @@ Invoke `/usr/local/bin/craft` with no arguments as the intended non-root user, w
 
 “Privileged mode” describes installation authority. Certificate, LDAP, CES and Kerberos processing run as the dedicated service account rather than root; the cache writer permanently drops to the caller before reading credential bytes. Mode 3 runs acquisition as the caller and needs no setuid bit. The result is the user's TGT, not the service account's transport TGT.
 
-![Home-pair priority and the two configured privileged modes.](../output/pdf/svg/01-system-overview.svg)
+![Home-pair priority and the two configured privileged modes.](../docs/diagrams/01-system-overview.svg)
 
 ## Mode 1 workflow: Privileged certificate enrollment
 
 Linux resolves the caller's AD UPN through LDAP/GSSAPI, generates an RSA-3072 private key and CSR, signs an EOBO CMS request identifying `DOMAIN\linuxname` with the enrollment-agent key, and submits it through CES over verified HTTPS. The CA issues the short-lived user certificate under its template and recipient restrictions. CRAFT verifies the issued key, directory UPN, template, all three client EKUs, short validity, CA chain and CRLs, then performs PKINIT. [2,3,4,5]
 
-![Mode 1 enrollment sequence, ending in user PKINIT and caller-owned cache publication.](../output/pdf/svg/02-enrollment-sequence.svg)
+![Mode 1 enrollment sequence, ending in user PKINIT and caller-owned cache publication.](../docs/diagrams/02-enrollment-sequence.svg)
 
 Start with [mode 1 setup](#mode-1-setup-privileged-certificate-enrollment), [Windows enrollment preparation](#assumptions-and-windows-preparation) and [enrollment-agent restrictions](../docs/03-Enrollment-Agent-Restrictions.md). The generated user key and certificate are released after authentication; CA issuance records remain. The agent signature and CES transport authentication have separate roles.
 
@@ -44,7 +44,7 @@ When no home pair is present, the setuid launcher runs the worker as the service
 5. Performs PKINIT for `<caller>@<realm>`; the KDC matches the key and issues a TGT, which CRAFT validates like every other mode.
 6. **Removes** the temporary value before emitting credentials. An independent cleanup process also attempts removal on acquisition failure or worker termination, including an uncertain LDAP add outcome. It retries with a fresh connection. If removal still fails, cache publication fails and a CRITICAL AUTHPRIV event identifies the residual credential for administrator cleanup. Directory unavailability or host failure can leave a key behind.
 
-![Mode 2 adds a temporary AD key, performs Key Trust PKINIT against the same DC, removes the entry, then publishes the cache.](../output/pdf/svg/03-credential-linking-sequence.svg)
+![Mode 2 adds a temporary AD key, performs Key Trust PKINIT against the same DC, removes the entry, then publishes the cache.](../docs/diagrams/03-credential-linking-sequence.svg)
 
 Follow [mode 2 setup](#mode-2-setup-privileged-credential-linking) and [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
 
@@ -69,7 +69,7 @@ Key Trust selects only when the home pair is absent, shares the per-user issuanc
 
 ## Mode 3 workflow: Unprivileged Windows-exported certificate
 
-![Mode 3 enrolls and exports on Windows, transfers the pair securely to Linux, and performs PKINIT as the caller.](../output/pdf/svg/04-windows-exported-certificate.svg)
+![Mode 3 enrolls and exports on Windows, transfers the pair securely to Linux, and performs PKINIT as the caller.](../docs/diagrams/04-windows-exported-certificate.svg)
 
 Follow [mode 3 setup](#mode-3-setup-unprivileged-windows-exported-certificate) for Windows export and ordinary Linux installation. The same acquisition path accepts an existing PEM pair from another approved source.
 

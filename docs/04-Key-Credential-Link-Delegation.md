@@ -18,7 +18,7 @@ This page explains the mechanism, the authorization boundary, the delegation hel
 6. It performs PKINIT for `<Linux username>@<realm>`. The KDC matches the certificate's public key against the Key Credential and issues a TGT. CRAFT validates the returned principal, flags, AES encryption and lifetimes.
 7. An independent cleanup process **removes** the temporary value before any credential bytes leave the worker. It also attempts cleanup after acquisition failure or worker termination and uncertain LDAP add outcomes, retrying with a fresh connection. If cleanup still fails, CRAFT refuses cache publication and logs a CRITICAL AUTHPRIV event naming the residual credential for administrator removal. Host failure or directory unavailability can leave a usable key behind.
 
-![Mode 2 credential linking, Key Trust PKINIT and mandatory cleanup before cache publication.](../output/pdf/svg/03-credential-linking-sequence.svg)
+![Mode 2 credential linking, Key Trust PKINIT and mandatory cleanup before cache publication.](diagrams/03-credential-linking-sequence.svg)
 
 ## The authorization boundary
 
