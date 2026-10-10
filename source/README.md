@@ -1,39 +1,79 @@
-# CRAFT - Certificate Request Agent for Tickets
+# CRAFT build configuration and setup
 
-CRAFT obtains Kerberos credentials noninteractively from a trusted, administrator-managed Linux endpoint, including a host that is not domain-joined. Users can supply a certificate and private key in their home directory for an entirely unprivileged workflow. When that pair is absent, an authorized deployment can enroll a short-lived certificate on the user's behalf. Both paths support unattended scripts and Kerberos-aware applications without retaining the user's AD password.
+CRAFT obtains a user's Kerberos ticket-granting ticket (TGT) through PKINIT from Linux, including hosts that are not domain-joined. This guide covers **three operating modes**, their setup and their shared ticket-cache behavior. All modes support unattended applications without storing the user's AD password. CRAFT does not perform an MFA challenge or establish completion of interactive MFA.
 
-This supports automation alongside MFA-protected interactive sign-in. CRAFT does not perform an MFA challenge or establish that the user completed one. Authentication depends on the supplied certificate and KDC account mapping, or on administrator-authorized enrollment and CA restrictions.
+| Mode | Linux acquisition identity | Credential source | Setup |
+| --- | --- | --- | --- |
+| **1. Privileged certificate enrollment** | Dedicated `craft` service account through the setuid launcher | AD CS certificate enrolled through CES with an enrollment-agent signature | [Mode 1 setup](#mode-1-setup-privileged-certificate-enrollment) |
+| **2. Privileged credential linking (Key Trust)** | Dedicated `craft` service account through the setuid launcher | Temporary public-key entry in the user's `msDS-KeyCredentialLink` | [Mode 2 setup](#mode-2-setup-privileged-credential-linking) |
+| **3. Unprivileged Windows-exported certificate** | Invoking Linux user through ordinary executables | Certificate and unencrypted private key exported on Windows and transferred to the user's Linux home | [Mode 3 setup](#mode-3-setup-unprivileged-windows-exported-certificate) |
 
-C++20 | Kerberos defaults: 10h TGT, 7d renewal | Home certificates or short-lived enrollment | AES256/AES128.
+The executables use C++20. Defaults request a ten-hour TGT, seven-day renewal and AES256/AES128 encryption. This is a reference implementation: complete the [acceptance checks](TESTING.md) for the installed mode and review the [security boundary](SECURITY.md).
 
-**Deployment model:** Home mode uses ordinary `craft` and `craft-worker` executables with readable, root-controlled public configuration under `/etc/craft`. Enrollment additionally uses the `craft` service account, `craft-users` caller group, private enrollment credentials and the setuid launcher. Both publish `.krb5cc_craft` in the caller's home.
+## Mode selection and process boundaries
 
-**Status:** Reference implementation with synthetic offline tests. Live AD/CES/PKINIT interoperability and the installed privilege boundary require an isolated lab trial before production use.
+Invoke `/usr/local/bin/craft` with no arguments as the intended non-root user, without `sudo`. The launcher uses the real UID, NSS username and home, ignoring `$USER`, `$HOME`, `SUDO_USER`, `XDG_CONFIG_HOME` and caller-supplied Kerberos configuration.
 
-This project supplies native C++20 Linux executables for a host that cannot join an AD domain. It requests a real user TGT through an actual domain controller. It does not forge tickets, use domain ticket-signing secrets, or substitute a service-account TGT for the user's TGT.
+1. The caller worker opens the fixed NSS-home `~/.config/craft/user.pem` and `user.key` pair using the caller's permissions.
+2. A complete pair selects the unprivileged certificate path, even on a setuid installation. Partial, unsafe or invalid inputs fail; neither privileged mechanism is attempted.
+3. Only an entirely absent pair selects `mechanism=enrollment` (mode 1, the default) or `mechanism=key_trust` (mode 2). Both require the setuid launcher, dedicated service account and private `/run/craft`. An ordinary installation fails when no pair is present. A failed privileged mechanism never selects the other one.
+4. MIT Kerberos performs PKINIT for `<Linux username>@<configured realm>` using sealed certificate/key memory files. The KDC enforces account mapping. CRAFT checks the returned principal, TGT flags, AES encryption and lifetimes before the caller publishes the cache. [6,8]
 
-Enrollment creates a temporary software certificate; home mode loads the user's existing software certificate and key. Neither workflow implements hardware possession, PIN, attestation or an MFA challenge.
+“Privileged mode” describes installation authority. Certificate, LDAP, CES and Kerberos processing run as the dedicated service account rather than root; the cache writer permanently drops to the caller before reading credential bytes. Mode 3 runs acquisition as the caller and needs no setuid bit. The result is the user's TGT, not the service account's transport TGT.
 
-## Process and Access Boundaries
+![Home-pair priority and the two configured privileged modes.](../output/pdf/svg/01-system-overview.svg)
 
-The no-argument launcher identifies the real UID, NSS username and home, ignoring `$USER`, `$HOME`, `SUDO_USER`, `XDG_CONFIG_HOME` and caller-supplied Kerberos configuration. It first starts the fixed worker as the caller to check the home pair. With an ordinary installation, the entire acquisition runs unprivileged. An installed setuid launcher permanently drops its home worker before any home-file access, and drops its cache-writing parent before reading credential bytes.
+## Mode 1 workflow: Privileged certificate enrollment
 
-Only an absent pair selects enrollment. That workflow requires the setuid launcher, runs the worker under the dedicated service account and drops the cache writer to the caller. Enrollment credentials stay separate from the user cache. Invalid home inputs fail without enrollment fallback.
+Linux resolves the caller's AD UPN through LDAP/GSSAPI, generates an RSA-3072 private key and CSR, signs an EOBO CMS request identifying `DOMAIN\linuxname` with the enrollment-agent key, and submits it through CES over verified HTTPS. The CA issues the short-lived user certificate under its template and recipient restrictions. CRAFT verifies the issued key, directory UPN, template, all three client EKUs, short validity, CA chain and CRLs, then performs PKINIT. [2,3,4,5]
 
-## What Happens
+![Mode 1 enrollment sequence, ending in user PKINIT and caller-owned cache publication.](../output/pdf/svg/02-enrollment-sequence.svg)
 
-1. Invoke `/usr/local/bin/craft` with no arguments as the intended non-root user, without `sudo`.
-2. The caller worker opens the NSS-resolved `~/.config/craft/user.pem` and `user.key`. A complete pair takes priority. Missing directories or both files absent select enrollment; partial, unsafe, malformed, expired or revoked inputs fail.
-3. Home mode loads the unencrypted PEM pair as the caller, without a service account, LDAP, submission keytab, enrollment agent, CES or `/run/craft`.
-4. Enrollment mode resolves the AD UPN using LDAP/GSSAPI, generates an RSA-3072 key and CSR, signs an EOBO CMS request with `DOMAIN\linuxname`, and submits it through CES over verified HTTPS. [2,3,4,5]
-4b. Key Trust mode (`mechanism=key_trust`) binds to the writable DC, resolves the caller's object, generates an RSA-2048 key (mandated by MS-ADTS 2.2.20.5.1 for NGC) and short-lived certificate pair, adds a temporary NGC key to the caller's `msDS-KeyCredentialLink`, and removes it after PKINIT. No CA, CES, enrollment agent or template is used.
-5. All modes validate matching key, logon usage and current validity. Home and enrollment also verify CA trust and CRLs; the Key Trust self-signed key is authorized by the directory write rather than a CA chain. Enrollment additionally pins the directory UPN, configured template, three client EKUs and short certificate validity.
-6. MIT Kerberos performs PKINIT through sealed memory-file copies for `<Linux username>@<realm>`. The KDC enforces account mapping; CRAFT checks the returned principal, TGT flags, AES encryption and lifetimes. [6,8]
-7. The caller atomically publishes a mode-0600 `.krb5cc_craft` and prints `FILE:/absolute/path/.krb5cc_craft`.
+Start with [mode 1 setup](#mode-1-setup-privileged-certificate-enrollment), [Windows enrollment preparation](#assumptions-and-windows-preparation) and [enrollment-agent restrictions](../docs/03-Enrollment-Agent-Restrictions.md). The generated user key and certificate are released after authentication; CA issuance records remain. The agent signature and CES transport authentication have separate roles.
 
-## Home Certificate Workflow
+## Mode 2 workflow: Privileged credential linking
 
-### Supply the Certificate and Key
+Credential linking uses AD Key Trust, selected with `mechanism=key_trust`. Instead of requesting a CA-issued certificate, the dedicated service account writes a temporary public key to the caller's `msDS-KeyCredentialLink` and authenticates against it with Key Trust PKINIT — the key-based model Windows Hello for Business uses. It needs no user-certificate CA enrollment, CES, enrollment agent or user template. The KDC still needs a trusted PKINIT certificate and current CRLs.
+
+When no home pair is present, the setuid launcher runs the worker as the service account exactly as for enrollment. The worker then:
+
+1. Authenticates the service account from `submitter.keytab` and binds to `kt_dc_url` over LDAP with SASL/GSSAPI integrity and confidentiality.
+2. Resolves the caller's unique object (`sAMAccountName=<caller>`) to its distinguished name and `userPrincipalName`.
+3. Generates an RSA-2048 key (MS-ADTS 2.2.20.5.1 mandates RSA 2048-bit for KEY_USAGE_NGC) and a short-lived local certificate identity carrying that UPN. A temporary local issuer signs the leaf for the PKINIT plugin; directory key matching authorizes the user.
+4. Builds a version-2 Key Credential (MS-ADTS 2.2.20) advertising the key as NGC/Key Trust and **adds** exactly that one value, leaving any existing Windows Hello keys in place.
+5. Performs PKINIT for `<caller>@<realm>`; the KDC matches the key and issues a TGT, which CRAFT validates like every other mode.
+6. **Removes** the temporary value before emitting credentials. An independent cleanup process also attempts removal on acquisition failure or worker termination, including an uncertain LDAP add outcome. It retries with a fresh connection. If removal still fails, cache publication fails and a CRITICAL AUTHPRIV event identifies the residual credential for administrator cleanup. Directory unavailability or host failure can leave a key behind.
+
+![Mode 2 adds a temporary AD key, performs Key Trust PKINIT against the same DC, removes the entry, then publishes the cache.](../output/pdf/svg/03-credential-linking-sequence.svg)
+
+Follow [mode 2 setup](#mode-2-setup-privileged-credential-linking) and [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
+
+### Key Trust configuration and prerequisites
+
+Key Trust needs `enabled`, `domain`, `realm`, `service_principal`, `submitter.keytab`, and:
+
+```ini
+mechanism=key_trust
+kt_dc_url=ldap://dc01.domain.local
+```
+
+Set `kt_dc_url` to the **writable domain controller that is also the KDC** in `krb5.conf`, so the written key is visible without replication delay. `ldaps://` is also accepted; either way the GSSAPI bind requires an integrity/confidentiality layer. Key Trust does not use `netbios`, `template_oid`, `ces_url`, `ces_auth`, `agent.pem`/`agent.key`, `https-trust.pem` or `https-client.*`. The user-certificate `ca-trust.pem`/`ca-crls.pem` validation is also unused; configure the Kerberos intermediate pool for the KDC chain as described in [shared installation](#shared-linux-installation). It shares the `kdc-trust.pem`, `kdc-crls.pem` and `krb5.conf` that PKINIT uses to validate the KDC, the setuid launcher, the `craft` service account, the `craft-users` group, and `/run/craft` for the per-user issuance lock.
+
+Use an AD schema with `msDS-KeyCredentialLink` and a writable KDC that supports NGC/Key Trust authentication, as provided by Windows Server 2016 or later. The server capability and KDC certificate are prerequisites; a domain-functional-level label alone does not establish them. PKINIT freshness negotiation is handled by the MIT Kerberos plugin, which supports freshness tokens; verify interoperability with the deployed KDC policy. [18,19]
+
+Delegate the required permission with [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink.ps1), which grants the service account only ReadProperty/WriteProperty on `msDS-KeyCredentialLink` over an OU of ordinary users or a single user. The write is equivalent to authenticating as the target, so the delegated scope is a security boundary: keep privileged accounts out of it. See [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
+
+### Credential-linking failure behavior
+
+Key Trust selects only when the home pair is absent, shares the per-user issuance lock and interval with enrollment, and preserves the existing cache on any failure. A directory write refused by the delegation, an unresolved or ambiguous user, a replication-delayed KDC or a PKINIT rejection fails the run. Successful acquisition requires removal of the temporary key. Cleanup is also attempted after failure; inspect the directory and CRITICAL logs after interruption or outages, because a residual key remains usable until removed.
+
+## Mode 3 workflow: Unprivileged Windows-exported certificate
+
+![Mode 3 enrolls and exports on Windows, transfers the pair securely to Linux, and performs PKINIT as the caller.](../output/pdf/svg/04-windows-exported-certificate.svg)
+
+Follow [mode 3 setup](#mode-3-setup-unprivileged-windows-exported-certificate) for Windows export and ordinary Linux installation. The same acquisition path accepts an existing PEM pair from another approved source.
+
+### Supply the certificate and key
 
 Obtain a matching PEM pair through your approved enrollment workflow. The [Windows certificate helper](#request-a-home-certificate-on-windows) can request and export it as the domain user. Transfer the pair securely to Linux, then install it as that Linux user:
 
@@ -60,43 +100,11 @@ The enrollment template OID, all-three-EKU profile and short certificate-validit
 
 CRAFT selects the privileged fallback only when the home pair is absent. One missing file, unsafe ownership/permissions, symlinks, nonregular or oversized files, an encrypted or malformed key, key mismatch, invalid certificate, trust/CRL failure or PKINIT rejection fails the run and preserves the current cache. Remove both files deliberately to return to the fallback. A home-only, non-setuid installation reports that the fallback requires the setuid launcher when no pair is present.
 
-## Key Trust Workflow
-
-Key Trust is the alternative privileged fallback, selected with `mechanism=key_trust`. Instead of requesting a CA-issued certificate, the dedicated service account writes a temporary public key to the caller's `msDS-KeyCredentialLink` and authenticates against it with Key Trust PKINIT — the key-based model Windows Hello for Business uses. It needs no CA, CES, enrollment agent or certificate template.
-
-When no home pair is present, the setuid launcher runs the worker as the service account exactly as for enrollment. The worker then:
-
-1. Authenticates the service account from `submitter.keytab` and binds to `kt_dc_url` over LDAP with SASL/GSSAPI integrity and confidentiality.
-2. Resolves the caller's unique object (`sAMAccountName=<caller>`) to its distinguished name and `userPrincipalName`.
-3. Generates an RSA-2048 key (MS-ADTS 2.2.20.5.1 mandates RSA 2048-bit for KEY_USAGE_NGC) and a short-lived certificate pair carrying that UPN.
-4. Builds a version-2 Key Credential (MS-ADTS 2.2.20) advertising the key as NGC/Key Trust and **adds** exactly that one value, leaving any existing Windows Hello keys in place.
-5. Performs PKINIT for `<caller>@<realm>`; the KDC matches the key and issues a TGT, which CRAFT validates like every other mode.
-6. **Removes** the temporary value before emitting credentials, and on every failure path. If removal fails, CRAFT logs a CRITICAL AUTHPRIV event naming the object so an administrator can clear it.
-
-### Configuration and prerequisites
-
-Key Trust needs `enabled`, `domain`, `realm`, `service_principal`, `submitter.keytab`, and:
-
-```ini
-mechanism=key_trust
-kt_dc_url=ldap://dc01.domain.local
-```
-
-Set `kt_dc_url` to the **writable domain controller that is also the KDC** in `krb5.conf`, so the written key is visible without replication delay. `ldaps://` is also accepted; either way the GSSAPI bind requires an integrity/confidentiality layer. Key Trust does not use `netbios`, `template_oid`, `ces_url`, `ces_auth`, `agent.pem`/`agent.key`, `https-trust.pem` or `https-client.*`. It shares the `kdc-trust.pem`, `kdc-crls.pem` and `krb5.conf` that PKINIT uses to validate the KDC, the setuid launcher, the `craft` service account, the `craft-users` group, and `/run/craft` for the per-user issuance lock.
-
-The domain must support NGC/Key Trust authentication (Windows Server 2016 functional level or later, with a current KDC certificate). If the KDC enforces the PKINIT freshness extension (RFC 8070), bare PKINIT is rejected and this mode is unavailable; evaluate it in your lab.
-
-Delegate the required permission with [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink.ps1), which grants the service account only ReadProperty/WriteProperty on `msDS-KeyCredentialLink` over an OU of ordinary users or a single user. The write is equivalent to authenticating as the target, so the delegated scope is a security boundary: keep privileged accounts out of it. See [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
-
-### Selection and failure behavior
-
-Key Trust selects only when the home pair is absent, shares the per-user issuance lock and interval with enrollment, and preserves the existing cache on any failure. A directory write refused by the delegation, an unresolved or ambiguous user, a replication-delayed KDC or a PKINIT rejection fails the run. The temporary key is removed on success and on failure; a run never intentionally leaves a Key Credential published.
-
 ## Access Active Directory Resources
 
 After authentication, the user selects the resulting credential cache for an application, typically through `KRB5CCNAME`. The Kerberos library uses the cached ticket-granting ticket (TGT) to request service tickets from the domain controller for the target services. Those tickets let the application authenticate as the user to resources such as SMB file shares, LDAP directories, and Kerberos-enabled web services, where supported and configured. Access remains subject to the user's permissions and the service's policy; obtaining a ticket does not grant additional access rights.
 
-The TGT stays in the user's cache after CRAFT exits. Applications can request service tickets while it remains valid, without another authentication or a user password prompt. Each new CRAFT run obtains a fresh TGT, reusing a supplied home pair or enrolling a fresh certificate when that pair is absent. Applications use those credentials to open service sessions.
+The TGT stays in the user's cache after CRAFT exits. Applications can request service tickets while it remains valid, without another authentication or a user password prompt. Each new CRAFT run obtains a fresh TGT, reusing a supplied home pair or using the configured enrollment or credential-linking mechanism when both files are absent. Applications use those credentials to open service sessions.
 
 ## Certificate Storage and Cleanup
 
@@ -106,13 +114,15 @@ Enrollment generates a fresh key for each attempt. The issued certificate and ke
 
 The persistent `.krb5cc_craft` cache contains the TGT and session key, without the user certificate/private key. Applications obtain service tickets from it. Renewal needs only the cache; fresh authentication uses the selected certificate workflow. Success replaces the cache, and expiry does not delete it automatically.
 
-Enrollment-agent and transport credentials remain private under `/etc/craft`; `/run/craft` contains enrollment locks and timestamps. A home-only installation needs neither. Memory and memory files can reach swap or privileged host capture. Deleting a certificate/key, ending a process or removing a cache does not revoke KDC-issued tickets.
+Mode 2 generates a temporary local certificate identity, links its public key in AD and removes that entry before publishing credentials. Cleanup is attempted on failure, but a residual entry can require administrator removal. It performs no user-certificate CA enrollment.
+
+Privileged service credentials remain private under `/etc/craft`; `/run/craft` contains acquisition locks and timestamps for modes 1 and 2. A home-only installation needs neither. Memory and memory files can reach swap or privileged host capture. Deleting a certificate/key, ending a process or removing a cache does not revoke KDC-issued tickets.
 
 ## Assumptions and Windows Preparation
 
 For enrollment, the AD/PKI administrator must establish the following. Home mode needs an existing KDC-accepted certificate and the public trust/Kerberos setup described above. The Linux client does not configure Windows services. The optional [Windows provisioning helper](#windows-provisioning-helper) performs only part of this setup.
 
-Key Trust needs none of the CA, template or enrollment-agent setup below. It requires a domain that supports NGC/Key Trust authentication (Windows Server 2016 functional level or later with a current KDC certificate), the directory service account and its keytab, and a delegated `msDS-KeyCredentialLink` write over a dedicated OU of ordinary users. Grant that delegation with [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink.ps1), point `kt_dc_url` at the writable KDC, and review [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md). The remainder of this section applies to the enrollment fallback.
+For mode 2, follow [credential-linking setup](#mode-2-setup-privileged-credential-linking) and [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md): prepare the service keytab, scoped directory write and trusted PKINIT-capable writable KDC. The user-certificate CA, template, enrollment-agent and CES instructions below apply to mode 1.
 
 ### User Identity
 
@@ -147,7 +157,7 @@ The program requests **36000 seconds (10 hours) of initial TGT validity and 6048
 
 ### Editable Certificate Common Name
 
-One line in `config/config.example` controls the **requested CSR CN**:
+One line in `config/config.example` controls the **generated CN** for the mode 1 CSR and mode 2 local certificate:
 
 ```ini
 certificate_cn={user}
@@ -177,18 +187,18 @@ CES must allow **initial enrollment**, not be configured renewal-only. The endpo
 
 ## Build
 
-Required: Linux with `/proc` and memfd support; setuid support is needed only for enrollment; C++20 compiler and standard library with `std::format` (GCC/libstdc++ >= 13.1 or equivalent); CMake >= 3.16; pkg-config; OpenSSL >= 3; MIT Kerberos >= 1.19; libcurl >= 7.62; libxml2 >= 2.9; OpenLDAP and Cyrus SASL development libraries; the **MIT PKINIT plugin at runtime**, plus the **Cyrus SASL GSSAPI plugin for enrollment**. Use fully patched distribution builds, not merely these minimum API versions.
+Required: Linux with `/proc` and memfd support; setuid support is needed for modes 1 and 2; C++20 compiler and standard library with `std::format` (GCC/libstdc++ >= 13.1 or equivalent); CMake >= 3.16; pkg-config; OpenSSL >= 3; MIT Kerberos >= 1.19; libcurl >= 7.62; libxml2 >= 2.9; OpenLDAP and Cyrus SASL development libraries; the **MIT PKINIT plugin at runtime**, plus the **Cyrus SASL GSSAPI plugin for modes 1 and 2**. Use fully patched distribution builds, not merely these minimum API versions.
 
 CMake explicitly selects `-std=c++20`, disables GNU language extensions, and checks the required library facilities before building. A compiler accepting C++20 syntax is not enough when its standard library lacks `std::format`. GCC's implementation table lists formatting support from libstdc++ 13.1. [11]
 
-On Debian/Ubuntu-style distributions, the usual package names are:
+On Debian/Ubuntu-style distributions, the usual package names are below. Run the build commands from the repository root:
 
 ```sh
 sudo apt-get install build-essential cmake pkg-config libssl-dev libkrb5-dev \
     krb5-user krb5-pkinit libcurl4-openssl-dev libxml2-dev \
     libldap2-dev libsasl2-dev libsasl2-modules-gssapi-mit
 
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S source -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
@@ -197,37 +207,39 @@ Use the package names appropriate to your distribution. The SASL GSSAPI module i
 
 There is intentionally **no automatic setuid installation target**. Build from source on the target distribution. Never install the test program setuid.
 
-## Install in an Isolated Lab After Reviewing the Source
 
-Run these commands from `source/` after building. Choose a home-only installation or add the enrollment components. Public policy and trust files contain no private keys; keep them root-controlled and readable by callers.
+## Shared Linux installation
 
-### Home Certificate Installation
+Run the build and installation commands below from the repository root. All three modes use the same binaries; choose their permissions according to the selected mode. Installation and public trust provisioning are administrator tasks. Keep acquisition disabled while replacing the example values and preparing credentials.
 
 ```sh
 sudo install -d -o root -g root -m 0755 /usr/local/bin /usr/local/libexec /etc/craft
 sudo install -o root -g root -m 0755 build/craft /usr/local/bin/craft
 sudo install -o root -g root -m 0755 build/craft-worker /usr/local/libexec/craft-worker
 sudo install -o root -g root -m 0755 build/craft-maintain /usr/local/bin/craft-maintain
-sudo install -o root -g root -m 0644 config/krb5.conf.example /etc/craft/krb5.conf
+sudo install -o root -g root -m 0644 source/config/krb5.conf.example /etc/craft/krb5.conf
 ```
 
-Create root-owned `/etc/craft/config`, mode 0644, with the actual domain and realm. Review trust/KDC settings before enabling it:
+Create `/etc/craft/config` as `root:root` mode 0644 using the snippet for your mode. Configure the actual realm, pinned KDC and expected KDC hostname in `/etc/craft/krb5.conf`. Install the relevant populated PEM trust bundles and current issuer CRLs from your PKI; empty placeholders are invalid. All trusted files and their parent directories must be root-owned, not group/world-writable and not symlinks.
 
-```ini
-enabled=yes
-domain=domain.local
-realm=DOMAIN.LOCAL
-```
+| File under `/etc/craft` | Modes and purpose | Ownership and mode |
+| --- | --- | --- |
+| `config` | All: enable flag, domain/realm and ticket policy; mode-specific settings below | `root:root`, 0644 |
+| `krb5.conf` | All: pinned realm/KDC, hostname, AES and PKINIT trust/revocation policy | `root:root`, 0644 |
+| `kdc-trust.pem`, `kdc-crls.pem` | All: KDC trust chain and current issuer CRLs | `root:root`, 0644 |
+| `ca-trust.pem`, `ca-crls.pem` | 1 and 3: user-certificate chain and revocation; mode 1 also validates the agent | `root:root`, 0644 |
+| `submitter.keytab` | 1 and 2: service principal for LDAP/GSSAPI; mode 1 also uses it for CES Negotiate | `root:craft`, 0640 |
+| `agent.pem`, `agent.key` | 1: enrollment-agent certificate and matching unencrypted private key | `root:craft`, 0640 |
+| `https-trust.pem` | 1: CES HTTPS trust chain | `root:craft`, 0640 |
+| `https-client.pem`, `https-client.key` | 1 with mTLS: separate CES transport identity | `root:craft`, 0640 |
 
-The default ticket policy is ten hours initial validity, seven days renewal and strict full-grant validation. Optional `tgt_seconds`, `renew_seconds` and `require_full_tgt_lifetime` apply to both workflows. Home mode does not require `netbios`, `template_oid`, `ces_url`, `ces_auth` or `service_principal`. A full enrollment configuration can also be used.
+The example Kerberos `pkinit_pool` points at `ca-trust.pem`. For mode 2 alone, remove that optional pool if no intermediates are needed, or point it at a root-controlled PEM bundle containing the KDC intermediates, such as `kdc-trust.pem`. This does not disable KDC trust or CRL checks. If supplied home certificates will also be used on that host, install their CA trust and CRLs as required for mode 3.
 
-Install `ca-trust.pem`, `ca-crls.pem`, `kdc-trust.pem` and `kdc-crls.pem` under `/etc/craft`, root-owned mode 0644, and configure the actual KDC, expected hostname and PKINIT trust/revocation settings in `krb5.conf`. Include required intermediates and current issuer CRLs. All parent directories and files must be root-owned, not group/world-writable and not symlinks. Populate trust and CRL files; empty placeholders are invalid.
+Refresh CRLs independently; CRAFT does not fetch arbitrary AIA/CRL URLs. Protect original PFX exports and key extraction. Private credentials must remain inaccessible to ordinary callers. For `craft-maintain`, also configure system `/etc/krb5.conf` for the same realm/KDC and AES policy; see [long-running jobs](#long-running-jobs).
 
-Provide the user pair as described above. No `craft` service account, caller group, private enrollment credentials or runtime directory is needed. The regular executable works in `nosuid` and inherited `no_new_privs` contexts, provided its public configuration and worker are accessible. Host installation and trust provisioning remain administrator tasks; certificate processing and Kerberos operations run as the caller.
+## Shared privileged installation
 
-### Enrollment Installation
-
-Keep the public paths and worker from the home installation. Add the dedicated account and caller group:
+**Modes 1 and 2 only.** Complete [shared Linux installation](#shared-linux-installation), then add the dedicated service account, restricted caller group and runtime directory. These components provide no CA or directory authorization by themselves.
 
 ```sh
 sudo groupadd --system craft
@@ -235,50 +247,114 @@ sudo useradd --system --gid craft --home-dir /nonexistent \
     --shell /usr/sbin/nologin craft
 sudo groupadd --system craft-users
 sudo install -o root -g craft-users -m 0750 build/craft /usr/local/bin/craft
-sudo install -o root -g root -m 0644 config/config.example /etc/craft/config
-sudo install -o root -g root -m 0644 config/craft.tmpfiles.conf /etc/tmpfiles.d/craft.conf
+sudo install -o root -g root -m 0644 source/config/craft.tmpfiles.conf /etc/tmpfiles.d/craft.conf
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/craft.conf
-```
-
-On non-systemd hosts, create `/run/craft` owned `craft:craft`, mode 0700, at each boot. Never add ordinary callers to the `craft` service group. Membership in `craft-users` permits execution of the restricted launcher; it does not grant access to enrollment keys.
-
-### Required Files
-
-| File under `/etc/craft` | Workflow and purpose | Ownership and mode |
-| --- | --- | --- |
-| `config` | All modes: enabled flag, domain/realm and ticket policy; enrollment adds template, CES/GC settings and service principal; Key Trust adds `mechanism=key_trust`, `kt_dc_url` and service principal | `root:root`, 0644 |
-| `krb5.conf` | Both: pinned realm/KDC, hostname, PKINIT trust and revocation policy | `root:root`, 0644 |
-| `ca-trust.pem`, `ca-crls.pem` | Both: certificate CA chain and current issuer CRLs | `root:root`, 0644 |
-| `kdc-trust.pem`, `kdc-crls.pem` | Both: KDC trust chain and current CRLs | `root:root`, 0644 |
-| `agent.pem`, `agent.key` | Enrollment: agent certificate and matching unencrypted private key | `root:craft`, 0640 |
-| `submitter.keytab` | Enrollment and Key Trust: directory/submission account for the LDAP/GSSAPI bind (enrollment also uses it for CES Negotiate) | `root:craft`, 0640 |
-| `https-trust.pem` | Enrollment: CES HTTPS trust chain | `root:craft`, 0640 |
-| `https-client.pem`, `https-client.key` | Enrollment with mTLS: separate HTTPS client identity | `root:craft`, 0640 |
-
-Protect original PFX exports and the extraction process. Keep private keys and keytabs inaccessible to callers. Configure administrator-controlled CRL refresh; CRAFT does not follow arbitrary AIA/CRL locations. Additional trusted roots expand the accepted issuer set.
-
-Complete the CA, template, transport and recipient restrictions; replace all example values. Then enable a test user and the privileged enrollment entry point:
-
-```sh
 sudo usermod -aG craft-users alice
-# Review /etc/craft/config and set enabled=yes.
-sudo chmod 4750 /usr/local/bin/craft
 ```
 
-A new login is normally needed for group changes. Invoke directly as the intended user, without `sudo craft`. Enrollment needs setuid elevation; `nosuid` or inherited `no_new_privs` prevents that fallback. A present home pair still uses the caller workflow without elevation. [1]
+On non-systemd hosts, create `/run/craft` owned `craft:craft`, mode 0700, at each boot. Never add callers to the `craft` service group. `craft-users` permits launcher execution and does not expose the service credentials. A new login is normally needed after adding group membership.
 
-### Key Trust Installation
-
-Key Trust reuses the enrollment-style privileged installation — the setuid launcher, the `craft` service account, the `craft-users` group and `/run/craft` — but omits the CA-dependent files. Keep the public paths and worker from the home installation and the service account and runtime directory from the enrollment installation, then:
+Leave the launcher mode 0750 and `enabled=no` until the selected recipe is ready. Then set `enabled=yes` in the reviewed configuration and enable the privileged entry point:
 
 ```sh
-sudo install -o root -g root -m 0640 /path/to/submitter.keytab /etc/craft/submitter.keytab
-sudo chgrp craft /etc/craft/submitter.keytab   # readable by the service account only
-# Set mechanism=key_trust, kt_dc_url and service_principal in /etc/craft/config (enabled=no until reviewed).
 sudo chmod 4750 /usr/local/bin/craft
 ```
 
-Key Trust does not need `agent.pem`/`agent.key`, `https-trust.pem`, `https-client.*`, `template_oid`, `ces_url`, `ces_auth` or `netbios`. It does need `kdc-trust.pem`, `kdc-crls.pem` and `krb5.conf` (shared with every PKINIT path) and `submitter.keytab` for the LDAP/GSSAPI bind. On the Windows side, delegate the `msDS-KeyCredentialLink` write to the service account over a dedicated OU of ordinary users with [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink.ps1), and set `kt_dc_url` to that domain's writable KDC. Review [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md) before enabling.
+Invoke `craft` directly as the approved user, without `sudo craft`. The filesystem must allow setuid execution; `nosuid` or inherited `no_new_privs` prevents modes 1 and 2. A present PEM pair still uses the caller workflow. The worker and maintainer remain ordinary mode-0755 executables. [1]
+
+## Mode 1 setup: Privileged certificate enrollment
+
+1. Build and complete [shared Linux installation](#shared-linux-installation) and [shared privileged installation](#shared-privileged-installation), leaving acquisition disabled.
+2. Complete [Windows enrollment preparation](#assumptions-and-windows-preparation): directory service account/keytab, enrollment-agent certificate, user template, KDC certificate, CES endpoint and its transport authentication. Enforce [enrollment-agent recipient restrictions](../docs/03-Enrollment-Agent-Restrictions.md). The [CA helper](../scripts/Configure-CRAFT-CA.ps1) performs only partial lab provisioning.
+3. Install the service keytab, agent PEM pair and CES HTTPS trust under `/etc/craft` as `root:craft` mode 0640. Install user/agent CA trust and CRLs and KDC trust/CRLs as specified in the [required-file table](#shared-linux-installation). For `ces_auth=mtls`, add a separate CES client PEM pair; the directory keytab is still required.
+4. Create root-owned mode-0644 `/etc/craft/config` with the actual values below. Use the template's `msPKI-Cert-Template-OID`, not its display name. Pin the real CES initial-enrollment endpoint; the example URL and OID are placeholders.
+
+```ini
+enabled=no
+domain=domain.local
+realm=DOMAIN.LOCAL
+mechanism=enrollment
+netbios=DOMAIN
+service_principal=svc-linux-enroll@DOMAIN.LOCAL
+template_oid=1.3.6.1.4.1.311.21.8.999.1
+ces_url=https://ces.domain.local/IssuingCA_CES_Kerberos/service.svc/CES
+ces_auth=negotiate
+certificate_cn={user}
+tgt_seconds=36000
+renew_seconds=604800
+require_full_tgt_lifetime=yes
+cert_remaining_max_seconds=36000
+cert_total_max_seconds=36000
+minimum_interval_seconds=60
+```
+
+Review the optional GC endpoint/base in [config.example](config/config.example). Complete the CA/template validity and mapping checks, then set `enabled=yes` and enable the setuid launcher as described above. As an approved test user with **both home PEM files absent**, follow [usage](#use) and the [mode 1 acceptance checks](TESTING.md#live-acceptance-checklist). Confirm CA refusal for out-of-scope recipients independently of CRAFT.
+
+## Mode 2 setup: Privileged credential linking
+
+1. Build and complete [shared Linux installation](#shared-linux-installation) and [shared privileged installation](#shared-privileged-installation), leaving acquisition disabled. Configure the mode-2 KDC intermediate pool as described in shared installation.
+2. Select a writable DC with NGC/Key Trust support and a trusted, current PKINIT KDC certificate. Configure that **same DC** in `krb5.conf` and `kt_dc_url` to avoid replication delay.
+3. Provision the AD service principal and matching keytab with AES keys. Install the keytab so only root and the dedicated Linux service group can read it:
+
+```sh
+sudo install -o root -g craft -m 0640 /path/to/submitter.keytab /etc/craft/submitter.keytab
+```
+
+Delegate ReadProperty/WriteProperty on **only `msDS-KeyCredentialLink`** to this service identity over a reviewed OU of ordinary users or a single user. Follow [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md), including the [delegation helper](../scripts/Grant-CRAFTKeyCredentialLink.ps1) and denial checks. The write permits authentication as each account in scope; keep privileged identities outside it.
+
+Create root-owned mode-0644 `/etc/craft/config` with the actual domain, realm, service principal and writable DC:
+
+```ini
+enabled=no
+domain=domain.local
+realm=DOMAIN.LOCAL
+mechanism=key_trust
+service_principal=svc-linux-enroll@DOMAIN.LOCAL
+kt_dc_url=ldap://dc01.domain.local
+tgt_seconds=36000
+renew_seconds=604800
+require_full_tgt_lifetime=yes
+minimum_interval_seconds=60
+```
+
+No user-certificate template, enrollment agent, CES or HTTPS identity is needed. Review the directory delegation and KDC trust, then set `enabled=yes` and enable the setuid launcher as described above. As an approved test user with **both home PEM files absent**, follow [usage](#use) and the [mode 2 acceptance checks](TESTING.md#key-trust-acceptance-checks). Inspect the target attribute before and after acquisition, and prove cleanup and out-of-scope write refusal. Failed cleanup blocks cache publication; host or directory failure can require manual removal of a residual key.
+
+## Mode 3 setup: Unprivileged Windows-exported certificate
+
+1. Build and complete [shared Linux installation](#shared-linux-installation). Install all executables mode 0755; no service account, caller group, private service credentials, runtime directory or setuid bit is needed.
+2. On Windows, choose a template permitting the intended domain user's direct enrollment and exportable software keys. Its certificate must meet the [supplied-certificate profile](#certificate-and-identity-checks) and KDC mapping policy. Follow [Windows certificate requests](#request-a-home-certificate-on-windows) for prerequisites and options. Run from the repository root as that domain user, without elevation:
+
+```bat
+.\scripts\Request-CRAFT-Certificate.cmd UserLogon "C:\Users\Alice\CRAFT Certificate"
+```
+
+The helper uses Windows enrollment policy to select an eligible CA and exports `user.pem` and matching unencrypted PKCS#8 `user.key`. Transfer **both files** through an approved secure channel to the intended Linux user. Keep Windows tracking metadata on Windows; Linux needs only the pair. Host trust provisioning remains a separate administrator task.
+
+As the intended Linux user, install the transferred pair into that user's NSS-resolved home:
+
+```sh
+mkdir -p ~/.config/craft
+chmod 0700 ~/.config/craft
+install -m 0600 /path/to/transferred/user.pem ~/.config/craft/user.pem
+install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
+```
+
+The home, `.config` and `craft` directories must be caller-owned and not group/world-writable. Both files must be regular, caller-owned, nonempty, at most 1 MiB and have one hard link; symlinks are refused. The private key must be unencrypted with no group/other permissions. CRAFT does not load PFX directly or prompt for passphrases.
+
+Create root-owned mode-0644 `/etc/craft/config` with the actual values:
+
+```ini
+enabled=no
+domain=domain.local
+realm=DOMAIN.LOCAL
+tgt_seconds=36000
+renew_seconds=604800
+require_full_tgt_lifetime=yes
+```
+
+Install the user-certificate CA trust and current CRLs plus KDC trust/CRLs from the [required-file table](#shared-linux-installation). Configure the pinned KDC/hostname in `krb5.conf`, then set `enabled=yes`. No `mechanism=home` setting exists: the complete PEM pair selects this path. A full privileged configuration may also be present, but the pair still takes priority.
+
+Follow [usage](#use) and the [mode 3 acceptance checks](TESTING.md#home-workflow-acceptance-checks). Repeat the Windows helper to check renewal and transfer replacements before expiry; neither CRAFT nor `craft-maintain` renews or transfers the supplied certificate. The Windows helper does not schedule itself.
 
 ## Use
 
@@ -318,9 +394,9 @@ cache=$(/usr/local/bin/craft-maintain --watch-pid "$job_pid") || exit "$?"
 export KRB5CCNAME="$cache"
 ```
 
-The command returns when usable credentials and detached maintenance are ready. It renews TGTs from the cache alone and obtains fresh credentials near the absolute renewal deadline. Ten-hour/seven-day grants normally renew at eight hours and authenticate afresh around day six; actual ticket times set the schedule. Fresh acquisition invokes `craft` and follows the home-pair priority. It reuses a valid supplied pair and enrolls only when neither file is present. Replace a home certificate before expiry; maintenance does not renew that certificate.
+The command returns when usable credentials and detached maintenance are ready. It renews TGTs from the cache alone and obtains fresh credentials near the absolute renewal deadline. Ten-hour/seven-day grants normally renew at eight hours and authenticate afresh around day six; actual ticket times set the schedule. Fresh acquisition invokes `craft` and follows the home-pair priority. It reuses a valid supplied pair or invokes the configured enrollment or credential-linking mechanism when both files are absent. Replace a home certificate before expiry; maintenance does not renew that certificate.
 
-Install `craft-maintain` without setuid/setgid on Linux 5.3+ with `/proc`. Configure administrator-controlled system `/etc/krb5.conf` for the same realm, KDC and AES policy as `/etc/craft/krb5.conf`. Renewal ignores user Kerberos overrides. The scheduler must retain background processes in the job cgroup. Home-only refresh works under `no_new_privs`; enrollment fallback additionally requires later setuid `craft` calls.
+Install `craft-maintain` without setuid/setgid on Linux 5.3+ with `/proc`. Configure administrator-controlled system `/etc/krb5.conf` for the same realm, KDC and AES policy as `/etc/craft/krb5.conf`. Renewal ignores user Kerberos overrides. The scheduler must retain background processes in the job cgroup. Home-only refresh works under `no_new_privs`; both privileged mechanisms additionally require later setuid `craft` calls.
 
 The watched PID must belong to the caller and last for the job: keep its shell alive, `exec` the job or watch its controller. Maintenance stops with that PID; optional `--max-duration 21d` adds a cutoff. Jobs for one UID coordinate the shared cache, which remains after maintenance stops. Applications must reload refreshed credentials when authenticating again.
 
@@ -337,9 +413,9 @@ Renewal failures preserve the cache and retry without immediate fresh authentica
 
 ## Limits and Failure Behavior
 
-Both paths reject runtime UID/name mismatches, key mismatch, missing logon usage, untrusted/revoked chains, missing or expired required CRLs, invalid certificate dates and unexpected TGT principals, flags, encryption or lifetimes. Password prompts and user-password/keytab fallback are refused. Home mode also rejects incomplete or unsafe files and delegates certificate-to-account mapping to the KDC. Enrollment additionally rejects unknown/ambiguous AD users, wrong UPN/template, excessive certificate validity, SOAP faults and pending/unsupported responses.
+All modes reject runtime UID/name mismatches, key mismatch, missing logon usage, invalid certificate dates and unexpected TGT principals, flags, encryption or lifetimes. Modes 1 and 3 reject untrusted/revoked user-certificate chains. Every mode validates KDC trust and requires current KDC CRLs. Password prompts and user-password/keytab fallback are refused. Home mode also rejects incomplete or unsafe files and delegates certificate-to-account mapping to the KDC. Enrollment additionally rejects unknown/ambiguous AD users, wrong UPN/template, excessive certificate validity, SOAP faults and pending/unsupported responses.
 
-Enrollment has one issuance in flight per UID and a default 60-second interval between attempts, including failures; its locks and timestamps reside under `/run/craft`. Home mode has no enrollment interval or runtime-directory dependency. Maintainer retry/cooldown rules still apply to fresh acquisition failures in either mode.
+Modes 1 and 2 have one acquisition in flight per UID and a default 60-second interval between attempts, including failures; their locks and timestamps reside under `/run/craft`. Home mode has no enrollment interval or runtime-directory dependency. Maintainer retry/cooldown rules still apply to fresh acquisition failures in all modes.
 
 Only validated credentials replace the cache. The writer runs as the caller, requires a caller-owned home that is not group/world-writable, stages a unique mode-0600 file and atomically replaces the fixed name without following a target symlink. Final-component home symlinks are refused. Assess network-home access controls separately.
 
@@ -353,7 +429,7 @@ See [SECURITY.md](SECURITY.md) and [TESTING.md](TESTING.md) before deployment. T
 
 [`Request-CRAFT-Certificate.cmd`](../scripts/Request-CRAFT-Certificate.cmd) is a CMD/Windows PowerShell 5.x polyglot that requests a certificate as the signed-in domain user and exports the home PEM pair. Run it without elevation on a Windows computer that can reach AD and its enterprise CA enrollment endpoints. Windows PowerShell 5.x, .NET Framework 4.6 or newer, and the Windows PKI module are required; RSAT and OpenSSL are unnecessary.
 
-Choose a template's internal name or OID that permits this user's direct enrollment and exportable RSA or ECDSA software keys. Its certificate profile must meet the [home certificate requirements](#home-certificate-workflow) and the KDC's mapping policy. The Windows account must map to the intended Linux username and realm. Windows [AD enrollment policy](https://learn.microsoft.com/en-us/powershell/module/pki/get-certificate) selects an eligible CA; no CA name, enrollment agent or administrator credential is supplied.
+Choose a template's internal name or OID that permits this user's direct enrollment and exportable RSA or ECDSA software keys. Its certificate profile must meet the [home certificate requirements](#mode-3-workflow-unprivileged-windows-exported-certificate) and the KDC's mapping policy. The Windows account must map to the intended Linux username and realm. Windows [AD enrollment policy](https://learn.microsoft.com/en-us/powershell/module/pki/get-certificate) selects an eligible CA; no CA name, enrollment agent or administrator credential is supplied.
 
 From the repository root in either CMD or PowerShell, use a dedicated local destination directory:
 
@@ -377,7 +453,7 @@ Requested Windows-store deletions remain in the tracking metadata until each suc
 
 Exit status is 0 for a successful export, reuse or preview, 1 for failure, 2 for pending CA approval, and 64 for invalid CMD arguments. A pending request remains in the Windows request store and leaves existing exports in place. Use Windows enrollment tools to retrieve approved requests. Failed enrollment/export retains Windows credentials.
 
-Transfer both files securely to the Linux user, install them at `~/.config/craft/user.pem` and `user.key` with private permissions as described in [home certificate installation](#home-certificate-installation), and remove unneeded transfer copies. Provision the issuing trust chain and current CRLs under `/etc/craft` separately. CRAFT validates the pair and obtains the TGT as the caller. The Windows helper checks renewal only when invoked; schedule repeat runs separately and transfer replacements before expiry. Certificate renewal is independent of TGT maintenance.
+Transfer both files securely to the Linux user, install them at `~/.config/craft/user.pem` and `user.key` with private permissions as described in [home certificate installation](#mode-3-setup-unprivileged-windows-exported-certificate), and remove unneeded transfer copies. Provision the issuing trust chain and current CRLs under `/etc/craft` separately. CRAFT validates the pair and obtains the TGT as the caller. The Windows helper checks renewal only when invoked; schedule repeat runs separately and transfer replacements before expiry. Certificate renewal is independent of TGT maintenance.
 
 ## Windows Provisioning Helper
 
@@ -408,6 +484,9 @@ The helper provisions the enrollment workflow; it is not required for a home-onl
 15. [MIT, initial-credential enctype list](https://web.mit.edu/kerberos/krb5-latest/doc/appdev/refs/api/krb5_get_init_creds_opt_set_etype_list.html)
 16. [MIT, krb5.conf](https://web.mit.edu/kerberos/krb5-latest/doc/admin/conf_files/krb5_conf.html)
 17. [Debian, MIT GSSAPI SASL runtime module](https://packages.debian.org/trixie/libsasl2-modules-gssapi-mit)
+
+18. [Microsoft, Windows Hello for Business deployment requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/hello-for-business/deploy/)
+19. [MIT, PKINIT freshness tokens](https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html#freshness-tokens)
 
 The included implementation is not a Microsoft-supported Linux enrollment client. These references do not endorse this code.
 

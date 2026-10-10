@@ -6,26 +6,13 @@ The certificate's Certificate Request Agent usage identifies its purpose. It doe
 
 This page explains the authorization boundary, a recommended CRAFT configuration, the remaining risks, and the live tests needed to establish that privileged accounts cannot be enrolled. The configuration examples are recommendations, not a claim that those controls are already deployed in your domain.
 
-## Scope of the home certificate workflow
+## Scope of the three operating modes
 
-These agent and recipient restrictions govern CRAFT's enrollment path. CRAFT first checks `~/.config/craft/user.pem` and `user.key` in the real caller's home. A complete pair uses the caller's privileges for certificate validation and PKINIT, without the agent, directory keytab, LDAP, CES or a CA issuance request. The KDC must map that certificate to the fixed Linux-username principal; CRAFT checks the returned TGT. Partial, unsafe or invalid pairs fail without enrollment fallback.
+These restrictions govern **mode 1, privileged certificate enrollment**; follow [mode 1 setup](../source/README.md#mode-1-setup-privileged-certificate-enrollment). **Mode 2, privileged credential linking**, uses [directory delegation](04-Key-Credential-Link-Delegation.md) instead. **Mode 3, unprivileged Windows-exported certificate**, uses [Windows export and Linux installation](../source/README.md#mode-3-setup-unprivileged-windows-exported-certificate). CRAFT first checks `~/.config/craft/user.pem` and `user.key` in the real caller's home. A complete pair uses the caller's privileges for certificate validation and PKINIT, without the agent, directory keytab, LDAP, CES or a CA issuance request. The KDC must map that certificate to the fixed Linux-username principal; CRAFT checks the returned TGT. Partial, unsafe or invalid pairs fail without enrollment fallback.
 
-A home-only installation can omit the service account, its private credentials and setuid entirely. Supplied certificates remain governed by their issuing authority, revocation policy and KDC mapping. The CRAFT enrollment recipient allowlist does not authorize or revoke a certificate issued through another path. Removing the launcher setuid bit prevents enrollment fallback but does not disable home authentication. Set `enabled=no` or remove execute access to stop fresh acquisition through either path; existing tickets and renewals remain separate.
+A home-only installation can omit the service account, its private credentials and setuid entirely. Supplied certificates remain governed by their issuing authority, revocation policy and KDC mapping. The CRAFT enrollment recipient allowlist does not authorize or revoke a certificate issued through another path. Removing the launcher setuid bit prevents both privileged mechanisms but does not disable home authentication. Set `enabled=no` or remove execute access to stop fresh acquisition through all modes; existing tickets and renewals remain separate.
 
-```mermaid
-flowchart TD
-    A[Run craft as the real Linux user] --> B{Home certificate pair present?}
-    B -->|Complete pair| C[Caller validates certificate and key]
-    B -->|Both absent| D[Authorized enrollment path]
-    B -->|Partial or unsafe| E[Fail and retain the cache]
-    D --> F[Agent signs the EOBO request]
-    F --> G{CA allows agent template and recipient?}
-    G -->|Yes| H[CA issues the user certificate]
-    G -->|No| E
-    C --> I[KDC validates PKINIT and caller account mapping]
-    H --> I
-    I -->|Accepted| J[Validate TGT and publish as caller]
-```
+![Three-mode selection: the supplied home pair takes priority over the configured privileged mechanism.](../output/pdf/svg/01-system-overview.svg)
 
 ## What the agent can do
 

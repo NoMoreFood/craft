@@ -1,5 +1,9 @@
 # CRAFT Validation Status and Acceptance Tests
 
+## Select the acceptance checks
+
+Validate the installed operating mode: [mode 1 setup](README.md#mode-1-setup-privileged-certificate-enrollment) with the [enrollment checklist](#live-acceptance-checklist), [mode 2 setup](README.md#mode-2-setup-privileged-credential-linking) with the [Key Trust checks](#key-trust-acceptance-checks), or [mode 3 setup](README.md#mode-3-setup-unprivileged-windows-exported-certificate) with the [home-certificate checks](#home-workflow-acceptance-checks). Run the shared KDC, cache and maintainer checks for each mode you deploy.
+
 ## Offline Coverage
 
 The test executable contains synthetic checks for parsing, cryptography, ownership and ticket policy. CTest registers it as one test; run `craft-tests` directly to see individual check results and the current count. Record the commit, compiler/library versions, commands and output for each validation run instead of treating a previous test count as evidence for the current tree.
@@ -133,13 +137,13 @@ Tested source commit `514b851` and updated DISA STIG configuration on the two-no
 
 ## Live Acceptance Checklist
 
-The checks below cover enrollment deployments. Complete the home-workflow checks above for supplied certificates and the common KDC/cache checks for both modes.
+The enrollment-specific checks below cover mode 1. Complete the home-workflow checks for mode 3 and Key Trust checks for mode 2. Apply the common KDC, cache and privilege-boundary checks to every deployed mode.
 
 1. Review the privilege boundary, parsers, trust-chain policy and this host's authority over AD identities. Start with a disposable, nonprivileged account in a lab domain; enforce CA-side template and recipient restrictions.
 2. Verify the GC host/search base, `ldap/hostname` SPN and SASL GSSAPI module. Test `service_principal` and `submitter.keytab` with both CES modes, including missing/ambiguous users and alternate UPN suffixes. Confirm CES URL, TLS trust and transport-account access. For Negotiate, verify libcurl SPNEGO/MIT Kerberos, HTTP SPN and CES-to-CA constrained delegation; for mTLS, verify the separate client certificate mapping.
 3. Confirm CA audit records identify the intended requester and template, and reject recipients outside the approved group. Inspect the issued UPN, template OID, key, three EKUs, key usage, CN behavior, trust chain, CRLs and total validity including backdating. Verify EOBO subject construction, CA SID issuance and domain-controller mapping.
 4. Test the MIT PKINIT plugin against the designated DC, expected hostname, trust anchors and current CRLs. Confirm strong certificate mapping and the resulting user principal. Investigate rejections without weakening policy.
-5. Set the lab DC user-ticket lifetime policy to permit 10 hours (`MaxTicketAge = 10 hours`) and renewal to 7 days (`MaxRenewAge = 7 days`), matching DISA STIG guidance. Determine whether PKINIT permits a TGT matching the ten-hour certificate/key lifetime. Verify strict rejection of shorter grants and explicit warnings when shorter grants are allowed; neither mode changes the issued ticket.
+5. Set the lab DC user-ticket lifetime policy to permit 10 hours (`MaxTicketAge = 10 hours`) and renewal to 7 days (`MaxRenewAge = 7 days`), matching DISA STIG guidance. Determine whether PKINIT permits a TGT matching the ten-hour certificate/key lifetime. Verify strict rejection of shorter grants and explicit warnings when shorter grants are allowed; no mode changes the issued ticket.
 6. Invoke the installed launcher directly as the approved user. Inspect ownership/mode and run `klist -ef -c FILE:/actual/home/.krb5cc_craft`. Check actual start/end time, renewable/nonforwardable/nonproxiable flags, renewal expiry, AES session key and ticket encryption. Confirm a real application obtains a service ticket.
 7. Verify unknown AD users, CLI overrides, forged environment values, service/root UID invocation, changed UID/name mappings, wrong UPN/template/key, missing EKUs, expired CRLs, RC4 and excessive certificate validity fail without replacing a valid cache.
 8. Exercise the installed setuid/fexecve/drop boundary, concurrent calls, process termination, timeouts, network failure, caller-home symlinks and writable/renamed homes. Confirm other UIDs cannot read the cache.
@@ -150,11 +154,11 @@ Do not keep increasing lifetime caps simply to accommodate an unexpectedly long-
 
 ## Key Trust Acceptance Checks
 
-Complete these in addition to the common KDC/cache and privilege-boundary checks when using `mechanism=key_trust`. Use a lab domain at the 2016 functional level or later with a current KDC certificate, and disposable, non-privileged accounts. See [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
+Complete these in addition to the common KDC/cache and privilege-boundary checks when using `mechanism=key_trust`. Use a lab domain exposing `msDS-KeyCredentialLink` and a writable KDC with NGC/Key Trust support and a current PKINIT certificate, and disposable, non-privileged accounts. See [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
 
 1. Delegate the `msDS-KeyCredentialLink` write to the service account over a dedicated OU of ordinary users with `Grant-CRAFTKeyCredentialLink.ps1`; confirm the resulting ACE grants only ReadProperty/WriteProperty on that one attribute and nothing else. Set `kt_dc_url` to the writable DC that `krb5.conf` names as the KDC.
 2. Run `craft` as an approved user in the OU. Confirm the worker binds over SASL/GSSAPI with an integrity/confidentiality layer, adds exactly one value to `msDS-KeyCredentialLink`, obtains a ten-hour AES256 TGT with the expected flags and renewal window, and then removes the value. Inspect `Get-ADUser <user> -Properties msDS-KeyCredentialLink` before, during (from the DC) and after; only legitimate keys must remain.
-3. Confirm an account outside the delegated scope, and any privileged account, is refused the directory write and yields no TGT. Confirm the helper refuses to delegate over privileged targets and default containers without `-Force`.
+3. Keep privileged accounts outside the delegated scope; confirm those accounts and other out-of-scope accounts are refused the directory write and yields no TGT. Confirm the helper refuses to delegate over privileged targets and default containers without `-Force`.
 4. Interrupt or fail PKINIT (for example, a wrong KDC or a replication-delayed replica in `kt_dc_url`) and confirm the temporary key is still removed, the cache is preserved, and failures are logged. Verify a residual key triggers the CRITICAL AUTHPRIV event naming the object.
 5. Revoke the delegation (`-Remove`) and confirm fresh acquisition fails after the ACL change propagates; evaluate already-issued tickets separately. Rotate `submitter.keytab` and confirm the bind fails without it.
-6. Determine whether the KDC enforces the PKINIT freshness extension (RFC 8070); if so, Key Trust is unavailable here because CRAFT does not perform a freshness round trip. Audit directory event 5136 for the attribute changes and correlate with DC event 4768 and CRAFT's `certificate_source=key_trust` AUTHPRIV events.
+6. Verify PKINIT interoperability with the KDC's freshness policy; MIT Kerberos handles freshness-token negotiation. See [MIT PKINIT freshness support](https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html#freshness-tokens). Audit directory event 5136 for the attribute changes and correlate with DC event 4768 and CRAFT's `certificate_source=key_trust` AUTHPRIV events.

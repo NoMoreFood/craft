@@ -1,5 +1,6 @@
 # /etc/craft/krb5.conf — root:root 0644, readable by callers in home mode
-# Used by both home-certificate PKINIT and enrollment.
+# Used by all three modes: enrollment, credential linking and supplied-certificate PKINIT.
+# Key Trust only: omit pkinit_pool if unnecessary, or use a PEM bundle of KDC intermediates.
 # Configure system /etc/krb5.conf for the same realm/KDC when using craft-maintain.
 # Do not include user-writable configuration or plugin paths.
 # API calls also restrict initial requests to AES256/AES128.
