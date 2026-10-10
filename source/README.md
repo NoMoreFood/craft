@@ -39,7 +39,7 @@ When no home pair is present, the setuid launcher runs the worker as the service
 
 1. Authenticates the service account from `submitter.keytab` and binds to `kt_dc_url` over LDAP with SASL/GSSAPI integrity and confidentiality.
 2. Resolves the caller's unique object (`sAMAccountName=<caller>`) to its distinguished name and `userPrincipalName`.
-3. Generates an RSA-2048 key (MS-ADTS 2.2.20.5.1 mandates RSA 2048-bit for KEY_USAGE_NGC) and a short-lived local certificate identity carrying that UPN. A temporary local issuer signs the leaf for the PKINIT plugin; directory key matching authorizes the user.
+3. Generates a fresh RSA key (default 3072-bit, configurable via `key_bits`; 2048, 3072, and 4096-bit supported) and a short-lived local certificate identity carrying that UPN. A temporary local issuer signs the leaf for the PKINIT plugin; directory key matching authorizes the user.
 4. Builds a version-2 Key Credential (MS-ADTS 2.2.20) advertising the key as NGC/Key Trust and **adds** exactly that one value, leaving any existing Windows Hello keys in place.
 5. Performs PKINIT for `<caller>@<realm>`; the KDC matches the key and issues a TGT, which CRAFT validates like every other mode.
 6. **Removes** the temporary value before emitting credentials. An independent cleanup process also attempts removal on acquisition failure or worker termination, including an uncertain LDAP add outcome. It retries with a fresh connection. If removal still fails, cache publication fails and a CRITICAL AUTHPRIV event identifies the residual credential for administrator cleanup. Directory unavailability or host failure can leave a key behind.
@@ -312,6 +312,7 @@ realm=DOMAIN.LOCAL
 mechanism=key_trust
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 kt_dc_url=ldap://dc01.domain.local
+# key_bits=3072
 tgt_seconds=36000
 renew_seconds=604800
 require_full_tgt_lifetime=yes

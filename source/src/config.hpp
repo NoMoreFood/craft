@@ -27,6 +27,7 @@ struct Config
     std::string certificate_cn = "{user}";
     std::string gc_url, gc_base_dn, kt_dc_url;
     uint32_t tgt = 36000, renew = 604800, cert_remaining = 36000, cert_total = 36000, interval = 60;
+    uint32_t key_bits = 3072;
     bool require_full_tgt_lifetime = true;
     CertificateSource source = CertificateSource::Enrollment;
 };
@@ -56,7 +57,7 @@ inline bool plain_url(std::string_view url, std::string_view scheme)
 // The caller's hint selects home versus the privileged fallback; configuration picks the fallback mechanism.
 inline Config parse_config(std::string_view text, CertificateSource source = CertificateSource::Enrollment)
 {
-    static constexpr std::array<std::string_view, 19> keys{"enabled",
+    static constexpr std::array<std::string_view, 21> keys{"enabled",
                                                            "domain",
                                                            "realm",
                                                            "netbios",
@@ -67,6 +68,8 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
                                                            "mechanism",
                                                            "kt_dc_url",
                                                            "certificate_cn",
+                                                           "key_bits",
+                                                           "bit_strength",
                                                            "require_full_tgt_lifetime",
                                                            "tgt_seconds",
                                                            "renew_seconds",
@@ -128,6 +131,14 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     c.gc_url = optional("gc_url", "ldap://" + c.domain + ":3268");
     c.gc_base_dn = optional("gc_base_dn", domain_to_dn(c.domain));
     c.certificate_cn = optional("certificate_cn", c.certificate_cn);
+    const auto has_key_bits = values.find("key_bits") != values.end();
+    const auto has_bit_strength = values.find("bit_strength") != values.end();
+    need(!(has_key_bits && has_bit_strength), "cannot specify both key_bits and bit_strength");
+    if (has_key_bits) c.key_bits = number(values["key_bits"]);
+    else if (has_bit_strength) c.key_bits = number(values["bit_strength"]);
+    else c.key_bits = 3072;
+    need(c.key_bits == 2048 || c.key_bits == 3072 || c.key_bits == 4096,
+         "key_bits must be 2048, 3072, or 4096");
     c.tgt = seconds("tgt_seconds", c.tgt, 604800);
     c.renew = seconds("renew_seconds", c.renew, 604800);
     c.cert_remaining = seconds("cert_remaining_max_seconds", c.cert_remaining, 86400);

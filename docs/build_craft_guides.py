@@ -323,7 +323,7 @@ def process_guide(images):
             'are released.'
         )],
         ["2  Credential linking", (
-            'Locally issued certificate carrying a fresh RSA-2048 public key. The KDC'
+            'Locally issued certificate carrying a fresh RSA-3072 public key. The KDC'
             ' matches the linked key; a trusted user-certificate CA chain is '
             'unnecessary. KDC trust is still required.'
         ), (
@@ -688,7 +688,7 @@ minimum_interval_seconds=60
         '-WhatIf'
     ))
     paragraph(doc, (
-        'CRAFT generates a fresh RSA-2048 key and locally issued certificate '
+        'CRAFT generates a fresh RSA-3072 key and locally issued certificate '
         'identity. The linked public key authorizes PKINIT, without '
         'user-certificate CA enrollment, CES, an agent or a template. MIT '
         'Kerberos handles PKINIT negotiation, including freshness tokens; '

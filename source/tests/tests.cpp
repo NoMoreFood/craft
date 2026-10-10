@@ -294,6 +294,7 @@ static void helper_tests()
              need(defaults.tgt == 36000 && defaults.renew == 604800 && defaults.cert_remaining == 36000 &&
                       defaults.cert_total == 36000 && defaults.require_full_tgt_lifetime &&
                       defaults.certificate_cn == "{user}" && defaults.interval == 60 &&
+                      defaults.key_bits == 3072 &&
                       defaults.gc_url == "ldap://domain.local:3268" &&
                       defaults.gc_base_dn == "DC=domain,DC=local",
                   "default policy changed");
@@ -320,6 +321,23 @@ static void helper_tests()
              need(c.certificate_cn == "Linux {user}" && !c.require_full_tgt_lifetime,
                   "new configuration controls not parsed");
              rejects([&] { parse_config(valid + "require_full_tgt_lifetime=maybe\n"); });
+         });
+
+    test("configuration parses key bit strength and aliases",
+         [&]
+         {
+             need(parse_config(valid + "key_bits=2048\n").key_bits == 2048, "key_bits=2048");
+             need(parse_config(valid + "key_bits=3072\n").key_bits == 3072, "key_bits=3072");
+             need(parse_config(valid + "key_bits=4096\n").key_bits == 4096, "key_bits=4096");
+             need(parse_config(valid + "bit_strength=2048\n").key_bits == 2048, "bit_strength=2048");
+             need(parse_config(valid + "bit_strength=3072\n").key_bits == 3072, "bit_strength=3072");
+             need(parse_config(valid + "bit_strength=4096\n").key_bits == 4096, "bit_strength=4096");
+             rejects([&] { parse_config(valid + "key_bits=1024\n"); });
+             rejects([&] { parse_config(valid + "key_bits=512\n"); });
+             rejects([&] { parse_config(valid + "key_bits=8192\n"); });
+             rejects([&] { parse_config(valid + "key_bits=invalid\n"); });
+             rejects([&] { parse_config(valid + "bit_strength=1024\n"); });
+             rejects([&] { parse_config(valid + "key_bits=2048\nbit_strength=2048\n"); });
          });
 
     test("home credential configuration needs no enrollment settings",
@@ -1878,6 +1896,7 @@ int main(int argc, char **argv)
                .cert_remaining = 36000,
                .cert_total = 36000,
                .interval = 60,
+               .key_bits = 3072,
                .require_full_tgt_lifetime = true,
                .source = CertificateSource::Enrollment};
     Mapping map{.name = "alice", .upn = "alice@domain.local"};
@@ -2190,7 +2209,7 @@ int main(int argc, char **argv)
     test("key trust certificate pair passes logon validation without a CA chain",
          [&]
          {
-             Key fresh = generate_key(2048);
+             Key fresh = generate_key(cfg.key_bits);
              auto pair = make_key_trust_pair(fresh.get(), "alice", "alice@domain.local", 36000 + 3600);
              Cert &c = pair.leaf;
              Cert &ca = pair.ca;

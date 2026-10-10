@@ -321,7 +321,7 @@ def credential_linking(pdf):
              ),
              "With both home PEM files absent and mechanism=key_trust, the setuid launcher starts the worker "
              "as the dedicated service account. The service keytab authenticates a GSSAPI LDAP bind to the same "
-             "writable DC used as the KDC. CRAFT resolves the user, generates an RSA-2048 key and local certificate "
+             "writable DC used as the KDC. CRAFT resolves the user, generates an RSA-3072 key and local certificate "
              "identity, adds one Key Credential to msDS-KeyCredentialLink, and performs Key Trust PKINIT. "
              "The independent cleanup process removes that exact entry before validated TGT bytes return. "
              "Existing keys are preserved. Failed cleanup blocks publication and can require manual removal.")
@@ -337,7 +337,7 @@ def credential_linking(pdf):
     p.rect(550, 449, 670, 79, WHITE, LINE, radius=9)
     p.lines(573,
         460,
-        ["Generate RSA-2048 key and local certificate identity.",
+        ["Generate RSA-3072 key and local certificate identity.",
         "Directory key matching authorizes the user."],
         22,
         leading=31,

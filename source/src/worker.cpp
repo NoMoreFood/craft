@@ -31,7 +31,7 @@ UserIdentity enroll(Kerberos &krb, const Config &cfg, Mapping &m)
     verify_chain(agent.get());
     krb.acquire_transport(cfg);
     m = directory_lookup(ldap_connect(cfg.gc_url).get(), cfg, cfg.gc_base_dn, m.name);
-    UserIdentity identity{.certificate = nullptr, .key = generate_key()};
+    UserIdentity identity{.certificate = nullptr, .key = generate_key(cfg.key_bits)};
     const Req req =
         make_request(identity.key.get(), m.upn, cfg.template_oid, common_name(cfg, m.name, m.upn));
     const Bytes cms = wrap_eobo(req.get(), agent.get(), agent_key.get(), cfg.netbios + "\\" + m.name);
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
                 krb.acquire_transport(cfg);
                 m = directory_lookup(
                     ldap_connect(cfg.kt_dc_url).get(), cfg, domain_to_dn(cfg.domain), m.name);
-                identity.key = generate_key(2048);
+                identity.key = generate_key(cfg.key_bits);
                 auto pair = make_key_trust_pair(
                     identity.key.get(), common_name(cfg, m.name, m.upn), m.upn, cfg.tgt + 3600);
                 identity.certificate = std::move(pair.leaf);
