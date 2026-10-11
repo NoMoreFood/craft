@@ -399,9 +399,10 @@ def process_guide(images):
         'authenticate afresh near day six; actual grants set the schedule.'
     ))
     paragraph(doc, (
-        'Install the maintainer without setuid/setgid on Linux 5.3+ with /proc '
-        'and system Kerberos configuration matching the pinned realm/KDC and AES '
-        'policy. Home refresh works under no_new_privs; modes 1 and 2 require '
+        'Install the maintainer without setuid/setgid on Linux with /proc and '
+        'system Kerberos configuration matching the pinned realm/KDC and AES '
+        'policy. Monitoring uses pidfds when available and /proc elsewhere. '
+        'Home refresh works under no_new_privs; modes 1 and 2 require '
         'later setuid calls. The scheduler must retain background processes. '
         'Watch a shell or job controller that lasts for the job; optional '
         '--max-duration 21d adds a cutoff. Concurrent jobs for one UID share the '
@@ -464,12 +465,11 @@ def configuration_guide():
     ], [1.72, 1.8, 1.8, 1.82])
     doc.add_heading("Shared Linux preparation", 1)
     paragraph(doc, (
-        'Build from the repository root using a C++20 compiler and standard '
-        'library with std::format, CMake and the OpenSSL 3, MIT Kerberos, '
-        'libcurl, libxml2, OpenLDAP and SASL dependencies. MIT PKINIT is required'
-        ' at runtime; modes 1 and 2 also require the SASL GSSAPI plugin. Use '
-        'patched distribution packages and the exact requirements in the source '
-        'guide.'
+        'Build from the repository root with a C++20 compiler and standard library '
+        'supporting std::format, CMake, OpenSSL 1.1.1 or newer, MIT Kerberos, libcurl, '
+        'libxml2, OpenLDAP and SASL. At runtime, install MIT PKINIT and, for modes '
+        '1 and 2, the SASL GSSAPI plugin. Use patched distribution packages meeting '
+        "the source guide's requirements."
     ))
     code(doc, (
         'cmake -S source -B build -DCMAKE_BUILD_TYPE=Release\ncmake --build build '
@@ -616,7 +616,8 @@ minimum_interval_seconds=60
     doc.add_heading("Shared ticket policy", 2)
     paragraph(doc, (
         'tgt_seconds=36000 and renew_seconds=604800 request ten-hour initial '
-        'validity and seven-day renewal in every mode. The KDC decides the actual'
+        'validity and seven-day renewal in every mode. Set renew_seconds to 0 to '
+        'disable renewal; otherwise it must exceed tgt_seconds. The KDC decides the actual'
         ' grant, including certificate/key-lifetime constraints. Strict '
         'require_full_tgt_lifetime=yes rejects shortened grants and preserves the'
         ' cache; no accepts them with a warning. CRAFT never rewrites issued '
@@ -657,7 +658,7 @@ minimum_interval_seconds=60
     paragraph(doc, (
         'Pin the same writable DC in krb5.conf and kt_dc_url so its KDC sees the '
         'new key immediately. The LDAP SASL/GSSAPI bind must provide integrity '
-        'and confidentiality. For Key Trust alone, remove the optional '
+        'and encryption at SASL SSF 128 or higher. For Key Trust alone, remove the optional '
         'pkinit_pool reference to user-certificate ca-trust.pem if unnecessary, '
         'or point it at a root-controlled bundle of KDC intermediates; retain KDC'
         ' anchors and CRL checking.'
@@ -688,10 +689,11 @@ minimum_interval_seconds=60
         '-WhatIf'
     ))
     paragraph(doc, (
-        'CRAFT generates a fresh RSA-3072 key and locally issued certificate '
-        'identity. The linked public key authorizes PKINIT, without '
-        'user-certificate CA enrollment, CES, an agent or a template. MIT '
-        'Kerberos handles PKINIT negotiation, including freshness tokens; '
+        'CRAFT generates a fresh RSA key (default 3072 bits; key_bits accepts '
+        '2048, 3072 or 4096) and locally issued certificate. MS-ADTS describes '
+        'RSA-2048 for NGC, but Windows KDCs also accept RSA-3072 and RSA-4096. '
+        'The linked key authorizes PKINIT without user-certificate CA enrollment, '
+        'CES, an agent or a template. MIT Kerberos handles freshness tokens; '
         'validate against the actual KDC policy.'
     ))
     paragraph(doc, (
@@ -761,10 +763,11 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
     ))
     paragraph(doc, (
         'Provide root-owned mode-0644 CA and KDC trust bundles with current CRLs.'
-        ' The user certificate must match the key; have explicit CA:FALSE without'
-        ' a path length, digitalSignature without certificate/CRL signing, Smart '
-        'Card Logon or PKINIT Client Authentication EKU, exactly one well-formed '
-        'UPN SAN, and current validity. The KDC must map it to <Linux '
+        ' The user certificate must match the key, be non-CA, and have digitalSignature '
+        'without certificate/CRL signing, Smart Card Logon or PKINIT Client '
+        'Authentication EKU, exactly one UPN SAN, and current validity. basicConstraints '
+        'may be absent; if present, require CA:FALSE without a path length. The KDC '
+        'must map it to <Linux '
         'username>@<realm>. CRAFT does not query the directory UPN or pin the '
         'enrollment template/ten-hour certificate cap in this mode.'
     ))
@@ -827,8 +830,9 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         ' || exit "$?"\nexport KRB5CCNAME="$cache"'
     ))
     paragraph(doc, (
-        'The ordinary maintainer needs Linux 5.3+, /proc and system '
-        '/etc/krb5.conf matching the pinned realm/KDC and AES policy. The '
+        'The ordinary maintainer needs Linux with /proc and system /etc/krb5.conf '
+        'matching the pinned realm/KDC and AES policy. It monitors the job through '
+        'a pidfd when available, or /proc on older kernels such as RHEL 8. The '
         'scheduler must retain detached processes. Renewal uses the cache alone; '
         'fresh authentication applies the same three-mode selection. Keep CRLs, '
         'service credentials and supplied certificates current. Status/log '

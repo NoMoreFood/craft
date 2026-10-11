@@ -38,7 +38,7 @@ inline int ldap_sasl_interact(LDAP *, unsigned, void *, void *in) noexcept
     return LDAP_SUCCESS;
 }
 
-// Establish an integrity-protected connection bound as the directory service account. libldap's host name
+// Establish an encrypted, integrity-protected connection bound as the directory service account. libldap's host name
 // canonicalization stays enabled: the default Global Catalog URL names the domain, not one controller, and
 // the GSSAPI mutual authentication that follows still proves the peer holds that controller's key.
 inline ScopedLdap ldap_connect(const std::string &url)
@@ -48,14 +48,14 @@ inline ScopedLdap ldap_connect(const std::string &url)
     if (rc != LDAP_SUCCESS || !ld)
         fail(std::format("LDAP initialize failed for {}: {}", url, ldap_err2string(rc)));
     const int version = LDAP_VERSION3;
-    const ber_len_t min_ssf = 1;
+    const ber_len_t min_ssf = 128;
     const timeval tv{10, 0};
     need(ldap_set_option(ld.get(), LDAP_OPT_PROTOCOL_VERSION, &version) == LDAP_OPT_SUCCESS &&
              ldap_set_option(ld.get(), LDAP_OPT_REFERRALS, LDAP_OPT_OFF) == LDAP_OPT_SUCCESS &&
              ldap_set_option(ld.get(), LDAP_OPT_NETWORK_TIMEOUT, &tv) == LDAP_OPT_SUCCESS &&
              ldap_set_option(ld.get(), LDAP_OPT_TIMEOUT, &tv) == LDAP_OPT_SUCCESS &&
              ldap_set_option(ld.get(), LDAP_OPT_X_SASL_SSF_MIN, &min_ssf) == LDAP_OPT_SUCCESS,
-         "LDAP protocol, timeout or integrity options rejected");
+         "LDAP protocol, timeout or encryption options rejected");
     rc = ldap_sasl_interactive_bind_s(
         ld.get(), nullptr, "GSSAPI", nullptr, nullptr, LDAP_SASL_QUIET, ldap_sasl_interact, nullptr);
     if (rc != LDAP_SUCCESS) fail(std::format("LDAP GSSAPI bind failed to {}: {}", url, ldap_err2string(rc)));

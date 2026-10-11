@@ -63,6 +63,7 @@ service_principal=svc-linux-enroll@DOMAIN.LOCAL
 # Note: RFC 4556 constrains initial ticket lifetime by client certificate validity,
 # so enrollment certificate caps also default to 10 hours.
 # Home mode accepts ordinary certificate validity; KDC ticket policy still applies.
+# renew_seconds must exceed tgt_seconds, or be 0 to disable renewal.
 tgt_seconds=36000
 renew_seconds=604800
 require_full_tgt_lifetime=yes

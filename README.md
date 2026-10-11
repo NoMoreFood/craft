@@ -56,7 +56,7 @@ Follow [mode 3 setup](source/README.md#mode-3-setup-unprivileged-windows-exporte
 | Service account and private runtime | `craft:craft`, `/run/craft/` mode 0700 | 1 and 2 |
 | Approved caller group | `craft-users`; service credentials remain inaccessible to it | 1 and 2 |
 | Credential cache | NSS home `.krb5cc_craft`, caller-owned mode 0600 | All |
-| Optional command wrapper | [`with-craft`](source/scripts/with-craft) | All |
+| Optional command wrapper | [`with-craft`](source/scripts/with-craft.in) | All |
 
 ## Build and use
 

@@ -174,8 +174,8 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     if (source != CertificateSource::Home)
         need(plain_url(c.gc_url, "ldap://"), "gc_url must be an ldap:// URL");
     need(c.certificate_cn.size() <= 256, "certificate CN pattern is too long");
-    need(c.tgt >= 60 && (c.renew == 0 || c.renew >= c.tgt) && c.cert_remaining >= 60 &&
-             c.cert_total >= c.cert_remaining && c.interval >= 30,
+    need(c.renew == 0 || c.renew > c.tgt, "renew_seconds must be 0 or exceed tgt_seconds");
+    need(c.tgt >= 60 && c.cert_remaining >= 60 && c.cert_total >= c.cert_remaining && c.interval >= 30,
          "invalid lifetime/rate limits");
     return c;
 }

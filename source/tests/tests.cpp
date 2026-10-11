@@ -417,6 +417,7 @@ static void helper_tests()
                                   "tgt_seconds=604801\n",
                                   "renew_seconds=604801\n",
                                   "renew_seconds=30\n",
+                                  "renew_seconds=36000\n",
                                   "minimum_interval_seconds=29\n",
                                   "cert_remaining_max_seconds=59\n",
                                   "cert_total_max_seconds=600\n"})
