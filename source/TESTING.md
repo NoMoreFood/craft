@@ -136,6 +136,18 @@ Tested source commit `514b851` and updated DISA STIG configuration on the two-no
    - Domain Controller SMB shares (`//CRAFT-DC.craft.lab`) authenticated successfully using Kerberos.
 6. **Ticket Renewal:** Renewed the issued ticket against the KDC via `kinit -R -c $KRB5CCNAME`; renewal succeeded without re-prompting, extending expiration to `11:51:11` while retaining the 7-day renew window.
 
+## Multi-OS Validation
+
+The DISA STIG-hardened Hyper-V lab used Ubuntu 24.04.5 LTS and Rocky Linux 9.8 clients, Windows Server 2022 for AD/AD CS/CES, and Server 2019/2025 member servers. Each mode covered RSA 2048, 3072 and 4096-bit keys; all 27 checks passed.
+
+| Mode | Coverage | Passed |
+| --- | --- | --- |
+| 1: Certificate enrollment | CES EOBO and PKINIT on both Linux clients | 6/6 |
+| 2: Key Trust | PKINIT and temporary-key cleanup on both Linux clients | 6/6 |
+| 3: Windows-exported certificate | Nine exports on Server 2019/2022/2025; six Linux PKINIT runs | 15/15 |
+
+Policies capped ticket validity at ten hours, renewal at seven days and clock skew at five minutes, with AES-only Kerberos and SID/SKI strong certificate mapping. Checks confirmed AES256 session/ticket encryption, nonadministrative service-account delegation limited to `msDS-KeyCredentialLink`, launcher/runtime/cache permissions (`04750`/`0700`/`0600`), and LDAP GSSAPI (SSF 256) and SMB access. Other Linux distributions were not tested.
+
 ## Live Acceptance Checklist
 
 The enrollment-specific checks below cover mode 1. Complete the home-workflow checks for mode 3 and Key Trust checks for mode 2. Apply the common KDC, cache and privilege-boundary checks to every deployed mode.

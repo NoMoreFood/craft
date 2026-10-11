@@ -119,6 +119,12 @@ Stopping maintenance, removing a linked key or deleting a certificate does not r
 
 [All diagrams (PDF)](docs/CRAFT-Diagrams.pdf) · [Diagram generator](docs/build_craft_diagrams.py) · [Word guide generator](docs/build_craft_guides.py)
 
+## Tested Operating Systems
+
+CRAFT has been tested in a DISA STIG-hardened AD lab with Ubuntu 24.04.5 LTS, Rocky Linux 9.8 and Windows Server 2019, 2022 and 2025. See the [validation results](source/TESTING.md#multi-os-validation).
+
+Other Linux distributions were not tested, but CRAFT uses common libraries and should work with the required [dependencies](source/README.md#build) installed.
+
 ## Project status
 
 CRAFT is a reference implementation. Review the [validation record](source/TESTING.md) and complete the live checks for your chosen mode before production use. It supports automation alongside MFA-protected interactive sign-in, but does not perform an MFA challenge or establish that one was completed. Authentication depends on the supplied certificate and KDC mapping, CA-authorized enrollment, or the delegated directory write.
