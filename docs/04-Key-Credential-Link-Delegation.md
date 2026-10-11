@@ -13,7 +13,7 @@ This page explains the mechanism, the authorization boundary, the delegation hel
 1. A caller runs `craft` with no home pair. The setuid launcher runs the worker as the dedicated service account, exactly as for enrollment.
 2. The worker reads `mechanism=key_trust`, acquires a Kerberos credential for the service account from `submitter.keytab`, and binds to the writable domain controller `kt_dc_url` over LDAP with SASL/GSSAPI integrity and confidentiality.
 3. It resolves the caller's unique directory object (`sAMAccountName=<Linux username>`) to its distinguished name and `userPrincipalName`.
-4. It generates a fresh RSA key (default 3072-bit, configurable via `key_bits`) and a short-lived locally issued certificate carrying the resolved UPN.
+4. It generates a fresh RSA key (default 3072-bit, configurable via `key_bits`) and a short-lived PKINIT certificate carrying the public key and resolved UPN.
 5. It builds a version-2 Key Credential (MS-ADTS 2.2.20) advertising that key as an NGC/Key Trust credential and **adds** exactly that one value to `msDS-KeyCredentialLink`, leaving any existing Windows Hello keys untouched.
 6. It performs PKINIT for `<Linux username>@<realm>`. The KDC matches the certificate's public key against the Key Credential and issues a TGT. CRAFT validates the returned principal, flags, AES encryption and lifetimes.
 7. An independent cleanup process **removes** the temporary value before any credential bytes leave the worker. It also attempts cleanup after acquisition failure or worker termination and uncertain LDAP add outcomes, retrying with a fresh connection. If cleanup still fails, CRAFT refuses cache publication and logs a CRITICAL AUTHPRIV event naming the residual credential for administrator removal. Host failure or directory unavailability can leave a usable key behind.
@@ -81,7 +81,7 @@ The service account can authenticate as every account in its delegated scope. Tr
 
 - **Key Trust support.** The domain must support NGC/Key Trust key-based authentication (a schema exposing `msDS-KeyCredentialLink` and a writable Windows Server 2016-or-later KDC with a current PKINIT certificate). Key Trust PKINIT is the same model Windows Hello for Business "key trust" deployments use.
 - **Same DC for write and KDC.** Set `kt_dc_url` to the writable DC that `krb5.conf` names as the KDC, so the written key is visible to the KDC without replication delay. A different DC can reject the PKINIT until the attribute replicates.
-- **KDC certificate and trust.** As in every CRAFT path, the KDC must present a PKINIT/KDC certificate that chains to `kdc-trust.pem` with current CRLs, and the Linux client validates it. Key Trust changes how the KDC authenticates the client, not how the client validates the KDC.
+- **KDC certificate and trust.** The Linux client must validate the KDC's PKINIT certificate using approved trust anchors, current CRLs and configured identity/EKU checks. Key Trust uses the directory key for client authorization and still requires KDC certificate validation. Review the temporary issuer's per-request anchor scope in [Key Trust certificate handling](../source/SECURITY.md#key-trust-certificate-handling).
 - **PKINIT freshness.** CRAFT delegates PKINIT negotiation to MIT Kerberos. Its plugin supports freshness tokens; verify it against the actual KDC policy rather than treating freshness enforcement as an automatic blocker. See [MIT PKINIT freshness support](https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html#freshness-tokens).
 - **Strong mapping.** Key Trust is itself a strong, key-based mapping and is unaffected by KB5014754 certificate-mapping enforcement for CA-issued certificates. The local certificate identity is authorized by the directory key, not an NTAuth user-certificate chain. KDC certificate trust is still required. See [Microsoft key-trust requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/hello-for-business/deploy/).
 
@@ -94,7 +94,7 @@ The service account can authenticate as every account in its delegated scope. Tr
 | Privileged directory operation | Write `msDS-KeyCredentialLink` on the target | Sign an EOBO request as the agent |
 | Authorization boundary | Delegated object/OU write scope | CA enrollment-agent recipient restrictions |
 | Directory / CA residue | Temporary directory key removed on success; failed cleanup needs intervention | CA retains issued certificate and audit record |
-| Client certificate identity | Locally issued, authorized by the linked public key | CA-issued, chain-verified |
+| Client certificate identity | PKINIT certificate carrying the directory-authorized public key | CA-issued, chain-verified |
 
 Key Trust removes user-certificate CA enrollment and the long-lived enrollment-agent key from acquisition while retaining KDC certificate trust, at the cost of granting a directory write whose scope you must govern. Choose one fallback per deployment. Both privileged modes remain subordinate to mode 3's supplied-certificate acquisition path, which uses no service account at all.
 

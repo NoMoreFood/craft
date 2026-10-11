@@ -6,13 +6,15 @@
     account on a single Organizational Unit or user, for the Key Trust fallback.
 
 .DESCRIPTION
-    CRAFT's key_trust mechanism obtains a Kerberos TGT without a CA. When no home
-    certificate pair is present, the dedicated service account writes a temporary
-    self-signed key to the caller's msDS-KeyCredentialLink, performs Key Trust PKINIT,
-    and then removes that key. This script grants the service account the least-privilege
-    permission required for that write: ReadProperty and WriteProperty on the single
-    msDS-KeyCredentialLink attribute, scoped to one OU (inherited to descendant user
-    objects) or to one user. It grants no other right.
+    CRAFT's key_trust mechanism obtains a Kerberos TGT through AD public-key
+    authorization without user-certificate CA enrollment. When no home certificate
+    pair is present, the dedicated service account writes a temporary public key to
+    the caller's msDS-KeyCredentialLink, performs Key Trust PKINIT, and then removes
+    that key. KDC certificate trust and CRLs are still required. This script grants
+    the service account the least-privilege permission required for that write:
+    ReadProperty and WriteProperty on the single msDS-KeyCredentialLink attribute,
+    scoped to one OU (inherited to descendant user objects) or to one user. It grants
+    no other right.
 
     The ability to write msDS-KeyCredentialLink on an account is equivalent to the ability
     to authenticate as that account (the "Shadow Credentials" technique). Treat the delegated

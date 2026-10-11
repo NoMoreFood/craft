@@ -33,13 +33,13 @@ Start with [mode 1 setup](#mode-1-setup-privileged-certificate-enrollment), [Win
 
 ## Mode 2 workflow: Privileged credential linking
 
-Credential linking uses AD Key Trust, selected with `mechanism=key_trust`. Instead of requesting a CA-issued certificate, the dedicated service account writes a temporary public key to the caller's `msDS-KeyCredentialLink` and authenticates against it with Key Trust PKINIT — the key-based model Windows Hello for Business uses. It needs no user-certificate CA enrollment, CES, enrollment agent or user template. The KDC still needs a trusted PKINIT certificate and current CRLs.
+Credential linking uses AD Key Trust, selected with `mechanism=key_trust`. Instead of requesting a CA-issued certificate, the dedicated service account writes a temporary public key to the caller's `msDS-KeyCredentialLink` and authenticates against it with Key Trust PKINIT — the key-based model Windows Hello for Business uses. Directory delegation governs user authorization. It needs no user-certificate CA enrollment, CES, enrollment agent or user template. The KDC still needs a trusted PKINIT certificate and current CRLs.
 
 When no home pair is present, the setuid launcher runs the worker as the service account exactly as for enrollment. The worker then:
 
 1. Authenticates the service account from `submitter.keytab` and binds to `kt_dc_url` over LDAP with SASL/GSSAPI integrity and confidentiality.
 2. Resolves the caller's unique object (`sAMAccountName=<caller>`) to its distinguished name and `userPrincipalName`.
-3. Generates a fresh RSA key (default 3072-bit, configurable via `key_bits`; 2048, 3072, and 4096-bit supported) and a short-lived local certificate identity carrying that UPN. A temporary local issuer signs the leaf for the PKINIT plugin; directory key matching authorizes the user.
+3. Generates a fresh RSA key (default 3072-bit, configurable via `key_bits`; 2048, 3072, and 4096-bit supported) and a short-lived [PKINIT certificate](SECURITY.md#key-trust-certificate-handling) carrying the public key and resolved UPN.
 4. Builds a version-2 Key Credential (MS-ADTS 2.2.20) advertising the key as NGC/Key Trust and **adds** exactly that one value, leaving any existing Windows Hello keys in place.
 5. Performs PKINIT for `<caller>@<realm>`; the KDC matches the key and issues a TGT, which CRAFT validates like every other mode.
 6. **Removes** the temporary value before emitting credentials. An independent cleanup process also attempts removal on acquisition failure or worker termination, including an uncertain LDAP add outcome. It retries with a fresh connection. If removal still fails, cache publication fails and a CRITICAL AUTHPRIV event identifies the residual credential for administrator cleanup. Directory unavailability or host failure can leave a key behind.
@@ -116,7 +116,7 @@ Enrollment generates a fresh key for each attempt. The issued certificate and ke
 
 The persistent `.krb5cc_craft` cache contains the TGT and session key, without the user certificate/private key. Applications obtain service tickets from it. Renewal needs only the cache; fresh authentication uses the selected certificate workflow. Success replaces the cache, and expiry does not delete it automatically.
 
-Mode 2 generates a temporary local certificate identity, links its public key in AD and removes that entry before publishing credentials. Cleanup is attempted on failure, but a residual entry can require administrator removal. It performs no user-certificate CA enrollment.
+Mode 2 generates a temporary key and a PKINIT certificate carrying its public key, links that public key in AD and removes the directory entry before publishing credentials. Cleanup is attempted on failure, but a residual entry can require administrator removal. It performs no user-certificate CA enrollment.
 
 Privileged service credentials remain private under `/etc/craft`; `/run/craft` contains acquisition locks and timestamps for modes 1 and 2. A home-only installation needs neither. Memory and memory files can reach swap or privileged host capture. Deleting a certificate/key, ending a process or removing a cache does not revoke KDC-issued tickets.
 
@@ -239,6 +239,13 @@ Create `/etc/craft/config` as `root:root` mode 0644 using the snippet for your m
 The example Kerberos `pkinit_pool` points at `ca-trust.pem`. For mode 2 alone, remove that optional pool if no intermediates are needed, or point it at a root-controlled PEM bundle containing the KDC intermediates, such as `kdc-trust.pem`. This does not disable KDC trust or CRL checks. If supplied home certificates will also be used on that host, install their CA trust and CRLs as required for mode 3.
 
 Refresh CRLs independently; CRAFT does not fetch arbitrary AIA/CRL URLs. Protect original PFX exports and key extraction. Private credentials must remain inaccessible to ordinary callers. For `craft-maintain`, also configure system `/etc/krb5.conf` for the same realm/KDC and AES policy; see [long-running jobs](#long-running-jobs).
+
+CRAFT hands its audit records to the host logging service and refuses to act when that service does not take them; see [audit records and diagnostics](#audit-records-and-diagnostics). The example host audit rules add what only the host can record: who read or changed CRAFT's files, each use of the launcher, and every address CRAFT connected to. Adjust their paths to the installation, drop the lines for secrets the host does not hold, and load them:
+
+```sh
+sudo install -o root -g root -m 0640 source/config/craft.audit.rules /etc/audit/rules.d/craft.rules
+sudo augenrules --load
+```
 
 ## Shared privileged installation
 
@@ -414,6 +421,36 @@ klist -ef -c "$KRB5CCNAME"
 Status reports `ready`, `retrying`, `expired`, `stopped` or `failed`, Unix ticket times and the last error; `next_check=0` means stopped. A successful read does not prove credential health. Private status files remain after exit and are removed by a later maintainer once a week old; events use the `craft-maintain` AUTHPRIV log identity.
 
 Renewal failures preserve the cache and retry without immediate fresh authentication. Missing/expired TGTs, tickets that cannot extend near expiry and renewal-window rollover require fresh credentials. Failed fresh acquisitions share a cooldown from one minute to one hour, including home-certificate failures. Startup requires a usable TGT; later failures appear in status/logs and do not stop the job. Keep CRLs, the selected certificate credentials and KDC connectivity current.
+
+## Audit Records and Diagnostics
+
+Every program writes its records to the host logging service at `/dev/log`, facility AUTHPRIV, under its own name. Read them with `journalctl -t craft -t craft-worker -t craft-maintain` or from the host's AUTHPRIV log.
+
+| Identity | Record | Written |
+| --- | --- | --- |
+| `craft` | `request started uid= user=` | Before the launcher takes any privileged step |
+| `craft` | `request finished uid= user= outcome=published cache=` | After the cache is replaced |
+| `craft` | `request uid= failed: ...` | When the launcher gives up |
+| `craft-worker` | `issued TGT request= uid= user= certificate_source= certificate_expiry=` | Before credential bytes leave the worker |
+| `craft-worker` | `issuance request= uid= failed: ...` | When acquisition fails |
+| `craft-worker` | `key credential added object= worker=`, `key credential removed object= worker=` | After each `msDS-KeyCredentialLink` change |
+| `craft-worker` | `key trust object= worker= failed: ...`, `CRITICAL: could not remove ...` | When a directory change is refused, or a temporary key stays behind |
+| `craft-maintain` | `maintenance started uid= job=`, `maintenance stopped uid= job=`, `maintenance failed uid= job=` | When the detached maintainer begins and ends |
+| `craft-maintain` | `renewed TGT uid= expiry=`, `obtained fresh credentials uid=` | Before a renewal is published; after fresh acquisition |
+| `craft-maintain` | `maintenance uid= failed: ...` | When an operation fails |
+
+`request=` is the launcher's process ID, the number in its own `craft[...]` records; `worker=` is the worker's. Records hold no key, ticket or certificate bytes and are reduced to bounded printable ASCII.
+
+A record the logging service does not take stops the operation: the launcher does not start, the worker releases no credentials, a published Key Trust key is withdrawn, and the maintainer does not publish a renewal. A host without a logging socket, such as a bare container, therefore cannot run CRAFT. Storage, forwarding and alarms beyond that socket are the logging service's own configuration.
+
+Callers are shown what failed, not why the system refused it. System paths, configuration contents, and whatever a server or a library reported go only to the log, and the caller's message says where:
+
+```text
+craft-worker: user PKINIT: see the system log under craft-worker[943]
+craft: credential acquisition failed; existing cache was not replaced
+```
+
+Failures a caller can correct, such as an unsafe home certificate file, a rate limit or a full home directory, are shown in full. `craft-maintain --status` follows the same rule for `last_error`.
 
 ## Limits and Failure Behavior
 
