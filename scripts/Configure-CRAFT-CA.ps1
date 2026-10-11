@@ -18,7 +18,7 @@
        - Issuance Requirements: Mandates 1 Enrollment Agent signature (1.3.6.1.4.1.311.20.2.1)
        - Subject Name: Built from Active Directory (UPN and Common Name)
        - Short Validity: 10-hour certificate lifetime (matching DISA STIG Kerberos user ticket lifetime)
-       - RSA-3072 minimum key size
+       - RSA minimum key size (3072 bits unless -KeySize says otherwise)
        - Template Security ACL: Adds agent Read/Enroll and removes explicit Authenticated Users Enroll
     2. Registers and assigns a unique template OID in the Active Directory Configuration partition.
     3. Verifies narrow agent/template permissions and CA restrictions before publishing or exporting credentials.
@@ -40,7 +40,9 @@
     Template validity in hours (1-24, default: 10). Verify that CA backdating fits the client's total-validity cap.
 
 .PARAMETER KeySize
-    Key size in bits (3072, matching the worker's generated key).
+    Minimum RSA key size the template accepts, and the size of the agent's own key: 2048, 3072 (default)
+    or 4096 bits. The exported client configuration sets key_bits to the same value. The CA refuses any
+    request whose key is smaller, so never set key_bits on Linux below the template's minimum.
 
 .PARAMETER EnrollmentAgentIdentity
     Active Directory identity holding the Enrollment Agent certificate (default: 'svc-linux-enroll').
@@ -82,7 +84,7 @@ param(
     [string]$TemplateDisplayName = "CRAFT User Authentication",
     [ValidateRange(1, 24)]
     [int]$ValidityHours = 10,
-    [ValidateSet(3072)]
+    [ValidateSet(2048, 3072, 4096)]
     [int]$KeySize = 3072,
     [ValidatePattern("^[A-Za-z_][A-Za-z0-9_.-]{0,19}$")]
     [string]$EnrollmentAgentIdentity = "svc-linux-enroll",
@@ -496,7 +498,7 @@ function Get-UsableCertificate([string]$Store, [string]$Eku, [string]$DnsName = 
 }
 
 function Export-ClientConfiguration([string]$Directory, $Domain, [string]$TemplateOid, [uri]$Ces,
-    [string]$Agent, [string]$Kdc, [int]$Hours)
+    [string]$Agent, [string]$Kdc, [int]$Hours, [int]$KeyBits)
 {
     # Keep both templates in step with source/config/config.example and source/config/krb5.conf.example.
     $realm = $Domain.DNSRoot.ToUpperInvariant()
@@ -508,6 +510,7 @@ realm=$realm
 netbios=$($Domain.NetBIOSName)
 template_oid=$TemplateOid
 certificate_cn={user}
+key_bits=$KeyBits
 ces_url=$($Ces.AbsoluteUri)
 ces_auth=negotiate
 service_principal=$Agent@$realm
@@ -916,7 +919,8 @@ Write-Info "Exported CA CRL         : $caCrlPath"
 # -----------------------------------------------------------------------------
 Write-Step "Generating Linux client configuration in $ExportPath..."
 
-Export-ClientConfiguration $ExportPath $domain $newOid $CesUrl $EnrollmentAgentIdentity $KdcHost $ValidityHours
+Export-ClientConfiguration $ExportPath $domain $newOid $CesUrl $EnrollmentAgentIdentity $KdcHost `
+    $ValidityHours $KeySize
 Write-Info "Exported config and krb5.conf to $ExportPath"
 
 # -----------------------------------------------------------------------------

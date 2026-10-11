@@ -12,11 +12,7 @@ Fd runtime_directory()
 {
     Fd dir(open(RUNTIME_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     sysneed(dir.get() >= 0, "open private runtime directory");
-    struct stat st
-    {
-    };
-    sysneed(fstat(dir.get(), &st) == 0, "stat runtime directory");
-    need(st.st_uid == getuid() && (st.st_mode & 0077) == 0,
+    need(owned_directory(dir.get(), getuid(), 0077),
          "runtime directory must be dedicated-account owned, mode 0700");
     return dir;
 }
@@ -54,6 +50,9 @@ int main(int argc, char **argv)
         no_core();
         signal(SIGALRM, SIG_DFL);
         alarm(90);
+
+        // End with the launcher: its death, or its abandoning this worker, closes the pipe that is our input.
+        exit_with_peer(STDIN_FILENO);
         const rlimit cpu{30, 30}, memory{512 * 1024 * 1024, 512 * 1024 * 1024};
         sysneed(setrlimit(RLIMIT_CPU, &cpu) == 0 && setrlimit(RLIMIT_AS, &memory) == 0,
                 "worker resource limits");

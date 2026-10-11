@@ -90,8 +90,10 @@ file(COPY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft" DESTINATION "${CMA
 
 include(CTest)
 if(BUILD_TESTING)
+  # One test runs a multi-threaded job; glibc before 2.34 (RHEL 8) keeps threads in a separate library.
+  find_package(Threads REQUIRED)
   add_executable(craft-tests tests/tests.cpp)
-  target_link_libraries(craft-tests PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap)
+  target_link_libraries(craft-tests PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap Threads::Threads)
   target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds)
   add_test(NAME offline-tests COMMAND craft-tests)
   add_executable(craft-key-trust-tests tests/key-trust.cpp)

@@ -97,8 +97,12 @@ $valid = @{ AllowedTargetGroup = "CRAFT Test Users"; ExportPassword = (ConvertTo
     CesUrl = "https://ces.example.com/service.svc/CES" }
 $defaults = & $parameterCheck @valid
 Assert ($defaults.ValidityHours -eq 10 -and $defaults.KeySize -eq 3072) "Unexpected certificate defaults."
+foreach ($size in @(2048, 3072, 4096))
+{
+    Assert ((& $parameterCheck @valid -KeySize $size).KeySize -eq $size) "A key size the worker supports was refused."
+}
 foreach ($case in @(
-    @{ ValidityHours = 0 }, @{ ValidityHours = 25 }, @{ KeySize = 2048 }, @{ KeySize = 4096 },
+    @{ ValidityHours = 0 }, @{ ValidityHours = 25 }, @{ KeySize = 1024 }, @{ KeySize = 8192 },
     @{ TemplateName = "Invalid,Name" }, @{ EnrollmentAgentIdentity = "bad'user" },
     @{ TargetUser = "bad(user)" }, @{ EnrollmentAgentName = 'bad"name' },
     @{ CesUrl = "http://ces.example.com/" }, @{ CesUrl = "/relative" },
@@ -126,8 +130,9 @@ Write-Host "PASS: provisioning parameter validation"
         foreach ($case in @(@(1, 1), @(4, 4), @(9, 9), @(10, 10), @(11, 10), @(24, 10)))
         {
             $ValidityHours = $case[0]
+            $keyBits = @(2048, 3072, 4096)[$ValidityHours % 3]
             Export-ClientConfiguration $ExportPath $domain '1.3.6.1.4.1.311.21.8.999.1' $cesUrl `
-                'svc-offline-test' 'dc.example.com' $ValidityHours
+                'svc-offline-test' 'dc.example.com' $ValidityHours $keyBits
             $config = ConvertFrom-StringData ([System.IO.File]::ReadAllText((Join-Path $ExportPath 'config')))
             $krb5 = [System.IO.File]::ReadAllText((Join-Path $ExportPath 'krb5.conf'))
             $ticket = [regex]::Match($krb5, '(?m)^\s*ticket_lifetime\s*=\s*(\d+)h\s*$')
@@ -139,6 +144,7 @@ Write-Host "PASS: provisioning parameter validation"
             Assert ($config.realm -ceq 'EXAMPLE.COM' -and $config.domain -ceq 'example.com' -and
                 $config.netbios -ceq 'EXAMPLE' -and $config.template_oid -eq '1.3.6.1.4.1.311.21.8.999.1' -and
                 $config.service_principal -ceq 'svc-offline-test@EXAMPLE.COM' -and
+                [int]$config.key_bits -eq $keyBits -and
                 $config.ces_url -ceq 'https://ces.example.com/service.svc/CES' -and
                 $krb5 -match '(?m)^\s*kdc = dc\.example\.com\s*$' -and
                 $krb5 -match '(?m)^\s*default_realm = EXAMPLE\.COM\s*$') `

@@ -131,12 +131,9 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     c.gc_url = optional("gc_url", "ldap://" + c.domain + ":3268");
     c.gc_base_dn = optional("gc_base_dn", domain_to_dn(c.domain));
     c.certificate_cn = optional("certificate_cn", c.certificate_cn);
-    const auto has_key_bits = values.find("key_bits") != values.end();
-    const auto has_bit_strength = values.find("bit_strength") != values.end();
-    need(!(has_key_bits && has_bit_strength), "cannot specify both key_bits and bit_strength");
-    if (has_key_bits) c.key_bits = number(values["key_bits"]);
-    else if (has_bit_strength) c.key_bits = number(values["bit_strength"]);
-    else c.key_bits = 3072;
+    need(!(values.contains("key_bits") && values.contains("bit_strength")),
+         "cannot specify both key_bits and bit_strength");
+    c.key_bits = number(optional("key_bits", optional("bit_strength", std::to_string(c.key_bits))));
     need(c.key_bits == 2048 || c.key_bits == 3072 || c.key_bits == 4096,
          "key_bits must be 2048, 3072, or 4096");
     c.tgt = seconds("tgt_seconds", c.tgt, 604800);

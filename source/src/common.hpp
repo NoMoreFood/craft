@@ -13,8 +13,10 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <algorithm>
 #include <array>
@@ -93,6 +95,13 @@ inline void need(bool ok, std::string_view message)
 inline void sysneed(bool ok, std::string_view message)
 {
     if (!ok) sysfail(message);
+}
+
+// Repeat a system call that a signal interrupted.
+template <std::invocable F> inline auto retry(F &&call)
+{
+    for (;;)
+        if (const auto result = call(); result >= 0 || errno != EINTR) return result;
 }
 
 // Run a nonthrowing cleanup exactly once unless dismissed.
@@ -199,8 +208,7 @@ inline void write_all(int fd, ByteView bytes)
 {
     while (!bytes.empty())
     {
-        const auto count = ::write(fd, bytes.data(), bytes.size());
-        if (count < 0 && errno == EINTR) continue;
+        const auto count = retry([&] { return ::write(fd, bytes.data(), bytes.size()); });
         sysneed(count > 0, "write");
         bytes = bytes.subspan(static_cast<size_t>(count));
     }
@@ -214,8 +222,7 @@ inline Bytes read_all(int fd, size_t maximum = MAX_BLOB)
     ScopeExit erase_buffer([&]() noexcept { wipe(buffer); });
     for (;;)
     {
-        const auto count = ::read(fd, buffer.data(), buffer.size());
-        if (count < 0 && errno == EINTR) continue;
+        const auto count = retry([&] { return ::read(fd, buffer.data(), buffer.size()); });
         sysneed(count >= 0, "read");
         if (!count)
         {
@@ -271,10 +278,7 @@ inline constexpr size_t RECORD_SIZE = 64;
 inline std::string read_record(int fd)
 {
     std::array<char, RECORD_SIZE + 1> buffer{};
-    ssize_t count;
-    do
-        count = pread(fd, buffer.data(), buffer.size(), 0);
-    while (count < 0 && errno == EINTR);
+    const auto count = retry([&] { return pread(fd, buffer.data(), buffer.size(), 0); });
     sysneed(count >= 0, "read state record");
     need(static_cast<size_t>(count) <= RECORD_SIZE, "state record is too large");
     return trim({buffer.data(), static_cast<size_t>(count)});
@@ -284,12 +288,17 @@ inline void write_record(int fd, std::string_view text)
 {
     const auto record = std::format("{:<{}}\n", text, RECORD_SIZE - 1);
     need(record.size() == RECORD_SIZE, "state record is too long");
-    ssize_t count;
-    do
-        count = pwrite(fd, record.data(), record.size(), 0);
-    while (count < 0 && errno == EINTR);
+    const auto count = retry([&] { return pwrite(fd, record.data(), record.size(), 0); });
     sysneed(count == static_cast<ssize_t>(record.size()) && ftruncate(fd, RECORD_SIZE) == 0,
             "write state record");
+}
+
+// The worker's audit trail: one AUTHPRIV entry per issuance, failure or Key Trust event.
+inline void audit(int priority, const std::string &message)
+{
+    openlog("craft", LOG_PID, LOG_AUTHPRIV);
+    syslog(priority, "%s", message.c_str());
+    closelog();
 }
 
 // Resolve identities through passwd/NSS, never through caller-controlled environment values.
@@ -398,12 +407,10 @@ inline void ensure_standard_streams()
             sysneed(open("/dev/null", fd == 0 ? O_RDONLY : O_WRONLY) == fd, "open /dev/null");
 }
 
-// Close every descriptor from `first` upward. Kernels before 5.9 and strict seccomp profiles lack
-// close_range; enumerating /proc is exact, whereas a loop to the descriptor limit can run to a billion
-// iterations. Tests pass `enumerate` to exercise that fallback on kernels that do have the system call.
-inline void close_from(int first, bool enumerate = false)
+// Close every open descriptor from `first` upward by enumerating /proc: exact, whereas a loop to the
+// descriptor limit can run to a billion iterations.
+inline void close_listed_from(int first)
 {
-    if (!enumerate && syscall(SYS_close_range, static_cast<unsigned>(first), ~0U, 0U) == 0) return;
     DIR *listing = opendir("/proc/self/fd");
     sysneed(listing != nullptr, "enumerate open descriptors");
     std::vector<int> open;
@@ -417,6 +424,13 @@ inline void close_from(int first, bool enumerate = false)
     closedir(listing);
     for (const int fd : open)
         ::close(fd);
+}
+
+// Close every descriptor from `first` upward. Kernels before 5.9 and strict seccomp profiles lack
+// close_range.
+inline void close_from(int first)
+{
+    if (syscall(SYS_close_range, static_cast<unsigned>(first), ~0U, 0U) != 0) close_listed_from(first);
 }
 
 // In a forked child, renumber the given descriptors to 3, 4, ... and close every other one above the standard
@@ -454,11 +468,29 @@ inline void drop(uid_t uid, gid_t gid, std::span<const gid_t> groups = {})
 
 inline pid_t waitpid_retry(pid_t pid, int *status = nullptr, int options = 0)
 {
-    pid_t waited;
-    do
-        waited = ::waitpid(pid, status, options);
-    while (waited < 0 && errno == EINTR);
-    return waited;
+    return retry([&] { return ::waitpid(pid, status, options); });
+}
+
+// End this process, by the default action of SIGIO, once every writer of the pipe on `fd` has gone. A
+// parent-death signal cannot do that for the service worker: the kernel delivers it with the dying parent's
+// credentials, and by then the launcher has dropped to the caller. Anything but a pipe is left alone.
+inline void exit_with_peer(int fd)
+{
+    struct stat st
+    {
+    };
+    if (fstat(fd, &st) != 0 || !S_ISFIFO(st.st_mode)) return;
+    sigset_t io;
+    sigemptyset(&io);
+    sigaddset(&io, SIGIO);
+    sysneed(signal(SIGIO, SIG_DFL) != SIG_ERR && sigprocmask(SIG_UNBLOCK, &io, nullptr) == 0 &&
+                fcntl(fd, F_SETOWN, getpid()) == 0 && fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_ASYNC) == 0,
+            "watch the peer process");
+
+    // A peer that went before the watch was armed raises no signal.
+    pollfd peer{fd, 0, 0};
+    need(poll(&peer, 1, 0) >= 0 && !(peer.revents & (POLLHUP | POLLERR | POLLNVAL)),
+         "peer process disappeared");
 }
 
 // Fork a child that runs `body` and exits with its result. The child never returns into the parent's frames,
@@ -497,8 +529,8 @@ class Child
         if (pid_ <= 0) return;
         if (group_) kill(-pid_, SIGKILL);
 
-        // A child that changed identity cannot be signalled; its parent-death signal ends it with this
-        // process.
+        // A child that changed identity cannot be signalled from here. It ends itself when this process
+        // closes, or dies holding, the pipe that is the child's input: see exit_with_peer.
         if (kill(pid_, SIGKILL) == 0 || errno != EPERM) waitpid_retry(pid_);
         pid_ = -1;
     }
@@ -539,8 +571,7 @@ inline Bytes random_bytes(size_t count)
     Bytes bytes(count);
     for (auto remaining = std::span(bytes); !remaining.empty();)
     {
-        const auto n = getrandom(remaining.data(), remaining.size(), 0);
-        if (n < 0 && errno == EINTR) continue;
+        const auto n = retry([&] { return getrandom(remaining.data(), remaining.size(), 0); });
         sysneed(n > 0, "getrandom");
         remaining = remaining.subspan(static_cast<size_t>(n));
     }
@@ -565,6 +596,16 @@ inline std::string random_hex(size_t count = 16)
     return hex(random_bytes(count));
 }
 
+// True when the open directory belongs to `owner` and grants none of the `forbidden` permission bits.
+inline bool owned_directory(int fd, uid_t owner, mode_t forbidden)
+{
+    struct stat st
+    {
+    };
+    sysneed(fstat(fd, &st) == 0, "stat directory");
+    return S_ISDIR(st.st_mode) && st.st_uid == owner && !(st.st_mode & forbidden);
+}
+
 // Open the caller-owned home directory after privilege has been relinquished.
 inline Fd caller_home(const Account &caller)
 {
@@ -575,11 +616,7 @@ inline Fd caller_home(const Account &caller)
          "invalid home directory");
     Fd home(open(caller.home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     sysneed(home.get() >= 0, "open caller home after privilege drop");
-    struct stat st
-    {
-    };
-    sysneed(fstat(home.get(), &st) == 0, "stat home");
-    need(st.st_uid == caller.uid && !(st.st_mode & 0022),
+    need(owned_directory(home.get(), caller.uid, 0022),
          "home must belong to caller and not be group/world-writable");
     return home;
 }
@@ -614,8 +651,7 @@ inline Fd cache_lock(int home, const char *name)
 {
     Fd lock = open_private(home, name, O_RDWR | O_CREAT, "cache lock");
     sysneed(lock.get() >= 0, "open cache lock");
-    while (flock(lock.get(), LOCK_EX) != 0)
-        sysneed(errno == EINTR, "lock credential cache");
+    sysneed(retry([&] { return flock(lock.get(), LOCK_EX); }) == 0, "lock credential cache");
     return lock;
 }
 

@@ -4,7 +4,6 @@
 #include "x509.hpp"
 #include <ldap.h>
 #include <sasl/sasl.h>
-#include <syslog.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/core_names.h>
 #endif
@@ -20,13 +19,6 @@ using ScopedLdap = Owned<LDAP, free_ldap>;
 using LdapMessage = Owned<LDAPMessage, ldap_msgfree>;
 using LdapValues = Owned<berval *, ldap_value_free_len>;
 
-inline void audit(int priority, const std::string &message)
-{
-    openlog("craft", LOG_PID, LOG_AUTHPRIV);
-    syslog(priority, "%s", message.c_str());
-    closelog();
-}
-
 inline int ldap_sasl_interact(LDAP *, unsigned, void *, void *in) noexcept
 {
     for (auto *interact = static_cast<sasl_interact_t *>(in); interact && interact->id != SASL_CB_LIST_END;
@@ -38,9 +30,10 @@ inline int ldap_sasl_interact(LDAP *, unsigned, void *, void *in) noexcept
     return LDAP_SUCCESS;
 }
 
-// Establish an encrypted, integrity-protected connection bound as the directory service account. libldap's host name
-// canonicalization stays enabled: the default Global Catalog URL names the domain, not one controller, and
-// the GSSAPI mutual authentication that follows still proves the peer holds that controller's key.
+// Establish an encrypted, integrity-protected connection bound as the directory service account. libldap's
+// host name canonicalization stays enabled: the default Global Catalog URL names the domain, not one
+// controller, and the GSSAPI mutual authentication that follows still proves the peer holds that
+// controller's key.
 inline ScopedLdap ldap_connect(const std::string &url)
 {
     ScopedLdap ld;
@@ -355,10 +348,7 @@ inline Fd start_key_credential_cleanup(
                     write_all(armed, {&published, 1});
                     ::close(armed);
                     unsigned char ignored;
-                    ssize_t count;
-                    do
-                        count = read(trigger, &ignored, 1);
-                    while (count < 0 && errno == EINTR);
+                    (void)retry([&] { return read(trigger, &ignored, 1); });
                 }
                 return removed ? 0 : 1;
             }

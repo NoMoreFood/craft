@@ -167,7 +167,7 @@ get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *
     {
         const Bio issuer(BIO_new(BIO_s_mem()));
         sslneed(issuer && PEM_write_bio_X509(issuer.get(), ca) == 1, "serialize CA anchor");
-        const Bytes configured = read_all(root_open(path("kdc-trust.pem")).get());
+        const Bytes configured = read_all(root_open(path("kdc-trust.pem")).get(), 8 * MAX_BLOB);
         anchorfd = memory_file("craft-anchors", join(configured, bioview(issuer.get())));
         anchors = std::format("FILE:/proc/self/fd/{}", anchorfd.get());
     }

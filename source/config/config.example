@@ -36,6 +36,7 @@ certificate_cn={user}
 
 # Generated RSA key bit length for fallback credentials (mechanism=enrollment or key_trust).
 # Accepts 2048, 3072, or 4096 (bit_strength also accepted as alias). Defaults to 3072.
+# For enrollment it must be at least the template's minimum key size, or the CA refuses the request.
 # key_bits=3072
 
 # ENROLLMENT only: AD CS CES endpoint, not legacy /certsrv. Replace with the real endpoint.

@@ -40,17 +40,16 @@ int main(int argc, char **)
         // reports whether the caller supplied a certificate pair; false means the fallback is needed.
         const auto run_worker = [&](const Account &account, bool home)
         {
-            Pipe channel = make_pipe();
+            // The worker's input is a pipe that is never written: its closing tells the worker, whatever
+            // identity it runs under, that this launcher has gone.
+            Pipe channel = make_pipe(), alive = make_pipe();
             Child worker(fork_child(
                 [&]() -> int
                 {
                     // Redirect the standard streams before relinquishing elevated credentials.
-                    {
-                        const Fd null(open("/dev/null", O_RDONLY));
-                        sysneed(null.get() >= 0 && dup2(null.get(), STDIN_FILENO) == STDIN_FILENO &&
-                                    dup2(channel.writer.get(), STDOUT_FILENO) == STDOUT_FILENO,
-                                "worker standard streams");
-                    }
+                    sysneed(dup2(alive.reader.get(), STDIN_FILENO) == STDIN_FILENO &&
+                                dup2(channel.writer.get(), STDOUT_FILENO) == STDOUT_FILENO,
+                            "worker standard streams");
                     keep_only({binary.get()});
                     if (geteuid() != 0) sysneed(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0, "no_new_privs");
                     else if (home) drop(account.uid, gid, groups);
@@ -69,6 +68,7 @@ int main(int argc, char **)
                     sysfail("exec fixed worker");
                 }));
             channel.writer = Fd();
+            alive.reader = Fd();
             const auto finish = [&]
             {
                 need(worker.wait(), "credential acquisition failed; existing cache was not replaced");
@@ -78,10 +78,7 @@ int main(int argc, char **)
             if (home)
             {
                 unsigned char selected{};
-                ssize_t length;
-                do
-                    length = read(channel.reader.get(), &selected, 1);
-                while (length < 0 && errno == EINTR);
+                const auto length = retry([&] { return read(channel.reader.get(), &selected, 1); });
                 need(length == 1 && selected <= 1,
                      "user certificate selection failed; existing cache was not replaced");
                 if (!selected)

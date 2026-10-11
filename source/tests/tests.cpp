@@ -6,6 +6,7 @@
 #include "harness.hpp"
 #include <sys/mman.h>
 #include <filesystem>
+#include <thread>
 using namespace craft;
 using testing::failed;
 
@@ -294,8 +295,7 @@ static void helper_tests()
              need(defaults.tgt == 36000 && defaults.renew == 604800 && defaults.cert_remaining == 36000 &&
                       defaults.cert_total == 36000 && defaults.require_full_tgt_lifetime &&
                       defaults.certificate_cn == "{user}" && defaults.interval == 60 &&
-                      defaults.key_bits == 3072 &&
-                      defaults.gc_url == "ldap://domain.local:3268" &&
+                      defaults.key_bits == 3072 && defaults.gc_url == "ldap://domain.local:3268" &&
                       defaults.gc_base_dn == "DC=domain,DC=local",
                   "default policy changed");
 
@@ -751,7 +751,7 @@ static void process_tests()
                          else
                          {
                              if (dup2(kept.writer.get(), 3) != 3) return 2;
-                             close_from(4, true);
+                             close_listed_from(4);
                          }
                          for (int fd = 4; fd < 600; ++fd)
                              if (fcntl(fd, F_GETFD) != -1) return 3;
@@ -764,12 +764,106 @@ static void process_tests()
                       "descriptors leaked or were lost");
              });
 
+    test("a process watching its input pipe ends when the peer goes, and anything but a pipe is left alone",
+         []
+         {
+             Pipe alive = make_pipe(), ready = make_pipe();
+             const pid_t watcher = fork_child(
+                 [&]() -> int
+                 {
+                     alive.writer = Fd();
+                     exit_with_peer(alive.reader.get());
+                     if (write(ready.writer.get(), "r", 1) != 1) return 2;
+                     poll(nullptr, 0, 5000);
+                     return 0; // outlived its peer
+                 });
+             ScopeExit reap(
+                 [&]() noexcept
+                 {
+                     kill(watcher, SIGKILL);
+                     (void)waitpid_retry(watcher);
+                 });
+             ready.writer = Fd();
+             alive.reader = Fd();
+             char armed = 0;
+             need(retry([&] { return read(ready.reader.get(), &armed, 1); }) == 1, "watcher did not arm");
+             alive.writer = Fd();
+             int status = 0;
+             need(waitpid_retry(watcher, &status) == watcher, "reap watcher");
+             reap.release();
+             need(WIFSIGNALED(status) && WTERMSIG(status) == SIGIO, "watcher outlived its peer");
+
+             // A peer that is already gone raises no signal, so arming must notice it; other files are
+             // ignored.
+             Child late(fork_child(
+                 []() -> int
+                 {
+                     Pipe gone = make_pipe();
+                     gone.writer = Fd();
+                     try
+                     {
+                         exit_with_peer(gone.reader.get());
+                     }
+                     catch (const std::exception &)
+                     {
+                         return 0;
+                     }
+                     return 1;
+                 }));
+             need(late.wait(), "a peer gone before the watch was armed went unnoticed");
+             const Fd null(open("/dev/null", O_RDONLY | O_CLOEXEC));
+             exit_with_peer(null.get());
+             need(null.get() >= 0 && !(fcntl(null.get(), F_GETFL) & O_ASYNC), "a non-pipe was watched");
+         });
+
     if (getuid() != 0)
     {
-        std::cout
-            << "SKIP trusted-path and privilege-drop checks: they need root in a disposable container\n";
+        std::cout << "SKIP trusted-path, privilege-drop and cross-identity checks: they need root in a "
+                     "disposable container\n";
         return;
     }
+
+    test("the peer watch ends a process whose parent dropped to another identity before dying",
+         []
+         {
+             // The launcher's situation: a parent-death signal would not be delivered here, because the
+             // kernel sends it with the credentials the dying parent has left.
+             sysneed(prctl(PR_SET_CHILD_SUBREAPER, 1) == 0, "adopt the orphaned watcher");
+             ScopeExit restore([]() noexcept { prctl(PR_SET_CHILD_SUBREAPER, 0); });
+             Pipe report = make_pipe();
+             Child parent(fork_child(
+                 [&]() -> int
+                 {
+                     Pipe alive = make_pipe(), ready = make_pipe();
+                     const pid_t watcher = fork_child(
+                         [&]() -> int
+                         {
+                             alive.writer = Fd();
+                             if (setresuid(65534, 65534, 65534) != 0) return 2;
+                             exit_with_peer(alive.reader.get());
+                             if (write(ready.writer.get(), "r", 1) != 1) return 3;
+                             poll(nullptr, 0, 5000);
+                             return 0; // outlived its parent
+                         });
+                     char byte;
+                     ready.writer = Fd();
+                     if (read(ready.reader.get(), &byte, 1) != 1) return 4;
+                     if (write(report.writer.get(), &watcher, sizeof(watcher)) !=
+                         static_cast<ssize_t>(sizeof(watcher)))
+                         return 5;
+                     return setresuid(65533, 65533, 65533) == 0 ? 0 : 6; // exits holding the pipe
+                 }));
+             report.writer = Fd();
+             pid_t watcher = -1;
+             need(read(report.reader.get(), &watcher, sizeof(watcher)) ==
+                          static_cast<ssize_t>(sizeof(watcher)) &&
+                      parent.wait(),
+                  "watcher did not start");
+             int status = 0;
+             need(waitpid_retry(watcher, &status) == watcher && WIFSIGNALED(status) &&
+                      WTERMSIG(status) == SIGIO,
+                  "watcher outlived a parent of another identity");
+         });
 
     test("trusted paths must be root-controlled regular files reached without symlinks",
          []
@@ -1158,10 +1252,12 @@ static void revision_tests(const Config &cfg, const Mapping &map, EVP_PKEY *key,
              reject_tgt([&](auto &c) { c.server = client.get(); });
          });
 
-    test("outer TGT envelope accepts AES128 and AES256",
+    test("outer TGT envelope accepts the SHA-1 and RFC 8009 AES types; session keys stay SHA-1 AES",
          [&]
          {
-             for (auto type : AES_TYPES)
+             for (auto type : {ENCTYPE_AES256_CTS_HMAC_SHA384_192, ENCTYPE_AES128_CTS_HMAC_SHA256_128})
+                 reject_tgt([&](auto &c) { c.keyblock.enctype = type; });
+             for (auto type : AES_TICKET_TYPES)
              {
                  auto encoded = ticket_fixture(type);
                  krb5_data data{.magic = 0,
@@ -1439,6 +1535,49 @@ static void maintenance_tests()
                  need(waitpid(child, nullptr, 0) == child && exited(watch), "reaped job reported as live");
                  reap.release();
                  rejects([&] { watch_process(child, getuid(), pidfd); });
+             });
+    for (const bool pidfd : {true, false})
+        test(pidfd ? "pidfd keeps a job live while any thread runs after its first thread ended"
+                   : "/proc watch keeps a job live while any thread runs after its first thread ended",
+             [&]
+             {
+                 const auto child = fork();
+                 need(child >= 0, "threaded job fork");
+                 if (child == 0)
+                 {
+                     std::thread(
+                         []
+                         {
+                             poll(nullptr, 0, 1500);
+                             _exit(0);
+                         })
+                         .detach();
+                     pthread_exit(nullptr);
+                 }
+                 ScopeExit reap(
+                     [&]() noexcept
+                     {
+                         kill(child, SIGKILL);
+                         waitpid(child, nullptr, 0);
+                     });
+                 const auto watch = watch_process(child, getuid(), pidfd);
+
+                 // Wait for the first thread to become a zombie while its sibling still runs.
+                 const auto first_thread_ended = [&]
+                 {
+                     const Fd stat(open(std::format("/proc/{}/stat", child).c_str(), O_RDONLY | O_CLOEXEC));
+                     return stat.get() >= 0 &&
+                            text_of(read_all(stat.get(), 4096)).find(") Z ") != std::string::npos;
+                 };
+                 for (int i = 0; i < 100 && !first_thread_ended(); ++i)
+                     poll(nullptr, 0, 10);
+                 need(first_thread_ended() && !exited(watch),
+                      "a job with a running thread was reported as ended");
+                 need(wait_for(watch, -1, Clock::now() + std::chrono::seconds(5)) == Wake::Exited &&
+                          exited(watch),
+                      "the end of the last thread was not observed");
+                 need(waitpid(child, nullptr, 0) == child, "reap threaded job");
+                 reap.release();
              });
 }
 
@@ -1837,6 +1976,16 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
                  {
                      remove_ext(c, "2.5.29.19");
                      set_ext_conf(c, NID_basic_constraints, "critical,CA:FALSE,pathlen:0");
+                 });
+
+             // Only a truly absent basicConstraints is tolerated: not a duplicate, nor one that cannot be
+             // decoded (here a NULL where the SEQUENCE belongs).
+             reject([](X509 *c) { set_ext_conf(c, NID_basic_constraints, "critical,CA:FALSE"); });
+             reject(
+                 [](X509 *c)
+                 {
+                     remove_ext(c, "2.5.29.19");
+                     add_ext(c, raw_extension("2.5.29.19", Bytes{0x05, 0x00}));
                  });
              reject(
                  [](X509 *c)

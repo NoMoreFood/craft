@@ -74,25 +74,28 @@ inline bool exited(const Watch &watch)
     if (watch.pollable)
     {
         pollfd descriptor{watch.fd.get(), POLLIN, 0};
-        int rc;
-        do
-            rc = poll(&descriptor, 1, 0);
-        while (rc < 0 && errno == EINTR);
-        sysneed(rc >= 0, "poll watched process");
+        sysneed(retry([&] { return poll(&descriptor, 1, 0); }) >= 0, "poll watched process");
         return descriptor.revents != 0;
     }
 
-    // The directory outlives a zombie, so read the state that follows the parenthesized command name.
+    // The directory outlives a zombie. As a pidfd does, call the job ended once its first thread has exited
+    // and no other remains: the state and, sixteen fields on, the thread count follow the parenthesized
+    // command name. A file that can no longer be read belongs to a process already reaped.
     std::array<char, 512> buffer{};
     const Fd stat(openat(watch.fd.get(), "stat", O_RDONLY | O_CLOEXEC));
-    ssize_t count;
-    do
-        count = stat.get() < 0 ? 0 : read(stat.get(), buffer.data(), buffer.size());
-    while (count < 0 && errno == EINTR);
+    const auto count =
+        stat.get() < 0 ? 0 : retry([&] { return read(stat.get(), buffer.data(), buffer.size() - 1); });
     const std::string_view text(buffer.data(), count > 0 ? static_cast<size_t>(count) : 0);
     const auto name_end = text.rfind(')');
-    return name_end == text.npos || name_end + 2 >= text.size() || text[name_end + 2] == 'Z' ||
-           text[name_end + 2] == 'X';
+    char state = 0;
+    int threads = 0;
+    if (name_end == text.npos ||
+        std::sscanf(buffer.data() + name_end + 1,
+                    " %c %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %d",
+                    &state,
+                    &threads) != 2)
+        return true;
+    return (state == 'Z' || state == 'X') && threads <= 1;
 }
 
 inline Watch watch_process(pid_t pid, uid_t uid, bool pidfd = CRAFT_USE_PIDFD)
@@ -282,8 +285,8 @@ inline void enroll()
     std::array<char, 4096> buffer{};
     for (;;)
     {
-        const auto count = read(diagnostics.reader.get(), buffer.data(), buffer.size());
-        if (count < 0 && errno == EINTR) continue;
+        const auto count =
+            retry([&] { return read(diagnostics.reader.get(), buffer.data(), buffer.size()); });
         if (count <= 0) break;
         text.append(buffer.data(), std::min(static_cast<size_t>(count), 8192 - text.size()));
     }

@@ -187,11 +187,7 @@ inline UserIdentityFiles user_identity_files(const Account &caller)
         Fd next(openat(directory.get(), name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
         if (next.get() < 0 && errno == ENOENT) return {};
         sysneed(next.get() >= 0, "open ~/.config/craft for user certificate");
-        struct stat st
-        {
-        };
-        sysneed(fstat(next.get(), &st) == 0, "stat user certificate directory");
-        safe_directory = safe_directory && st.st_uid == caller.uid && !(st.st_mode & 0022);
+        safe_directory = safe_directory && owned_directory(next.get(), caller.uid, 0022);
         directory = std::move(next);
     }
 
@@ -402,10 +398,13 @@ inline time_t validate_leaf(X509 *c,
     sslneed(X509_check_private_key(c, key) == 1, "user certificate public key mismatch");
 
     // An end-entity certificate may omit basicConstraints, as stock AD CS templates do; only supplied home
-    // certificates rely on that. CRAFT's own template and the Key Trust leaf always state CA:FALSE.
+    // certificates rely on that. CRAFT's own template and the Key Trust leaf always state CA:FALSE. OpenSSL
+    // reports -1 only for an extension that is truly absent, never for a duplicate or undecodable one.
+    int found = 0;
     Owned<BASIC_CONSTRAINTS, BASIC_CONSTRAINTS_free> bc(
-        static_cast<BASIC_CONSTRAINTS *>(X509_get_ext_d2i(c, NID_basic_constraints, nullptr, nullptr)));
-    need(X509_check_ca(c) == 0 && (bc ? !bc->ca && !bc->pathlen : source == CertificateSource::Home),
+        static_cast<BASIC_CONSTRAINTS *>(X509_get_ext_d2i(c, NID_basic_constraints, &found, nullptr)));
+    need(X509_check_ca(c) == 0 &&
+             (bc ? !bc->ca && !bc->pathlen : source == CertificateSource::Home && found == -1),
          "user certificate needs CA:FALSE");
     const auto ekus = certificate_ekus(c);
     const auto has = [&](std::string_view oid)

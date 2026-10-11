@@ -103,6 +103,13 @@ inline constexpr auto PROHIBITED_TKT_FLAGS = TKT_FLG_FORWARDABLE | TKT_FLG_FORWA
                                              TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE | TKT_FLG_POSTDATED |
                                              TKT_FLG_INVALID;
 
+// The KDC encrypts the ticket itself under the krbtgt account's key, which the client never chooses and newer
+// domain controllers may hold in the RFC 8009 AES types as well.
+inline constexpr std::array AES_TICKET_TYPES{ENCTYPE_AES256_CTS_HMAC_SHA1_96,
+                                             ENCTYPE_AES128_CTS_HMAC_SHA1_96,
+                                             ENCTYPE_AES256_CTS_HMAC_SHA384_192,
+                                             ENCTYPE_AES128_CTS_HMAC_SHA256_128};
+
 inline constexpr bool is_aes(krb5_enctype type) noexcept
 {
     return std::ranges::find(AES_TYPES, type) != AES_TYPES.end();
@@ -120,7 +127,7 @@ inline krb5_enctype ticket_enctype(krb5_context ctx, const krb5_data &encoded)
     auto ticket = krb_owner<krb5_ticket, krb5_free_ticket>(ctx);
     const auto code = krb5_decode_ticket(&encoded, out(ticket));
     need(code == 0 && ticket, "decode returned TGT envelope");
-    need(is_aes(ticket->enc_part.enctype),
+    need(std::ranges::find(AES_TICKET_TYPES, ticket->enc_part.enctype) != AES_TICKET_TYPES.end(),
          "KDC encrypted the TGT with a non-AES key; review krbtgt keys/policy");
     return ticket->enc_part.enctype;
 }
