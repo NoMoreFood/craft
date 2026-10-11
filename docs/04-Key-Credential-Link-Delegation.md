@@ -1,126 +1,88 @@
-# CRAFT credential linking and Key Trust delegation
+# CRAFT Key Trust delegation
 
-Credential linking is CRAFT's mode 2 privileged acquisition path, using AD Key Trust. When no home certificate pair is present and `mechanism=key_trust` is configured, the dedicated service account writes a temporary public key to the caller's `msDS-KeyCredentialLink`, performs PKINIT against it, and then removes the key. It needs no user-certificate CA enrollment, CES endpoint, enrollment agent or user template: the directory write itself establishes trust, and the domain controller authenticates the key through the Key Trust (NGC) model that Windows Hello for Business uses.
+For **mode 2 privileged credential linking**, delegate only ReadProperty/WriteProperty on `msDS-KeyCredentialLink` over a reviewed set of ordinary users. This write permits authentication as those accounts, so its scope is the authorization boundary. It requires no user-certificate CA enrollment, CES, agent or user template; KDC certificate trust and current CRLs remain required.
 
-The decisive safeguard is the delegated write scope. The ability to write `msDS-KeyCredentialLink` on an account is equivalent to the ability to authenticate as that account; this is the basis of the "Shadow Credentials" technique. CRAFT uses it deliberately and with narrow, administrator-granted delegation, removes the key immediately after authentication, and never grants the service account broad directory write. Treat the delegated object scope as an authorization boundary with the same care as the enrollment-agent recipient group.
+Complete [mode 2 setup](../source/README.md#mode-2-setup-privileged-credential-linking). CRAFT first checks the caller's home pair; test delegation with both PEM files absent. A valid pair uses [mode 3](../source/README.md#mode-3-setup-unprivileged-windows-exported-certificate) without the directory write, while partial/invalid inputs fail without privileged acquisition.
 
-Follow [mode 2 setup](../source/README.md#mode-2-setup-privileged-credential-linking) for Linux installation and configuration.
+## Prepare the service identity and DC
 
-This page explains the mechanism, the authorization boundary, the delegation helper, the residual risks and the live tests. The configuration examples are recommendations, not a claim that these controls are already deployed in your domain. For the enrollment-agent (certificate-trust) fallback, see [Enrollment Agent Restrictions](03-Enrollment-Agent-Restrictions.md); for the entirely unprivileged path, see the [home certificate workflow](../source/README.md#mode-3-workflow-unprivileged-windows-exported-certificate).
+Provision a nonprivileged AD service account with an AES keytab matching `service_principal`. Install `submitter.keytab` as `root:craft` mode 0640, with only the dedicated service account in the Linux `craft` group. Approved callers join `craft-users`. Keep the service identity unable to change its delegation, target ACLs or OU membership.
 
-## How CRAFT uses Key Trust
+Use a schema exposing `msDS-KeyCredentialLink` and a writable DC supporting NGC/Key Trust PKINIT, as provided by Windows Server 2016 or later. A functional-level label alone is insufficient. Configure **the same DC** as `kt_dc_url` and the KDC in `krb5.conf` so PKINIT can see the written key immediately. Use `ldap://`; LDAP/GSSAPI requires integrity and encryption with minimum SASL SSF 128.
 
-1. A caller runs `craft` with no home pair. The setuid launcher runs the worker as the dedicated service account, exactly as for enrollment.
-2. The worker reads `mechanism=key_trust`, acquires a Kerberos credential for the service account from `submitter.keytab`, and binds to the writable domain controller `kt_dc_url` over LDAP with SASL/GSSAPI integrity and confidentiality.
-3. It resolves the caller's unique directory object (`sAMAccountName=<Linux username>`) to its distinguished name and `userPrincipalName`.
-4. It generates a fresh RSA key (default 3072-bit, configurable via `key_bits`) and a short-lived PKINIT certificate carrying the public key and resolved UPN.
-5. It builds a version-2 Key Credential (MS-ADTS 2.2.20) advertising that key as an NGC/Key Trust credential and **adds** exactly that one value to `msDS-KeyCredentialLink`, leaving any existing Windows Hello keys untouched.
-6. It performs PKINIT for `<Linux username>@<realm>`. The KDC matches the certificate's public key against the Key Credential and issues a TGT. CRAFT validates the returned principal, flags, AES encryption and lifetimes.
-7. An independent cleanup process **removes** the temporary value before any credential bytes leave the worker. It also attempts cleanup after acquisition failure or worker termination and uncertain LDAP add outcomes, retrying with a fresh connection. If cleanup still fails, CRAFT refuses cache publication and logs a CRITICAL AUTHPRIV event naming the residual credential for administrator removal. Host failure or directory unavailability can leave a usable key behind.
-
-![Mode 2 credential linking, Key Trust PKINIT and mandatory cleanup before cache publication.](diagrams/03-credential-linking-sequence.svg)
-
-## The authorization boundary
-
-Three facts define the boundary:
-
-- **The write is the authentication.** A DC in Key Trust mode will issue a TGT for any account whose `msDS-KeyCredentialLink` contains a key the requester can prove possession of. There is no second factor, CA policy or enrollment-agent signature in this path. Whoever can write the attribute on an account can authenticate as it.
-- **CRAFT's checks are client-side.** The worker verifies the caller's Linux UID/name, resolves one directory object, requests the fixed caller principal and validates the returned ticket. An attacker who obtains the service account's keytab and the delegated write can bypass these checks with a different client. Therefore the directory must enforce the write scope independently.
-- **The delegation is the control.** Active Directory decides which objects the service account may modify. Grant the write over an Organizational Unit of ordinary, non-privileged users (or a single user), and nothing else.
-
-Keep three identities distinct:
-
-| Identity | Role in CRAFT | Relevant control |
-| --- | --- | --- |
-| Service account | `service_principal` / `submitter.keytab`; binds to the DC and writes `msDS-KeyCredentialLink` | The delegated object scope, keytab custody, and exclusion from privileged roles |
-| Target | The calling user's AD account whose attribute is written and who is authenticated | The delegated OU/user membership and KDC Key Trust mapping |
-| Domain controller | Serves both the LDAP write and the Key Trust PKINIT | `kt_dc_url` must name the same writable DC as the KDC in `krb5.conf` |
+Provision the KDC certificate, approved anchors and current chain CRLs. Remove an unnecessary `pkinit_pool` reference to user-certificate trust or replace it with KDC intermediates as described in [shared installation](../source/README.md#shared-linux-installation). Review [Key Trust's temporary issuer trust scope](../source/SECURITY.md#key-trust-certificate-handling) and verify MIT PKINIT freshness interoperability against the deployed DC policy. [Microsoft Key Trust requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/hello-for-business/deploy/), [MIT freshness tokens](https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html#freshness-tokens).
 
 ## Delegate the minimum permission
 
-Use [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink.ps1) to grant the service account **ReadProperty and WriteProperty on the single `msDS-KeyCredentialLink` attribute**, scoped to one OU (inherited to descendant user objects) or one user. It grants no other right: not GenericWrite, not GenericAll, not write over other attributes, and not control of the object.
+Run [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink.ps1) from the repository root on a Windows administration host with the ActiveDirectory module and permission to change the selected object's ACL. Choose one OU or one user:
 
 ```powershell
-# Preview first.
+# Preview an OU grant.
 .\scripts\Grant-CRAFTKeyCredentialLink.ps1 -ServiceAccount svc-linux-enroll `
-    -TargetOU "OU=CRAFT Users,OU=Service Accounts,DC=domain,DC=local" -WhatIf
+    -TargetOU 'OU=CRAFT Users,DC=domain,DC=local' -WhatIf
 
-# Grant over a dedicated OU of ordinary users.
+# Apply the reviewed OU grant.
 .\scripts\Grant-CRAFTKeyCredentialLink.ps1 -ServiceAccount svc-linux-enroll `
-    -TargetOU "OU=CRAFT Users,OU=Service Accounts,DC=domain,DC=local"
+    -TargetOU 'OU=CRAFT Users,DC=domain,DC=local'
 
-# Or over a single user.
+# Or delegate over one user.
 .\scripts\Grant-CRAFTKeyCredentialLink.ps1 -ServiceAccount svc-linux-enroll -TargetUser alice
 
-# Revoke.
+# Revoke the helper's matching OU rule.
 .\scripts\Grant-CRAFTKeyCredentialLink.ps1 -ServiceAccount svc-linux-enroll `
-    -TargetOU "OU=CRAFT Users,OU=Service Accounts,DC=domain,DC=local" -Remove
+    -TargetOU 'OU=CRAFT Users,DC=domain,DC=local' -Remove
 ```
 
-The helper refuses a privileged target, the domain root and the default containers (`CN=Users`, `CN=Computers`, `CN=Managed Service Accounts`) unless `-Force` is supplied. It flags a target user with `adminCount=1` or privileged group membership, and flags an OU that contains such users. It is idempotent and supports `-WhatIf`. It changes AD permissions; review the service account, the scope and the printed rule before applying.
+The OU rule inherits only to descendant user objects; a user rule applies only to that object. The helper grants no GenericWrite/GenericAll or other attribute rights, is idempotent and supports `-WhatIf`. `-Remove` removes its matching explicit rule; separately review other permissions that might still authorize the service account.
 
-Why a dedicated OU is the right scope:
+The helper refuses privileged targets, the domain root and default containers (`CN=Users`, `CN=Computers`, `CN=Managed Service Accounts`) unless `-Force` is supplied. It checks privileged group membership and `adminCount=1`, including users in an OU. These checks are guardrails, not a continuing privilege filter. Confirm effective rights after applying the rule; other grants, Deny rules or blocked inheritance can change the outcome.
 
-- Put only the ordinary user or workload accounts that require this deployment into the delegated OU. Prefer a purpose-built OU over an existing one so the boundary is explicit and auditable.
-- Keep administrative identities, Domain Admins, Enterprise Admins, domain controllers, PKI administrators, `krbtgt`, accounts with directory-replication rights, and accounts that control privileged groups or identity infrastructure out of the OU.
-- Review effective privilege, not just group names: nested membership, delegated AD permissions, SID history, ownership and ACLs, and access to critical systems. `adminCount=1` is a useful signal, not a complete classification.
-- If an account in the delegated OU later becomes privileged, move it out before granting that privilege and account for any credentials already obtained. Prefer a separate administrative account that never participates in CRAFT.
+## Govern the delegated scope
 
-Protect the delegated object and OU: restrict who can write their ACL (`WriteDacl`/`WriteOwner`) or move accounts into the OU, since either can widen the boundary. Audit and alert on delegation changes. The service account must not have rights that let it rewrite its own delegation.
+Use a dedicated OU containing only ordinary accounts required by the deployment. Exclude administrative identities, DCs, `krbtgt`, PKI/identity administrators, replication-capable accounts and accounts controlling privileged groups or critical infrastructure.
 
-## Keep the service account and keytab contained
+Review nested membership, delegated AD rights, SID history, ownership/ACLs and effective application access. `adminCount=1` is a signal, not a complete classification. Remove an account from scope before granting privileged access; prefer a separate administrative identity that never participates in CRAFT.
 
-The service account can authenticate as every account in its delegated scope. Treat its keytab as a high-value credential:
+Protect who can move accounts into the OU or change its ACL/owner, since either can widen the authority. Alert on membership, object movement and delegation changes. Use separate service identities/delegations for workloads with different target scopes. Treat the keytab as permission to authenticate as every scoped target and rotate it on suspected compromise.
 
-- Keep `submitter.keytab` `root:craft` mode 0640 and readable only by the dedicated account, as for enrollment. Assume root or service-account compromise exposes it.
-- Give the service account no privileged roles, no CA or DC administration, and no ability to change its own delegation or the delegated OU's membership or ACL.
-- Use distinct service accounts and distinct delegations for workloads that require different target scopes. A shared account widens the blast radius of compromise to the union of its scopes.
-- Rotate the keytab on suspected compromise, and verify afterward that the account can still write only the intended scope.
+## Verify acquisition and cleanup
 
-## Interoperability requirements
+CRAFT resolves one caller account on the selected DC, generates a fresh RSA key (default 3072 bits; `key_bits` accepts 2048/3072/4096), adds one temporary public-key credential and performs PKINIT for `<Linux username>@<realm>`. It validates the TGT and removes its exact value before cache publication, preserving legitimate Windows Hello keys.
 
-- **Key Trust support.** The domain must support NGC/Key Trust key-based authentication (a schema exposing `msDS-KeyCredentialLink` and a writable Windows Server 2016-or-later KDC with a current PKINIT certificate). Key Trust PKINIT is the same model Windows Hello for Business "key trust" deployments use.
-- **Same DC for write and KDC.** Set `kt_dc_url` to the writable DC that `krb5.conf` names as the KDC, so the written key is visible to the KDC without replication delay. A different DC can reject the PKINIT until the attribute replicates.
-- **KDC certificate and trust.** The Linux client must validate the KDC's PKINIT certificate using approved trust anchors, current CRLs and configured identity/EKU checks. Key Trust uses the directory key for client authorization and still requires KDC certificate validation. Review the temporary issuer's per-request anchor scope in [Key Trust certificate handling](../source/SECURITY.md#key-trust-certificate-handling).
-- **PKINIT freshness.** CRAFT delegates PKINIT negotiation to MIT Kerberos. Its plugin supports freshness tokens; verify it against the actual KDC policy rather than treating freshness enforcement as an automatic blocker. See [MIT PKINIT freshness support](https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html#freshness-tokens).
-- **Strong mapping.** Key Trust is itself a strong, key-based mapping and is unaffected by KB5014754 certificate-mapping enforcement for CA-issued certificates. The local certificate identity is authorized by the directory key, not an NTAuth user-certificate chain. KDC certificate trust is still required. See [Microsoft key-trust requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/hello-for-business/deploy/).
+An independent process attempts removal after successful or failed acquisition, worker termination and uncertain LDAP add outcomes. It retries with a fresh connection. Cleanup failure blocks publication; CRITICAL AUTHPRIV records identify the object and worker when cleanup can report. Continuing directory failure or host loss can leave a standing credential.
 
-## Compared with the enrollment-agent fallback
+Capture the attribute on the same DC before and after a run:
 
-| Property | Key Trust (`key_trust`) | Enrollment agent (`enrollment`) |
-| --- | --- | --- |
-| Requires user-certificate enrollment / CES / template | No | Yes |
-| Requires an enrollment-agent certificate | No | Yes |
-| Privileged directory operation | Write `msDS-KeyCredentialLink` on the target | Sign an EOBO request as the agent |
-| Authorization boundary | Delegated object/OU write scope | CA enrollment-agent recipient restrictions |
-| Directory / CA residue | Temporary directory key removed on success; failed cleanup needs intervention | CA retains issued certificate and audit record |
-| Client certificate identity | PKINIT certificate carrying the directory-authorized public key | CA-issued, chain-verified |
+```powershell
+Get-ADUser alice -Server dc01.domain.local -Properties msDS-KeyCredentialLink |
+    Select-Object SamAccountName, DistinguishedName, msDS-KeyCredentialLink
+```
 
-Key Trust removes user-certificate CA enrollment and the long-lived enrollment-agent key from acquisition while retaining KDC certificate trust, at the cost of granting a directory write whose scope you must govern. Choose one fallback per deployment. Both privileged modes remain subordinate to mode 3's supplied-certificate acquisition path, which uses no service account at all.
+Compare actual values with the prior inventory. Logs identify the object by GUID and the worker PID, rather than logging public-key/credential bytes. CRAFT-generated values carry DeviceID `c7a4f7b2-5d1e-4c9a-9b3f-43524146544b`; correlate that marker, operation time and audit evidence before selecting a residual value for removal. Do not clear the entire attribute or remove legitimate keys. If needed, remove a confirmed exact value with authorized AD tools on that same DC.
 
 ## Prove the boundary
 
-Use an isolated lab and disposable identities. Make prohibited attempts otherwise valid (correct keytab, reachable DC, well-formed key) so that a failure reflects the delegation, not a malformed request.
+Use disposable identities and otherwise valid requests so a failure demonstrates delegation rather than malformed input or connectivity.
 
-| Test case | Required observation |
+| Test | Required observation |
 | --- | --- |
-| Approved ordinary user within the delegated OU | CRAFT adds the key, PKINIT authenticates the intended account, and the key is removed afterward |
-| User outside the delegated scope | The directory rejects the `msDS-KeyCredentialLink` write; no TGT is issued |
-| Privileged account (admin, DC, `krbtgt`) excluded from the delegated scope | The write is refused; the helper rejects privileged targets. An OU grant does not become a privilege filter if an account is later made privileged. |
-| Service account attempting another attribute or object | The directory rejects it; the delegation grants only the one attribute on the scoped objects |
-| Interrupted or failed PKINIT | Cleanup attempts run; inspect the object and AUTHPRIV log, and remove any residual key |
-| `kt_dc_url` pointing at a non-KDC replica | Diagnose replication-induced PKINIT failures; correct it to the KDC |
-| Revoked delegation (`-Remove`) | Fresh acquisition fails after the ACL change propagates; evaluate issued tickets separately |
-| Keytab withdrawn or rotated | The LDAP bind fails and no key is written |
+| Approved ordinary target | Authentication returns the intended TGT; only CRAFT's value is added/removed |
+| Out-of-scope or excluded privileged target | Directory refuses the write; no TGT is obtained through this path |
+| Other attribute/object | Service account cannot modify it through this delegation |
+| Failed/interrupted PKINIT or uncertain add | Cleanup is attempted; inspect attribute and logs for residual values |
+| Forced cleanup outage | Cache publication fails; residual key is identified and removed by an administrator |
+| Revoked helper rule | Fresh acquisition fails once ACL changes propagate, unless another reviewed grant still authorizes it |
+| Withdrawn/rotated keytab | Old credential cannot bind or write |
+| Different LDAP/KDC replicas | Detect replication-related failure and restore same-DC configuration |
 
-Record the object DN, the service account, the DC, and the resulting KDC principal for control requests. Confirm no residual `msDS-KeyCredentialLink` value remains after each run; `Get-ADUser <user> -Properties msDS-KeyCredentialLink` should show only legitimate Windows Hello keys.
+Record the target DN/GUID, service identity, DC, prior/final attribute values and resulting KDC principal. Complete the [common and Key Trust acceptance checks](../source/TESTING.md#key-trust-acceptance-checks).
 
 ## Audit and respond to compromise
 
-- Audit directory-service changes (event 5136) for `msDS-KeyCredentialLink` modifications, and correlate add/remove pairs with CRAFT's AUTHPRIV `certificate_source=key_trust` events and DC event 4768 (certificate-based TGT requests).
-- Alert on `msDS-KeyCredentialLink` writes by the service account outside the delegated OU, writes to privileged accounts, keys that are added but not promptly removed, and any change to the delegation or the delegated OU's membership or ACL.
-- On suspected compromise: stop CRAFT on the host, revoke the delegation (`-Remove`), rotate the keytab, enumerate and clear any residual `msDS-KeyCredentialLink` values on affected accounts, and follow your incident-response process for already-issued tickets. Clearing a Key Credential or rotating the keytab does not revoke a TGT already issued.
+Enable directory-service change auditing and the appropriate object/attribute SACL for event 5136. Correlate `msDS-KeyCredentialLink` add/remove pairs with CRAFT AUTHPRIV records (`certificate_source=key_trust`) and DC TGT event 4768. Alert on writes outside scope, privileged targets, keys not promptly removed and changes to delegation or OU administration. [Microsoft directory-change auditing](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5136).
+
+On suspected compromise, disable fresh acquisition, stop active maintainers, revoke the delegation, rotate the keytab, inspect affected accounts and remove confirmed residual values. Review other grants before restoring authority. Follow incident response for issued tickets and downstream access: clearing a key or rotating the keytab does not revoke an issued TGT. See [operational disable](../source/SECURITY.md#immediate-disable).
 
 ## Deployment acceptance criteria
 
-Accept the Key Trust fallback only when the service account's `msDS-KeyCredentialLink` write is delegated to a specific, reviewed, non-privileged object scope; the keytab and the delegation administrators are protected separately from the CRAFT host; `kt_dc_url` names the KDC's writable DC; and the lab shows directory refusal for out-of-scope and privileged targets with clean removal of the temporary key. For accounts that administer the domain or its identity infrastructure, use a separate, explicitly reviewed workflow and keep them outside every CRAFT delegation.
+Enable mode 2 only with a specific reviewed nonprivileged scope, protected keytab and delegation administrators, same-DC LDAP/PKINIT, proven write denial outside scope and clean removal after success/failure. Assign owners for residual-key response, directory auditing, permission review and credential rotation.

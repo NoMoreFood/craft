@@ -79,6 +79,6 @@
   <text x="1064" y="886.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Reload credentials when authenticating again.</text>
   <text x="1064" y="913.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Access follows the user's service permissions.</text>
   <polyline points="64,956 1536,956" fill="none" stroke="#D5E0E7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
-  <text x="64" y="981.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">SOURCE  maintain.cpp: schedule, update, renewed_cache, detached loop; common.hpp: publish_cache; source/README.md: Long-running jobs</text>
+  <text x="64" y="981.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">SOURCE  source/README.md: Long-running jobs; source/SECURITY.md: Immediate disable</text>
   <text x="1536" y="980.34" font-size="14" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="600" text-anchor="end">CRAFT  /  06</text>
 </svg>

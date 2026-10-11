@@ -80,7 +80,7 @@ def new_document(path, title, subtitle):
         if child.tag != qn("w:sectPr"):
             doc._element.body.remove(child)
     for relation in list(doc.part.rels.values()):
-        if relation.reltype.endswith("/hyperlink"):
+        if relation.reltype.endswith(("/hyperlink", "/image")):
             doc.part.drop_rel(relation.rId)
     dimensions(doc.sections[0])
     for name in ("Normal", "Title", "Subtitle", "Heading 1", "Heading 2", "Caption", "Small Note"):
@@ -139,8 +139,7 @@ def code(doc, text):
 
 
 def page(doc, title):
-    doc.add_page_break()
-    doc.add_heading(title, 1)
+    doc.add_heading(title, 1).paragraph_format.page_break_before = True
 
 
 def table(doc, headers, rows, widths):
@@ -215,7 +214,7 @@ def figure_page(doc, mode, title, description, image):
 
 def license_and_references(doc):
     doc.add_heading("References and license", 2)
-    links(doc, [("Source and setup", "source/README.md"), ("Security review", "source/SECURITY.md"),
+    links(doc, [("Install and configure", "source/README.md"), ("Security and operations", "source/SECURITY.md"),
                 ("Acceptance checks", "source/TESTING.md")])
     links(doc, [("PKINIT specification", "https://www.rfc-editor.org/rfc/rfc4556"),
                 ("MIT PKINIT configuration", "https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html")])
@@ -235,9 +234,9 @@ def process_guide(images):
     paragraph(doc, (
         "CRAFT obtains a user's Kerberos ticket-granting ticket (TGT) through "
         'PKINIT from Linux, including hosts that are not domain-joined. It '
-        'supports three operating modes. Linux can orchestrate privileged '
-        'certificate enrollment, orchestrate privileged credential linking, or '
-        'use a certificate exported from Windows with unprivileged acquisition. '
+        'supports privileged enrollment through AD CS, privileged Key Trust '
+        'credential linking, and unprivileged authentication with a supplied '
+        'certificate exported from Windows. '
         "All three publish the user's cache for unattended applications without "
         "storing the user's AD password."
     ))
@@ -323,7 +322,8 @@ def process_guide(images):
             'are released.'
         )],
         ["2  Credential linking", (
-            'Locally issued certificate carrying a fresh RSA-3072 public key. The KDC'
+            'Locally issued certificate carrying a fresh RSA public key (default '
+            '3072 bits). The KDC'
             ' matches the linked key; a trusted user-certificate CA chain is '
             'unnecessary. KDC trust is still required.'
         ), (
@@ -421,6 +421,14 @@ def process_guide(images):
         "source/README.md#long-running-jobs"),
         ("Credential timing diagram",
         "docs/diagrams/05-credential-timing.svg")])
+    paragraph(doc, (
+        'All modes require a working host logging socket at /dev/log. Administrators '
+        'maintain CRLs, review authorization scope and protect persistent credentials. '
+        'Setting enabled=no stops fresh acquisition; stop active maintainers separately '
+        'to end renewal. Issued tickets and service sessions remain subject to domain policy.'
+    ))
+    links(doc, [("Audit and troubleshooting", "source/README.md#audit-records-and-diagnostics"),
+                ("Operational disable", "source/SECURITY.md#immediate-disable")])
     license_and_references(doc)
     doc.save(path)
     print(f"Created {path}")
@@ -436,8 +444,8 @@ def configuration_guide():
         'enrollment through CES and AD CS, privileged credential linking through '
         'msDS-KeyCredentialLink, or unprivileged PKINIT with a certificate '
         'exported from Windows. This guide compares their requirements and gives '
-        'mode-specific configuration and acceptance checks. The linked source '
-        'guide contains the complete installation commands.'
+        'mode-specific configuration and acceptance checks. The linked installation '
+        'guide contains complete Linux commands and the configuration reference.'
     ))
     table(doc, ["Requirement", "1  Enrollment", "2  Credential linking", "3  Windows export"], [
         ["Linux acquisition",
@@ -465,18 +473,20 @@ def configuration_guide():
     ], [1.72, 1.8, 1.8, 1.82])
     doc.add_heading("Shared Linux preparation", 1)
     paragraph(doc, (
-        'Build from the repository root with a C++20 compiler and standard library '
-        'supporting std::format, CMake, OpenSSL 1.1.1 or newer, MIT Kerberos, libcurl, '
+        'Build as an ordinary user from the repository root with GCC/libstdc++ 13.1 '
+        'or equivalent C++20 support, CMake 3.16 or newer, OpenSSL 1.1.1 or newer, MIT Kerberos, libcurl, '
         'libxml2, OpenLDAP and SASL. At runtime, install MIT PKINIT and, for modes '
-        '1 and 2, the SASL GSSAPI plugin. Use patched distribution packages meeting '
-        "the source guide's requirements."
+        '1 and 2, the SASL GSSAPI plugin. CES Negotiate needs libcurl SPNEGO. '
+        'Use supported patched packages meeting '
+        "the installation guide's requirements. A working /dev/log socket is required."
     ))
     code(doc, (
         'cmake -S source -B build -DCMAKE_BUILD_TYPE=Release\ncmake --build build '
         '-j2\nctest --test-dir build --output-on-failure'
     ))
     paragraph(doc, (
-        'Install the trusted launcher, worker and optional maintainer. Keep '
+        'Install the production launcher, worker and optional maintainer manually; '
+        'there is no CMake installation target. Keep '
         '/etc/craft/config and krb5.conf root-owned mode 0644 with protected '
         'parents. Pin the realm, KDC and expected KDC hostname; provide populated'
         ' kdc-trust.pem and current kdc-crls.pem. Modes 1 and 3 also require '
@@ -497,8 +507,8 @@ def configuration_guide():
         "source/README.md#shared-linux-installation"),
         ("Privileged installation",
         "source/README.md#shared-privileged-installation"),
-        ("Three-mode process guide",
-        "docs/01-CRAFT-Process-Overview.pdf")])
+        ("Configuration reference",
+        "source/README.md#configuration-reference")])
     page(doc, "Mode 1 privileged certificate enrollment setup")
     links(doc,
         [("Complete mode 1 setup",
@@ -520,8 +530,8 @@ def configuration_guide():
         ' approved recipient group at the CA; exclude privileged identities. '
         'Resolve Linux names to the intended AD sAMAccountName and directory UPN.'
         ' CA-built identity and SID mapping must satisfy current KDC policy. The '
-        'CA helper performs partial lab provisioning and does not replace these '
-        'checks.'
+        'CA helper performs partial lab provisioning and verifies narrow restrictions '
+        'before publication/export; configure those restrictions first.'
     ))
     code(doc, """
 enabled=no
@@ -533,6 +543,7 @@ service_principal=svc-linux-enroll@DOMAIN.LOCAL
 template_oid=1.3.6.1.4.1.311.21.8.999.1
 ces_url=https://ces.domain.local/IssuingCA_CES_Kerberos/service.svc/CES
 ces_auth=negotiate
+key_bits=3072
 certificate_cn={user}
 tgt_seconds=36000
 renew_seconds=604800
@@ -562,6 +573,11 @@ minimum_interval_seconds=60
         )],
     ], [1.1, 6.04])
     paragraph(doc, (
+        'CES HTTPS uses https-trust.pem for chain/hostname verification. Optional '
+        'https-crls.pem enforces revocation for the whole server chain; without it, '
+        'HTTPS CRL/OCSP checks are absent. Refresh all required CRLs independently.'
+    ))
+    paragraph(doc, (
         'Validate the template profile on the next page and prove CA refusal for '
         'out-of-scope recipients. Set enabled=yes and enable the setuid launcher '
         'only when ready. Test as an approved user with both home PEM files '
@@ -588,7 +604,8 @@ minimum_interval_seconds=60
             '1.3.6.1.4.1.311.20.2.2\nPKINIT Client Authentication 1.3.6.1.5.2.3.4'
         )],
         ["Key and basic constraints", (
-            'CRAFT generates RSA-3072. Explicit CA:FALSE with no path length; '
+            'RSA defaults to 3072 bits; key_bits accepts 2048/3072/4096 and must meet '
+            'the template minimum. Explicit CA:FALSE with no path length; '
             'digitalSignature required; keyCertSign and cRLSign forbidden. The CSR '
             'also requests keyEncipherment.'
         )],
@@ -670,6 +687,7 @@ realm=DOMAIN.LOCAL
 mechanism=key_trust
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 kt_dc_url=ldap://dc01.domain.local
+key_bits=3072
 tgt_seconds=36000
 renew_seconds=604800
 require_full_tgt_lifetime=yes
@@ -689,12 +707,11 @@ minimum_interval_seconds=60
         '-WhatIf'
     ))
     paragraph(doc, (
-        'CRAFT generates a fresh RSA key (default 3072 bits; key_bits accepts '
-        '2048, 3072 or 4096) and locally issued certificate. MS-ADTS describes '
-        'RSA-2048 for NGC, but Windows KDCs also accept RSA-3072 and RSA-4096. '
+        'CRAFT generates a fresh RSA key and locally issued certificate. '
         'The linked key authorizes PKINIT without user-certificate CA enrollment, '
         'CES, an agent or a template. MIT Kerberos handles freshness tokens; '
-        'validate against the actual KDC policy.'
+        'validate against the actual KDC policy. Review the temporary issuer trust scope '
+        'in the linked security guide.'
     ))
     paragraph(doc, (
         "An independent process adds and removes CRAFT's exact value while "
@@ -703,7 +720,8 @@ minimum_interval_seconds=60
         'worker termination and retries uncertain directory outcomes. A '
         'continuing directory outage or host failure can leave a usable key. '
         'Failed cleanup blocks publication and reports a CRITICAL AUTHPRIV event '
-        'when cleanup runs; remove residual credentials manually.'
+        'identifying the object and worker when cleanup can run; inspect and remove '
+        'only confirmed residual values, retaining legitimate keys.'
     ))
     paragraph(doc, (
         'Review delegation and trust, set enabled=yes, and enable the setuid '
@@ -712,6 +730,7 @@ minimum_interval_seconds=60
         'directory refusal for out-of-scope accounts; repeat after revoking the '
         'delegation.'
     ))
+    links(doc, [("Temporary issuer trust", "source/SECURITY.md#key-trust-certificate-handling")])
     page(doc, "Mode 3 unprivileged Windows exported certificate setup")
     links(doc,
         [("Complete mode 3 setup",
@@ -765,7 +784,7 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'Provide root-owned mode-0644 CA and KDC trust bundles with current CRLs.'
         ' The user certificate must match the key, be non-CA, and have digitalSignature '
         'without certificate/CRL signing, Smart Card Logon or PKINIT Client '
-        'Authentication EKU, exactly one UPN SAN, and current validity. basicConstraints '
+        'Authentication EKU, exactly one UPN SAN, and more than 60 seconds of current validity. basicConstraints '
         'may be absent; if present, require CA:FALSE without a path length. The KDC '
         'must map it to <Linux '
         'username>@<realm>. CRAFT does not query the directory UPN or pin the '
@@ -793,7 +812,7 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         ["Every mode", (
             'Run as the intended non-root user without sudo. Confirm Linux-name '
             'principal, caller-owned mode-0600 cache, '
-            'renewable/nonforwardable/nonproxiable flags, AES session/ticket '
+            'nonforwardable/nonproxiable flags, configured renewal, AES session/ticket '
             'encryption and actual lifetimes. Test a real Kerberos-enabled service.'
         )],
         ["Selection and failure", (
@@ -851,6 +870,56 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         "source/TESTING.md"),
         ("Maintenance setup and status",
         "source/README.md#long-running-jobs")])
+    page(doc, "Audit maintenance and operational disable")
+    paragraph(doc, (
+        'Read AUTHPRIV records from the host logging service with administrator access. '
+        'The worker request= field matches the launcher PID. Key Trust records identify '
+        'the object and worker; correlate them with directory change event 5136 and KDC '
+        'event 4768. Configure the required directory SACL and CA audit categories. '
+        'Do not place private keys, tickets or export passwords in logs.'
+    ))
+    code(doc, 'sudo journalctl -t craft -t craft-worker -t craft-maintain')
+    paragraph(doc, (
+        'Every mode requires /dev/log. Failure to submit an audit record blocks startup, '
+        'credential release or renewal publication. The final launcher completion record '
+        'follows cache replacement, so a logging failure there can be reported after the '
+        'cache changed. Local submission does not establish durable retention or forwarding. '
+        'Install the example host audit rules only after adjusting paths, architecture and '
+        'rules for files actually present.'
+    ))
+    paragraph(doc, (
+        'For failures, inspect the log identity/PID named in the caller notice. Check clocks, '
+        'PKINIT/SASL plugins, principal and SPNs, mapping, current CRLs, certificate profiles '
+        'and effective CA/directory authorization. Diagnose a rejection without weakening '
+        'TLS verification, required CRLs or mapping policy.'
+    ))
+    table(doc, ["Operation", "Administrator action"], [
+        ["Keep authentication available", (
+            'Refresh CA/KDC and optional CES CRLs before next-update; rotate service '
+            'credentials; replace and securely transfer supplied certificates before expiry.'
+        )],
+        ["Stop fresh acquisition", (
+            'Set enabled=no or remove launcher execute access. Removing only setuid stops '
+            'modes 1 and 2 while still permitting a valid supplied pair.'
+        )],
+        ["Stop ticket renewal", (
+            'Inspect job status and send SIGTERM to each recorded maintainer_pid. '
+            'Acquisition disable alone does not stop cache-only renewal. Cache files remain.'
+        )],
+        ["Withdraw authentication authority", (
+            'Revoke the CA agent/recipient authorization or AD delegation, rotate compromised '
+            'credentials and remove confirmed residual Key Trust values. Review issued '
+            'certificates, tickets and service sessions through incident response.'
+        )],
+    ], [1.65, 5.49])
+    paragraph(doc, (
+        'Assign owners for credential/CRL lifecycle, recipient/delegation review and logs. '
+        'Repeat acceptance after policy or credential changes. Certificate/key removal, '
+        'cache deletion and maintenance stop do not revoke already-issued tickets.'
+    ))
+    links(doc, [("Audit and troubleshooting", "source/README.md#audit-records-and-diagnostics"),
+                ("Host audit rules", "source/config/craft.audit.rules"),
+                ("Operational disable", "source/SECURITY.md#immediate-disable")])
     p = doc.add_paragraph((
         'Source code, scripts, configuration examples and documentation are '
         'licensed under GNU GPL version 3 only (GPL-3.0-only). See '

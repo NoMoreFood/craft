@@ -1,171 +1,24 @@
-# CRAFT Validation Status and Acceptance Tests
+# CRAFT deployment validation
 
-## Select the acceptance checks
+Validate the installed system with disposable, nonprivileged identities before production use. A successful build or offline check does not establish the deployed CA policy, KDC mapping, directory delegation or scheduler behavior. Record the source revision, OS/packages, configuration, commands and results for your deployment.
 
-Validate the installed operating mode: [mode 1 setup](README.md#mode-1-setup-privileged-certificate-enrollment) with the [enrollment checklist](#live-acceptance-checklist), [mode 2 setup](README.md#mode-2-setup-privileged-credential-linking) with the [Key Trust checks](#key-trust-acceptance-checks), or [mode 3 setup](README.md#mode-3-setup-unprivileged-windows-exported-certificate) with the [home-certificate checks](#home-workflow-acceptance-checks). Run the shared KDC, cache and maintainer checks for each mode you deploy.
+Use the [mode 1 setup](README.md#mode-1-setup-privileged-certificate-enrollment), [mode 2 setup](README.md#mode-2-setup-privileged-credential-linking) or [mode 3 setup](README.md#mode-3-setup-unprivileged-windows-exported-certificate), then complete the common checks and that mode's checklist below.
 
-## Offline Coverage
+## Offline checks
 
-The test executable contains synthetic checks for parsing, cryptography, ownership and ticket policy. CTest registers it as one test; run `craft-tests` directly to see individual check results and the current count. Record the commit, compiler/library versions, commands and output for each validation run instead of treating a previous test count as evidence for the current tree.
-
-The synthetic fixtures cover:
-
-- CSR self-signature and requested CN, UPN, template, three client EKUs and non-CA usage; CMS signature, embedded CSR and signed requestername.
-- Pinned UPN/template/key checks; certificates with and without a CA-supplied SID extension; missing/duplicate/malformed identities, missing client EKUs, non-CA constraints, wrong usage, expiry and ten-hour validity caps.
-- Home-pair selection and filesystem checks: absent versus partial pairs, caller identity, permissions, symlink/FIFO refusal, bounded reads, opened-inode replacement and malformed/encrypted PEM rejection.
-- Home-only configuration without enrollment settings; ordinary certificate lifetime/template acceptance with logon usage, identity shape and expiry validation.
-- Key Trust configuration selection (`mechanism=key_trust`) without CA settings, mandatory `kt_dc_url`/`service_principal`, and rejection of bad URLs and unknown mechanisms; MS-ADTS 2.2.20 Key Credential blob encoding (version, entry framing, KeyID/KeyHash SHA-256 integrity, NGC usage, AD source, BCRYPT_RSAPUBLIC_BLOB); DN-Binary framing; and ephemeral Key Trust certificate pair construction passing logon validation without a CA chain while failing the enrollment checks and a UPN mismatch.
-- Dynamic Global Catalog settings parsing, domain-to-DN formatting, integer bounds, configuration flags and custom CN substitutions.
-- Ten-hour requested/granted initial lifetime, seven-day renewal lifetime checks, strict short-grant refusal and explicit shorter-grant warnings; renewable and non-renewable validation; ticket flags, principal, key length and AES128/AES256 session/envelope validation; RC4 rejection.
-- Exception-safe C output adoption, resource ownership, secret-buffer erasure, bounded I/O, sealed memfd behavior, WSTEP parsing and malformed/DTD/oversized responses.
-- Version-4 FILE cache serialization read back by MIT Kerberos.
-- Maintainer options/scheduling, renewal validation, service-ticket preservation, atomic publication, locking and job-exit tracking.
-- Audit records and caller notices: record framing, bounding and reduction to printable text; refusal when the logging service is absent; Key Trust add and remove records, and withdrawal of a key whose record was not taken; a renewal that is not published unrecorded; and failures whose system paths, configuration, server text and library text stay out of what the caller is shown.
-
-The test tickets use the literal marker `NOT-A-REAL-TICKET` as ciphertext. These are local parser/policy fixtures, not forged working tickets, authenticated Kerberos exchanges or proof that a Windows KDC grants the requested lifetime. No real user credentials, CA enrollment or domain-controller traffic was used.
-
-Offline tests do not exercise LDAP/GSSAPI, live EOBO/CES, Windows SID issuance, real-PKI CRL chains, memfd-backed PKINIT, live `msDS-KeyCredentialLink` writes or Key Trust PKINIT, effective DC policy, or ten-hour-certificate/ten-hour-TGT/seven-day-renewal interoperability. They also do not exercise the installed setuid/fexecve/drop boundary. Validate those separately in a configured lab; offline success does not establish production readiness.
-
-## Build and Unit Tests
-
-On Linux, install the [build and runtime dependencies](README.md#build) and run from `source/`.
+Compile with the [build dependencies](README.md#build), then run from the repository root:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S source -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
-./build/craft-tests
 ```
 
-Optional address/undefined-behavior sanitizer build (do not install sanitizer binaries setuid):
+CTest covers configuration, certificate/response parsing, home-file safety, ticket policy, cache serialization, audit/diagnostic behavior and synthetic Key Trust cleanup. These checks use synthetic credentials and mocked directory operations. They do not contact AD, AD CS or CES and do not prove installed setuid behavior or live PKINIT.
 
-```sh
-cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
-  -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
-cmake --build build-sanitize -j2
-ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-./build-sanitize/craft-tests
-```
+### Windows helper checks
 
-## Detached-maintainer integration checks
-
-The native `craft-maintain-tests` harness uses synthetic caches and an issuer copied from `craft-tests`.
-Run it separately from CTest in a disposable Linux container; it refuses ordinary accounts or mismatched issuers.
-After building, prepare and run it inside that container, from `source/`:
-
-```sh
-CRAFT_DISPOSABLE_CONTAINER=yes sh tests/run-container-tests.sh build
-```
-
-The script creates the `craft-maintain-test` account, installs `craft-tests` as the synthetic issuer and writes an
-`/etc/krb5.conf` whose KDC refuses connections. It then runs the harness twice: against `craft-maintain`, and
-against `craft-maintain-proc`, the same program forced onto the `/proc` job watch that kernels without
-`pidfd_open` (RHEL 8) use.
-
-The script also runs `craft-tests --collect-audit` as a stand-in for the host logging service, which a container
-lacks and without which CRAFT refuses to act; the harness reads the maintainer's audit records from what it collects.
-
-Checks cover startup/closed pipes, status, job-exit/duration cleanup, credential expiry/rollover, concurrent starts,
-shared backoff, cancellation, unsafe caches, the maintainer's start and stop records, and a failure whose detail
-reaches the audit log but not the status file. The KDC address intentionally refuses connections to verify renewal
-failures preserve credentials without enrollment. These checks establish lifecycle behavior, not live renewal success.
-
-## Fuzz Testing
-
-`craft-fuzz` is a libFuzzer harness over every parser that takes bytes someone else controls: the configuration,
-state records, supplied PEM certificates and keys, DER certificates, the hand-decoded subjectAltName and template
-extensions, the CES SOAP response, the outer Kerberos ticket, `/proc/<pid>/stat` and the `craft-maintain` command
-line. It builds with Clang, AddressSanitizer and UndefinedBehaviorSanitizer. `craft-tests --fuzz-seeds` writes one
-valid input per parser from the unit-test fixtures. From `source/`, after the ordinary build:
-
-```sh
-cmake -S . -B build-fuzz -DCMAKE_CXX_COMPILER=clang++ -DCRAFT_FUZZ=ON
-cmake --build build-fuzz --target craft-fuzz -j2
-mkdir -p corpus && ./build/craft-tests --fuzz-seeds corpus
-./build-fuzz/craft-fuzz -jobs=8 -workers=8 -max_total_time=420 -max_len=8192 corpus
-```
-
-An input the parser rejects is a pass. A crash, sanitizer report, leak, timeout or out-of-memory stop leaves a
-reproducer file and is a finding; so is anything a parser prints. Run the fuzzer by itself: on a starved machine
-libFuzzer writes `slow-unit-*` files for inputs that replay in milliseconds. Keep the corpus between runs, and record
-the commit, compiler and library versions, duration, executions and findings of each run. This exercises CRAFT's own
-parsing code. It is not a scan of an installed system and does not replace the live checks below.
-
-### Fuzz run — October 11, 2026
-
-Working tree based on `d540bd7`, in a disposable Ubuntu 24.04 container with Clang 18.1.3, libstdc++ 13.3,
-OpenSSL 3.0.13, MIT Kerberos 1.20.1 and libxml2 2.9.14.
-
-- Final sources: eight workers for 420 seconds, 25,786,400 executions, 2,068 coverage edges. No crash, sanitizer
-  report, leak, timeout or out-of-memory stop.
-- An earlier 20-minute run of about 46 million executions, before the fix below, also produced no crash or
-  sanitizer report. It shared the machine with three builds; its thirteen `slow-unit-*` inputs each replayed in
-  2 ms or less on an idle machine.
-- One finding, fixed: libxml2 printed `encoding error` messages for malformed CES responses on the worker's stderr,
-  which the caller sees, despite `XML_PARSE_NOERROR`. `parse_soap` now discards libxml2's messages.
-
-## Audit and Diagnostics Validation — October 11, 2026
-
-The same working tree built without warnings under `-DCMAKE_COMPILE_WARNING_AS_ERROR=ON` on Ubuntu 24.04 (GCC 13.3),
-AlmaLinux 8.10 and AlmaLinux 9 (gcc-toolset-13). On each: 109 offline checks (106 unprivileged), 10 Key Trust
-checks and 16 maintainer integration checks per job-watch variant passed. The Ubuntu build also passed every suite
-under AddressSanitizer and UndefinedBehaviorSanitizer.
-
-On AlmaLinux 8.10 the installed setuid launcher, worker and maintainer ran against a disposable MIT KDC 1.18.2 with
-PKINIT, a test CA with current CRLs, and `craft-tests --collect-audit` on `/dev/log`:
-
-- A home pair obtained a ten-hour AES256 TGT renewable for seven days. The log held `request started`,
-  `issued TGT request=...` and `request finished ... outcome=published`, tied together by the launcher's process ID.
-- `craft-maintain` started with no cache, obtained a three-minute TGT through the launcher and renewed it against
-  the KDC 144 seconds later. The log held `maintenance started`, `obtained fresh credentials`, `renewed TGT` and
-  `maintenance stopped`.
-- With the KDC unreachable, a group-writable or malformed configuration, and an unsafe home key, the caller saw only
-  the summary and a log reference, while the Kerberos message, the file path and the configuration key appeared
-  in the log alone. The rate limit and the unsafe key file were shown to the caller in full.
-- With no logging socket the launcher refused to start and no worker ran.
-
-Not exercised: AD, AD CS or CES; journald, rsyslog or auditd themselves; and the example host audit rules in
-`config/craft.audit.rules`, which a container cannot load.
-
-## Maintainer Validation — September 30, 2026
-
-Validated the uncommitted working tree based on `c1f857c` in a disposable Ubuntu 24.04 container with GCC 13.3,
-MIT Kerberos 1.20.1, OpenSSL 3.0.13, libcurl 8.5.0, libxml2 2.9.14, OpenLDAP 2.6.10 and Cyrus SASL 2.1.28.
-
-- Release/CTest: 78 offline checks passed; AddressSanitizer passed with leak detection.
-- Native harness: 15 checks and account/issuer guards passed with address/undefined-behavior sanitizers
-  and only the documented build dependencies.
-- MIT KDC: a ten-second AES256 TGT with a sixty-second renewal window renewed twice, retaining the deadline and
-  a usable service ticket after the bootstrap keytab was removed. The disabled issuer was never called;
-  job exit stopped maintenance.
-
-AD CS/PKINIT renewal after certificate expiry, full renewal-window rollover and the actual scheduler/application
-still require live acceptance testing.
-
-## Home Certificate Validation
-
-Release build and CTest completed with 83 offline checks; the 16 synthetic maintainer integration checks passed. The offline executable also passed under an ordinary Linux account.
-
-A disposable MIT KDC and test CA exercised the installed home workflow with ordinary mode-0755 executables, public root-controlled configuration, current CRLs, no `craft` service account and no enrollment credentials. The caller obtained a ten-hour AES256 TGT with seven-day renewal and a usable service ticket. Immediate reacquisition worked without an enrollment interval. A traced invocation with forged environment values opened the NSS home and showed no enrollment-file access or UID/GID changes.
-
-Installed failure checks preserved the existing cache for incomplete, public, symlinked or malformed keys, a revoked certificate, and a valid certificate mapped to a different KDC account. The setuid installation still used the caller-only path when a pair was present; an absent pair selected the enrollment prerequisites. These results establish the tested MIT KDC flow, not AD-specific mapping or CES interoperability.
-
-## Home Workflow Acceptance Checks
-
-1. Install the launcher, worker and maintainer without setuid/setgid. Use root-controlled, readable public configuration/trust/CRL files and omit the service account, private enrollment files and runtime directory.
-2. Supply caller-owned `~/.config/craft/user.pem` and `user.key` in the NSS home, using unencrypted PEM, a private key and safe directories. Run `craft` as the caller and verify cache owner/mode, requested Linux-name principal, flags, AES encryption and ticket times.
-3. Authenticate to a real AD service. Validate the issued certificate's strong mapping on the designated DC, including an alternate UPN suffix where used. No LDAP lookup occurs in home mode.
-4. Verify home credentials take priority even when enrollment is enabled. Confirm no CES request, agent/keytab access or enrollment rate-limit timestamp is generated. Test an inherited `no_new_privs` context with the ordinary installation.
-5. Reject partial pairs, symlinked files/directories, extra hard links, wrong ownership, publicly readable private keys, nonregular/empty/oversized files, encrypted/malformed or mismatched keys, expired/revoked certificates and stale/missing CRLs without replacing the cache or enrolling.
-6. Reject a valid certificate mapped to another account. Validate accepted Smart Card Logon/PKINIT usage and ordinary certificate validity; enrollment template and short-validity checks must remain scoped to enrollment.
-7. Remove both files. A home-only installation must report the setuid enrollment requirement; an enrollment-enabled installation must use its existing service-account and CA policy path.
-8. Exercise maintenance renewal and fresh authentication with the home pair, certificate replacement before expiry, missing/invalid replacement pairs, KDC outages, concurrent jobs and watched-job exit. Renewals use the cache; fresh acquisition checks the pair again.
-
-## Windows Helper Checks
-
-From the repository root in Windows PowerShell, run the offline helper checks:
+From the repository root in Windows PowerShell:
 
 ```powershell
 .\scripts\Test-Configure-CRAFT-CA.ps1
@@ -173,67 +26,115 @@ From the repository root in Windows PowerShell, run the offline helper checks:
 .\scripts\Test-Grant-CRAFTKeyCredentialLink.ps1
 ```
 
-`Test-Grant-CRAFTKeyCredentialLink.ps1` runs offline: it parses the delegation helper, exercises the least-privilege access-rule construction (exactly ReadProperty/WriteProperty on `msDS-KeyCredentialLink`, user-scoped versus OU-inherited), the rule matcher (rejecting other trustees, other attributes, Deny and read-only rules), and the mutually exclusive target parameters. It reads and modifies no Active Directory objects.
+These checks do not modify AD or contact a CA. The certificate helper checks create and remove synthetic current-user certificates, private keys and export files. They cover export/reuse, renewal, ACLs, interrupted publication/recovery, shared-key preservation, queued store deletion and pending/denied requests. Delegation checks verify the rule's exact rights and scope. Provisioning checks cover parameters, commands and certificate selection. Use a disposable Windows test profile.
 
-The provisioning checks cover parameters, native commands and certificate selection. The request/export checks use newly created synthetic current-user certificates and mocked enrollment. They exercise the CMD and PowerShell options/preview paths, matching RSA/CSP/ECDSA PEM exports, encrypted-export-only and nonexportable keys, private file ACLs, unchanged-pair reuse, the calendar-month/custom renewal window, optional certificate/key deletion with shared-key preservation, changed-file/template protection, pending/denied requests, concurrent exports, junction refusal and rollback after publication failure. OpenSSL parsing is also checked when Git for Windows supplies OpenSSL. The fixtures and their private keys are removed at completion.
+## Common installed-system checks
 
-Regression coverage includes a real PowerShell 7 CMD launch reusing existing exports, distinct signing/exchange keys in one CSP container, invalid replacement dates and certificate profiles, durable retries of old/current certificate deletion, and child processes killed during preparation, ready state and each file-publication step. Restart checks establish rollback or completion without contacting a CA or discarding queued cleanup.
+| Check | Required observation |
+| --- | --- |
+| Identity and execution | Run as the intended non-root user without `sudo`. NSS name/home select the fixed `<Linux username>@<realm>` principal; arguments and forged environment values cannot choose another identity. |
+| Cache | Inspect the returned `FILE:` cache. It is caller-owned mode 0600 in the NSS home and unreadable by other UIDs. Acquisition/validation failure preserves its previous content. |
+| Ticket | Verify Initial/Pre-authenticated flags, no forwardable/proxiable flags, AES256/AES128 session and ticket encryption, actual validity and renewal deadline. Expect Renewable only when renewal is configured. |
+| Trust and mapping | Verify the pinned KDC, current CA/KDC CRLs, configured EKU/identity checks and the deployed strong account mapping. Wrong-account, revoked-certificate and stale/missing-required-CRL attempts fail. |
+| Lifetime | Compare actual grants with configured requests. Strict mode rejects shorter initial/renewal grants; permissive mode warns. Excessive lifetimes or non-AES grants always fail. |
+| Application access | Obtain a service ticket and authenticate to a real authorized SMB, LDAP or Kerberos-enabled web service. Application access follows the account's permissions. |
+| Failure and concurrency | Exercise KDC/network outage, interrupted acquisition, concurrent runs, unsafe/writable home paths and insufficient disk space. Only validated credentials are published. |
+| Audit | Correlate launcher, worker and maintenance AUTHPRIV records. Confirm failure when the logging service is unavailable. Verify host audit rules, retention and forwarding on the installed host. |
+| Maintenance, if used | Test actual scheduler/application renewal, fresh authentication near the renewal deadline, KDC/credential outages, concurrent jobs, credential reload and exit of the watched PID. Later failures appear in status/logs and do not terminate the job. |
 
-These checks do not provision AD objects, contact an AD CA, configure a CA or validate a live Windows deployment. For the request helper, verify a normal user's enrollment with an authorized logon template in the lab, CA selection, template export policy, pending/denied outcomes, and the exported pair's Linux PKINIT mapping and revocation checks.
+Run acquisition and inspect tickets as the test user:
 
-## Hyper-V Lab Run — September 27, 2026
+```sh
+cache=$(/usr/local/bin/craft) || exit "$?"
+export KRB5CCNAME="$cache"
+klist -ef -c "$KRB5CCNAME"
+stat -c '%U %a %n' ~/.krb5cc_craft
+```
 
-Tested source commit `514b851` and updated DISA STIG configuration on the two-node Hyper-V lab environment: Windows Server 2022 Datacenter DC (`CRAFT-DC`, `192.168.100.10`, domain `craft.lab`) and Ubuntu 24.04 LTS client (`CRAFT-Linux`, `192.168.100.20`, user `alice`).
+Configure system Kerberos for applications and maintenance as well as CRAFT's acquisition configuration. Do not infer ten-hour/seven-day grants from requested values alone.
 
-1. **CA and Template Configuration:** Configured Schema V2 template `CRAFTUser` with 10-hour validity (`$ValidityHours = 10`), RSA-3072 key size, Smart Card Logon, Client Auth, and PKINIT Client Auth EKUs, and 1 Enrollment Agent signature requirement.
-2. **KDC DISA STIG Policies:** Verified domain controller Kerberos policy matching DISA STIG: `MaxTicketAge = 10` hours, `MaxRenewAge = 7` days, `MaxServiceAge = 600` minutes, `MaxClockSkew = 5` minutes.
-3. **Automated CRAFT Execution:** Invoked setuid launcher `/usr/local/bin/craft` as unprivileged user `alice`. Execution completed in 455 ms without warnings under strict mode (`require_full_tgt_lifetime=yes`).
-4. **Ticket Inspection (`klist -ef`):**
-   - Initial validity: exactly 10 hours (`09/27/26 01:51:51` to `09/27/26 11:51:51`).
-   - Renewal window: exactly 7 days (`renew until 10/04/26 01:51:51`).
-   - Flags: `RIA` (`Renewable`, `Initial`, `Pre-authenticated`).
-   - Encryption: pure AES-256 for both session key (`skey`) and ticket envelope (`tkt`).
-5. **Directory and Service Authentication:**
-   - Active Directory LDAP search authenticated via GSSAPI (`SASL username: alice@CRAFT.LAB`, `SASL SSF: 256`).
-   - Domain Controller SMB shares (`//CRAFT-DC.craft.lab`) authenticated successfully using Kerberos.
-6. **Ticket Renewal:** Renewed the issued ticket against the KDC via `kinit -R -c $KRB5CCNAME`; renewal succeeded without re-prompting, extending expiration to `11:51:11` while retaining the 7-day renew window.
+## Live acceptance checklist
 
-## Multi-OS Validation
+These checks apply to **mode 1 enrollment**. Test with both home PEM files absent so supplied credentials cannot hide incomplete enrollment setup.
 
-The DISA STIG-hardened Hyper-V lab used Ubuntu 24.04.5 LTS and Rocky Linux 9.8 clients, Windows Server 2022 for AD/AD CS/CES, and Server 2019/2025 member servers. Each mode covered RSA 2048, 3072 and 4096-bit keys; all 27 checks passed.
+1. Verify the launcher is `root:craft-users` mode 4750, the worker/maintainer are ordinary executables, private credentials are `root:craft` mode 0640 and `/run/craft` is `craft:craft` mode 0700. Callers must not belong to the service group or invoke its credentials directly.
+2. Verify the service principal/AES keytab, GC DNS/SPN/search base and SASL GSSAPI plugin. Resolve exactly one intended account, including an alternate UPN suffix where used; unknown/ambiguous users fail. Both CES authentication modes require the directory keytab.
+3. Validate the actual CES endpoint, HTTPS chain and optional CES CRLs. For Negotiate, verify SPNEGO, HTTP SPN, Kerberos-only transport and constrained delegation; for mTLS, verify the separate mapped client pair.
+4. Inspect a successful issued certificate: matching key, resolved UPN, configured template OID, CA-generated SID/strong mapping, all three client EKUs, non-CA usage and total validity including backdating. Confirm requested CN behavior does not change account identity.
+5. Prove CA refusal for out-of-scope recipients, privileged targets, unauthorized templates/signers and missing qualifying signatures. Make prohibited requests otherwise valid so denial demonstrates policy. Follow [enrollment-agent denial tests](../docs/03-Enrollment-Agent-Restrictions.md#prove-denial-at-the-ca).
+6. Confirm wrong UPN/template/key, missing EKUs, revoked agent/user certificate, expired required CRLs and excessive validity fail without replacing the cache. Timeouts can leave CA issuance records; CRAFT does not cancel/revoke issuance.
+7. Exercise installed setuid behavior, `nosuid`/`no_new_privs` rejection, the per-UID interval including failed attempts, concurrent requests and worker termination. Correlate AUTHPRIV, CA/CES and KDC records.
+8. If maintenance is used, test renewal after the enrolled certificate expires and fresh enrollment across the renewal deadline with the actual job scheduler. Confirm CA issuance volume and the ability to disable acquisition separately from renewal.
 
-| Mode | Coverage | Passed |
+## Key Trust acceptance checks
+
+These checks apply to **mode 2**. Use disposable ordinary accounts and both home PEM files absent.
+
+1. Pin the same writable DC for `kt_dc_url` and Kerberos. Verify Key Trust capability, KDC certificate/CRLs, MIT PKINIT freshness interoperability, service AES keytab and LDAP/GSSAPI encryption at SSF 128 or higher.
+2. Inspect the delegation: exactly ReadProperty/WriteProperty on `msDS-KeyCredentialLink` for a reviewed OU or single user. Keep privileged identities outside the scope and protect its membership/ACL administrators.
+3. Capture existing legitimate keys, run acquisition, and confirm CRAFT adds then removes only its value. Check the requested principal, ticket policy and a real service authentication.
+4. Prove directory refusal for out-of-scope/privileged targets and writes to other attributes. The helper's privileged-target checks do not filter an OU grant if an account later becomes privileged.
+5. Fail or interrupt PKINIT, including an uncertain add outcome, and confirm cleanup and cache preservation. Force a cleanup failure in the lab; publication must fail, the CRITICAL log must identify the residual credential, and an administrator must remove only that value.
+6. Revoke the helper delegation with `-Remove` and verify fresh acquisition fails after propagation. Test a withdrawn/rotated keytab. Already-issued tickets are a separate concern.
+7. Correlate CRAFT add/remove and `certificate_source=key_trust` records with DC events 5136 and 4768. Configure the required directory auditing/SACL; event policy alone is insufficient.
+
+Follow [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md) for detailed authorization and cleanup checks.
+
+## Home workflow acceptance checks
+
+These checks apply to **mode 3**, including supplied certificates on a privileged installation.
+
+1. Run the Windows helper as the intended ordinary domain user with an authorized template. Validate eligible-CA selection, exportable software-key policy, pending/denied outcomes and the exported pair's Linux/KDC mapping.
+2. Verify ordinary mode-0755 executables, readable root-controlled public configuration/trust/CRLs, and successful acquisition without a service account, private service credentials or `/run/craft`. Test inherited `no_new_privs`.
+3. Supply the pair in the NSS home with safe directories, caller ownership and private key permissions. Validate both ordinary certificate validity and alternate UPN suffixes where used.
+4. Verify a valid pair takes priority on a privileged installation: no LDAP/CES operation, agent/keytab access or privileged acquisition timestamp is required. Partial/invalid pairs must fail without either privileged mechanism.
+5. Reject symlinks, extra hard links, wrong ownership, public private-key permissions, nonregular/empty/oversized files, encrypted/malformed or mismatched keys, invalid profiles and wrong-account mapping. Preserve the previous cache.
+6. Remove both files: an ordinary installation must refuse privileged acquisition; a setuid installation must use only its configured mechanism. Neither failure nor a partial pair permits switching modes.
+7. Repeat Windows export/reuse/renewal and optional local-store deletion. Transfer replacements only after success and before expiry. Test Linux failure with an incomplete replacement, then restore the valid pair.
+8. If maintenance is used, test cache-only renewal, fresh authentication with the replaced pair, outages and watched-job exit. Neither CRAFT nor the maintainer renews the supplied certificate.
+
+## Recorded validation
+
+These are recorded repository observations, not acceptance results for your current build or deployment.
+
+### Multi-OS validation
+
+A DISA STIG-hardened AD lab used Ubuntu 24.04.5 LTS and Rocky Linux 9.8 clients, Windows Server 2022 AD/AD CS/CES, and Server 2019/2025 member servers. RSA 2048/3072/4096-bit keys were covered in all modes; all 27 checks passed.
+
+| Mode | Recorded coverage | Passed |
 | --- | --- | --- |
-| 1: Certificate enrollment | CES EOBO and PKINIT on both Linux clients | 6/6 |
-| 2: Key Trust | PKINIT and temporary-key cleanup on both Linux clients | 6/6 |
-| 3: Windows-exported certificate | Nine exports on Server 2019/2022/2025; six Linux PKINIT runs | 15/15 |
+| 1 Enrollment | CES EOBO and PKINIT on both Linux clients | 6/6 |
+| 2 Key Trust | PKINIT and temporary-key cleanup on both Linux clients | 6/6 |
+| 3 Windows export | Nine exports on Server 2019/2022/2025; six Linux PKINIT runs | 15/15 |
 
-Policies capped ticket validity at ten hours, renewal at seven days and clock skew at five minutes, with AES-only Kerberos and SID/SKI strong certificate mapping. Checks confirmed AES256 session/ticket encryption, nonadministrative service-account delegation limited to `msDS-KeyCredentialLink`, launcher/runtime/cache permissions (`04750`/`0700`/`0600`), and LDAP GSSAPI (SSF 256) and SMB access. Other Linux distributions were not tested.
+The lab confirmed ten-hour TGTs with seven-day renewal, AES256 session/ticket encryption, LDAP/GSSAPI and SMB access, scoped nonadministrative delegation, and launcher/runtime/cache permissions. The earlier Windows Server 2022/Ubuntu enrollment trial also recorded successful manual TGT renewal. These observations do not establish every CA, mapping policy or denial case.
 
-## Live Acceptance Checklist
+### Linux build and MIT KDC coverage
 
-The enrollment-specific checks below cover mode 1. Complete the home-workflow checks for mode 3 and Key Trust checks for mode 2. Apply the common KDC, cache and privilege-boundary checks to every deployed mode.
+Recorded warning-free builds and offline/cleanup/maintainer checks cover Ubuntu 24.04 and AlmaLinux 8.10/9 with GCC 13.3 or GCC Toolset 13. Ubuntu checks also passed AddressSanitizer/UndefinedBehaviorSanitizer. Toolset versions here identify test evidence; use a supported compiler for installation.
 
-1. Review the privilege boundary, parsers, trust-chain policy and this host's authority over AD identities. Start with a disposable, nonprivileged account in a lab domain; enforce CA-side template and recipient restrictions.
-2. Verify the GC host/search base, `ldap/hostname` SPN and SASL GSSAPI module. Test `service_principal` and `submitter.keytab` with both CES modes, including missing/ambiguous users and alternate UPN suffixes. Confirm CES URL, TLS trust and transport-account access. For Negotiate, verify libcurl SPNEGO/MIT Kerberos, HTTP SPN and CES-to-CA constrained delegation; for mTLS, verify the separate client certificate mapping.
-3. Confirm CA audit records identify the intended requester and template, and reject recipients outside the approved group. Inspect the issued UPN, template OID, key, three EKUs, key usage, CN behavior, trust chain, CRLs and total validity including backdating. Verify EOBO subject construction, CA SID issuance and domain-controller mapping.
-4. Test the MIT PKINIT plugin against the designated DC, expected hostname, trust anchors and current CRLs. Confirm strong certificate mapping and the resulting user principal. Investigate rejections without weakening policy.
-5. Set the lab DC user-ticket lifetime policy to permit 10 hours (`MaxTicketAge = 10 hours`) and renewal to 7 days (`MaxRenewAge = 7 days`), matching DISA STIG guidance. Determine whether PKINIT permits a TGT matching the ten-hour certificate/key lifetime. Verify strict rejection of shorter grants and explicit warnings when shorter grants are allowed; no mode changes the issued ticket.
-6. Invoke the installed launcher directly as the approved user. Inspect ownership/mode and run `klist -ef -c FILE:/actual/home/.krb5cc_craft`. Check actual start/end time, renewable/nonforwardable/nonproxiable flags, renewal expiry, AES session key and ticket encryption. Confirm a real application obtains a service ticket.
-7. Verify unknown AD users, CLI overrides, forged environment values, service/root UID invocation, changed UID/name mappings, wrong UPN/template/key, missing EKUs, expired CRLs, RC4 and excessive certificate validity fail without replacing a valid cache.
-8. Exercise the installed setuid/fexecve/drop boundary, concurrent calls, process termination, timeouts, network failure, caller-home symlinks and writable/renamed homes. Confirm other UIDs cannot read the cache.
-9. Test `craft-maintain` with the actual scheduler/application: renewal after certificate expiry, renewal-window rollover, KDC/CES outages, concurrent jobs and reconnects. Confirm maintenance lasts for the job and stops with its watched PID; check status and certificate issuance counts.
-10. Review AUTHPRIV/CA/CES/KDC logs. Document CRL refresh, credential rotation, account lifecycle, CA capacity, cache exclusions from backups, ticket expiry, operational disable and incident-response procedures.
+The audit/parser validation recorded 109 offline checks (106 as an ordinary user), 10 Key Trust cleanup checks and 16 detached-maintainer checks for each job-watch variant. Those counts describe the recorded run; CTest output and current executable results are the evidence for a new build.
 
-Do not keep increasing lifetime caps simply to accommodate an unexpectedly long-lived default template. Review and fix the CA-side short-lived issuance policy.
+Disposable MIT KDC/CA runs exercised installed supplied-certificate acquisition, ten-hour AES256 TGTs with seven-day renewal, usable service tickets, ordinary and setuid installations, wrong-account/revoked/unsafe-pair failures, and environment/NSS selection. Short-ticket trials exercised real renewal, service-ticket preservation, audit correlation, job exit and failure diagnostics. Synthetic detached-maintainer checks covered pidfd and `/proc` watches, startup/status, expiry/rollover, concurrency, backoff and publication failure.
 
-## Key Trust Acceptance Checks
+These MIT and synthetic runs did not validate AD/CES, host journald/rsyslog/auditd behavior, or loading the example host audit rules. Offline tests do not cover real directory authorization or PKINIT exchanges.
 
-Complete these in addition to the common KDC/cache and privilege-boundary checks when using `mechanism=key_trust`. Use a lab domain exposing `msDS-KeyCredentialLink` and a writable KDC with NGC/Key Trust support and a current PKINIT certificate, and disposable, non-privileged accounts. See [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md).
+### Fuzz testing
 
-1. Delegate the `msDS-KeyCredentialLink` write to the service account over a dedicated OU of ordinary users with `Grant-CRAFTKeyCredentialLink.ps1`; confirm the resulting ACE grants only ReadProperty/WriteProperty on that one attribute and nothing else. Set `kt_dc_url` to the writable DC that `krb5.conf` names as the KDC.
-2. Run `craft` as an approved user in the OU. Confirm the worker binds over SASL/GSSAPI with integrity and encryption at SSF 128 or higher, adds exactly one value to `msDS-KeyCredentialLink`, obtains a ten-hour AES256 TGT with the expected flags and renewal window, and then removes the value. Inspect `Get-ADUser <user> -Properties msDS-KeyCredentialLink` before, during (from the DC) and after; only legitimate keys must remain. Verify that a peer offering only integrity protection is refused before any directory lookup or write.
-3. Keep privileged accounts outside the delegated scope; confirm those accounts and other out-of-scope accounts are refused the directory write and yields no TGT. Confirm the helper refuses to delegate over privileged targets and default containers without `-Force`.
-4. Interrupt or fail PKINIT (for example, a wrong KDC or a replication-delayed replica in `kt_dc_url`) and confirm the temporary key is still removed, the cache is preserved, and failures are logged. Verify a residual key triggers the CRITICAL AUTHPRIV event naming the object.
-5. Revoke the delegation (`-Remove`) and confirm fresh acquisition fails after the ACL change propagates; evaluate already-issued tickets separately. Rotate `submitter.keytab` and confirm the bind fails without it.
-6. Verify PKINIT interoperability with the KDC's freshness policy; MIT Kerberos handles freshness-token negotiation. See [MIT PKINIT freshness support](https://web.mit.edu/kerberos/krb5-latest/doc/admin/pkinit.html#freshness-tokens). Audit directory event 5136 for the attribute changes and correlate with DC event 4768 and CRAFT's `certificate_source=key_trust` AUTHPRIV events.
+The recorded Clang/AddressSanitizer/UndefinedBehaviorSanitizer parser run covered configuration/state, PEM/DER identity, SAN/template extensions, CES SOAP, Kerberos ticket envelopes, process-state input and maintainer options. The final 420-second run completed 25,786,400 executions without crash, sanitizer, leak, timeout or out-of-memory findings. This covers CRAFT parsers, not third-party libraries or an installed-system vulnerability assessment. It does not replace live acceptance.
+
+When site policy requires repeating parser assurance, use a disposable Linux build environment with Clang/libFuzzer installed. From the repository root after the ordinary build:
+
+```sh
+cmake -S source -B build-fuzz -DCMAKE_CXX_COMPILER=clang++ -DCRAFT_FUZZ=ON
+cmake --build build-fuzz --target craft-fuzz -j2
+mkdir -p corpus
+./build/craft-tests --fuzz-seeds corpus
+./build-fuzz/craft-fuzz -max_total_time=420 -max_len=8192 corpus
+```
+
+Rejected inputs are expected; crashes, sanitizer reports, leaks, timeouts or out-of-memory stops require review of the saved reproducer. Keep the corpus and record the revision, compiler/libraries, settings, executions and findings. Do not install assurance binaries setuid or substitute them for production executables.
+
+## Operational handover
+
+Assign owners for CRL refresh, service credential rotation, Windows certificate replacement/transfer, Linux account lifecycle, recipient/delegation review, logging and incident response. Record the pinned DC/CES endpoints, approved recipients, effective permissions, expected certificate/ticket policy and actual scheduler behavior. Exercise [acquisition disable and maintainer stop](SECURITY.md#immediate-disable). Removing a credential or cache does not revoke already-issued tickets.

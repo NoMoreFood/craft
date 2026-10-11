@@ -276,7 +276,7 @@ def acquisition(pdf):
     p.rect(550, 449, 670, 79, TEAL_LIGHT, radius=9)
     p.lines(573,
         460,
-        ["Generate RSA-3072 key and user CSR.",
+        ["Generate RSA key (default 3072 bits) and user CSR.",
         "Sign EOBO request with enrollment-agent key."],
         23,
         leading=31,
@@ -337,7 +337,7 @@ def credential_linking(pdf):
     p.rect(550, 449, 670, 79, WHITE, LINE, radius=9)
     p.lines(573,
         460,
-        ["Generate RSA-3072 key and local certificate identity.",
+        ["Generate RSA key (default 3072 bits) and local identity.",
         "Directory key matching authorizes the user."],
         22,
         leading=31,
@@ -444,7 +444,7 @@ def timing(pdf):
     p.text(64, 929, "Renewal uses the cached ticket and session key. "
            "Certificate expiry or cleanup does not revoke an issued ticket.",
            17, INK, max_width=1472)
-    p.footer("maintain.cpp: schedule, validate_renewed_tgt; worker.cpp: get_tgt; config.example: lifetime defaults")
+    p.footer("source/README.md: Configuration reference; Long-running jobs")
 
 
 def maintenance(pdf):
@@ -523,8 +523,7 @@ def maintenance(pdf):
         p.line([(x, 830), (x + width, 830)], LINE, 1.3)
         p.text(x, 845, label, 14, MUTED, "semibold")
         p.lines(x, 873, lines, 17, INK, leading=27, max_width=width)
-    p.footer("maintain.cpp: schedule, update, renewed_cache, detached loop; "
-             "common.hpp: publish_cache; source/README.md: Long-running jobs")
+    p.footer("source/README.md: Long-running jobs; source/SECURITY.md: Immediate disable")
 
 
 def home_certificate(pdf):

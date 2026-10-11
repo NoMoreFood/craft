@@ -41,7 +41,7 @@
   <circle cx="70" cy="484" r="15" fill="#007F7C" stroke="none" stroke-width="1" />
   <text x="70" y="489.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">3</text>
   <rect x="550" y="449" width="670" height="79" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
-  <text x="573" y="478.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Generate RSA-3072 key and user CSR.</text>
+  <text x="573" y="478.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Generate RSA key (default 3072 bits) and user CSR.</text>
   <text x="573" y="509.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Sign EOBO request with enrollment-agent key.</text>
   <circle cx="70" cy="593" r="15" fill="#007F7C" stroke="none" stroke-width="1" />
   <text x="70" y="598.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="middle">4</text>
