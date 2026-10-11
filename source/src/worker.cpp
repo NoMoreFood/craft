@@ -38,7 +38,9 @@ UserIdentity enroll(Kerberos &krb, const Config &cfg, Mapping &m)
 
 int main(int argc, char **argv)
 {
+    program = "craft-worker";
     uid_t requesting_uid = 0;
+    const pid_t request = getppid(); // the launcher, whose own records carry this number
     try
     {
         // Reset inherited state and select the caller or dedicated-account workflow.
@@ -137,7 +139,8 @@ int main(int argc, char **argv)
             published.withdraw();
         }
         audit(LOG_NOTICE,
-              std::format("issued TGT uid={} user={} certificate_source={} certificate_expiry={}",
+              std::format("issued TGT request={} uid={} user={} certificate_source={} certificate_expiry={}",
+                          request,
                           requesting_uid,
                           m.name,
                           home         ? "home"
@@ -149,8 +152,7 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &e)
     {
-        audit(LOG_WARNING, std::format("failed uid={}: {}", requesting_uid, e.what()));
-        dprintf(STDERR_FILENO, "craft-worker: %s\n", sanitize_ascii(e.what()).c_str());
+        report(e, std::format("issuance request={} uid={}", request, requesting_uid));
         return 1;
     }
 }

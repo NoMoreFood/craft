@@ -4,8 +4,6 @@
 // compiles common.hpp alone, so nothing here adds to the code that can run as root.
 #include "common.hpp"
 #include <poll.h>
-#include <syslog.h>
-#include <ctime>
 #include <limits>
 
 namespace craft
@@ -54,14 +52,6 @@ inline void write_record(int fd, std::string_view text)
     need(record.size() == RECORD_SIZE, "state record is too long");
     const auto count = retry([&] { return pwrite(fd, record.data(), record.size(), 0); });
     sysneed(count == static_cast<ssize_t>(record.size()), "write state record");
-}
-
-// The worker's audit trail: one AUTHPRIV entry per issuance, failure or Key Trust event.
-inline void audit(int priority, const std::string &message)
-{
-    openlog("craft", LOG_PID, LOG_AUTHPRIV);
-    syslog(priority, "%s", message.c_str());
-    closelog();
 }
 
 inline std::string root_text(const std::string &path, size_t maximum = 65536)

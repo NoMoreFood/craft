@@ -39,7 +39,7 @@ inline ScopedLdap ldap_connect(const std::string &url)
     ScopedLdap ld;
     int rc = ldap_initialize(out(ld), url.c_str());
     if (rc != LDAP_SUCCESS || !ld)
-        fail(std::format("LDAP initialize failed for {}: {}", url, ldap_err2string(rc)));
+        fail("LDAP initialize failed", std::format("{}: {}", url, ldap_err2string(rc)));
     const int version = LDAP_VERSION3;
     const ber_len_t min_ssf = 128;
     const timeval tv{10, 0};
@@ -51,7 +51,7 @@ inline ScopedLdap ldap_connect(const std::string &url)
          "LDAP protocol, timeout or encryption options rejected");
     rc = ldap_sasl_interactive_bind_s(
         ld.get(), nullptr, "GSSAPI", nullptr, nullptr, LDAP_SASL_QUIET, ldap_sasl_interact, nullptr);
-    if (rc != LDAP_SUCCESS) fail(std::format("LDAP GSSAPI bind failed to {}: {}", url, ldap_err2string(rc)));
+    if (rc != LDAP_SUCCESS) fail("LDAP GSSAPI bind failed", std::format("{}: {}", url, ldap_err2string(rc)));
     return ld;
 }
 
@@ -79,7 +79,7 @@ directory_lookup(LDAP *ld, const Config &cfg, const std::string &base_dn, const 
 
     // The size limit of two is deliberate: a truncated result still proves the name is ambiguous.
     if ((rc != LDAP_SUCCESS && rc != LDAP_SIZELIMIT_EXCEEDED) || !res)
-        fail(std::format("LDAP search failed: {}", ldap_err2string(rc)));
+        fail("LDAP search failed", ldap_err2string(rc));
     const int count = ldap_count_entries(ld, res.get());
     if (count == 0) fail(std::format("user '{}' not found in Active Directory", name));
     if (count != 1) fail(std::format("ambiguous user '{}': multiple Active Directory entries found", name));
@@ -267,39 +267,42 @@ inline void modify_key_credential(
     const int rc = ldap_modify_ext_s(ld, dn.c_str(), mods, nullptr, nullptr);
     if (cleanup_required && rc != LDAP_SUCCESS && !LDAP_API_ERROR(rc)) *cleanup_required = false;
     if (rc == LDAP_SUCCESS || (!add && rc == LDAP_NO_SUCH_ATTRIBUTE)) return;
-    fail(std::format("{} msDS-KeyCredentialLink failed: {}", add ? "add" : "remove", ldap_err2string(rc)));
+    fail(std::format("{} msDS-KeyCredentialLink failed", add ? "add" : "remove"), ldap_err2string(rc));
 }
 
-// Retry cleanup with a fresh connection and report a residual credential if the directory stays unavailable.
-inline bool
-detach_key_credential(const Config &cfg, LDAP *ld, const std::string &dn, const std::string &value) noexcept
+// Remove the value, retrying with a fresh connection, and record the outcome under `who`, which names the
+// directory object and the worker. Removal counts as done only once its record is submitted; a credential
+// that stays behind is reported for manual removal.
+inline bool detach_key_credential(const Config &cfg,
+                                  LDAP *ld,
+                                  const std::string &dn,
+                                  const std::string &value,
+                                  std::string_view who) noexcept
 {
     try
     {
-        modify_key_credential(ld, dn, value, false);
-        return true;
-    }
-    catch (const std::exception &)
-    {
-        // The live connection may have failed; fall through to a fresh bind before giving up.
-    }
-    try
-    {
-        const auto fresh = ldap_connect(cfg.kt_dc_url);
-        modify_key_credential(fresh.get(), dn, value, false);
-        return true;
+        try
+        {
+            modify_key_credential(ld, dn, value, false);
+        }
+        catch (const std::exception &)
+        {
+            // The live connection may have failed: bind afresh before giving up.
+            modify_key_credential(ldap_connect(cfg.kt_dc_url).get(), dn, value, false);
+        }
+        return try_audit(LOG_NOTICE, std::format("key credential removed {}", who));
     }
     catch (const std::exception &error)
     {
-        audit(LOG_CRIT,
-              std::format("CRITICAL: could not remove temporary msDS-KeyCredentialLink from {}; remove it "
-                          "manually ({})",
-                          dn,
-                          error.what()));
+        (void)try_audit(
+            LOG_CRIT,
+            std::format("CRITICAL: could not remove the temporary msDS-KeyCredentialLink value {}; "
+                        "remove it manually ({})",
+                        who,
+                        error.what()));
         dprintf(STDERR_FILENO,
-                "craft-worker: CRITICAL: failed to remove the temporary key credential from %s; remove it "
-                "manually\n",
-                sanitize_ascii(dn).c_str());
+                "craft-worker: CRITICAL: the temporary key credential could not be removed; tell an "
+                "administrator\n");
     }
     return false;
 }
@@ -330,6 +333,7 @@ public:
     void publish(const Config &cfg, const std::string &object_ref, const std::string &value, int lock_fd)
     {
         need(guardian_ < 0, "a key credential is already published");
+        const auto who = std::format("object={} worker={}", object_ref, getpid());
         Pipe control = make_pipe(), ready = make_pipe();
         guardian_ = fork_child(
             [&]
@@ -360,9 +364,10 @@ public:
                             [&]() noexcept
                             {
                                 if (cleanup_required)
-                                    removed = detach_key_credential(cfg, ld.get(), object_ref, value);
+                                    removed = detach_key_credential(cfg, ld.get(), object_ref, value, who);
                             });
                         modify_key_credential(ld.get(), object_ref, value, true, &cleanup_required);
+                        audit(LOG_NOTICE, std::format("key credential added {}", who));
                         const unsigned char published = 1;
                         write_all(armed, {&published, 1});
                         ::close(armed);
@@ -373,13 +378,10 @@ public:
                 }
                 catch (const std::exception &error)
                 {
-                    audit(LOG_WARNING,
-                          std::format(
-                              "key trust directory operation failed for {}: {}", object_ref, error.what()));
-                    throw;
+                    report(error, std::format("key trust {}", who));
+                    return 1;
                 }
-            },
-            "craft-worker");
+            });
         trigger_ = std::move(control.writer);
         ready.writer = Fd();
         need(read_all(ready.reader.get(), 1) == Bytes{1},

@@ -66,7 +66,7 @@ inline void sslneed(bool good, std::string_view what)
     const unsigned long e = ERR_get_error();
     char text[256]{};
     if (e) ERR_error_string_n(e, text, sizeof(text));
-    fail(e ? std::format("{}: {}", what, text) : std::string(what));
+    fail(what, text);
 }
 
 inline std::string objtext(const ASN1_OBJECT *o)

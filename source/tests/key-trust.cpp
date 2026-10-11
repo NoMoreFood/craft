@@ -1,5 +1,6 @@
 // Exercise real cleanup processes with a shared directory fixture; LDAP never leaves this process tree.
 #include "../src/directory.hpp"
+#include "audit-collector.hpp"
 #include "harness.hpp"
 #include <sys/mman.h>
 using namespace craft;
@@ -145,9 +146,16 @@ int main()
     ScopeExit unmap([&]() noexcept { (void)munmap(memory, sizeof(DirectoryFixture)); });
     Config cfg;
     cfg.kt_dc_url = "ldap://fixture.invalid";
+    char log_directory[] = "/tmp/craft-key-log-XXXXXX";
+    need(mkdtemp(log_directory) != nullptr, "audit collector directory");
+    const auto log_path = std::string(log_directory) + "/log";
+    testing::AuditCollector log(log_path);
+    ScopeExit remove_log([&]() noexcept { rmdir(log_directory); });
     const auto test = [&](const char *name, auto &&check)
     {
         *directory_fixture = {};
+        testing::audit_socket = log_path;
+        (void)log.records();
         testing::test(name, check);
     };
 
@@ -171,6 +179,19 @@ int main()
              need(!directory_fixture->attached && directory_fixture->removals == 1 &&
                       !directory_fixture->wrong_target,
                   "successful acquisition returned before cleanup");
+             const auto records = log.records(),
+                        who = std::format("object={} worker={}", OBJECT_REF, getpid());
+             need(records.find("key credential added " + who) < records.find("key credential removed " + who),
+                  "the directory change and its removal were not both recorded");
+         });
+
+    test("a key is withdrawn, and never reported published, while the logging service is unavailable",
+         [&]
+         {
+             testing::audit_socket = log_path + ".gone";
+             testing::rejects([&] { KeyCredentialGuard().publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             need(!directory_fixture->attached && directory_fixture->removals == 1,
+                  "an unrecorded key credential stayed in the directory");
          });
 
     for (int result : {LDAP_UNAVAILABLE, LDAP_NO_SUCH_OBJECT})
@@ -185,6 +206,8 @@ int main()
                  testing::rejects([&] { published.withdraw(); });
                  need(directory_fixture->attached && directory_fixture->removals == 2,
                       "cleanup failure was not retried and refused");
+                 need(log.records().find("CRITICAL: could not remove") != std::string::npos,
+                      "a residual key credential was not recorded");
              });
     }
 

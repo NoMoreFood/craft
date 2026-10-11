@@ -94,13 +94,14 @@ if(BUILD_TESTING)
   find_package(Threads REQUIRED)
   add_executable(craft-tests tests/tests.cpp)
   target_link_libraries(craft-tests PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap Threads::Threads)
-  target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds)
+  # The tests collect audit records themselves: --wrap=connect points /dev/log at their own socket.
+  target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds,--wrap=connect)
   add_test(NAME offline-tests COMMAND craft-tests)
   add_executable(craft-key-trust-tests tests/key-trust.cpp)
   target_link_libraries(craft-key-trust-tests PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap)
   target_link_options(craft-key-trust-tests PRIVATE
     -Wl,--wrap=ldap_initialize,--wrap=ldap_set_option,--wrap=ldap_sasl_interactive_bind_s
-    -Wl,--wrap=ldap_modify_ext_s,--wrap=ldap_unbind_ext_s)
+    -Wl,--wrap=ldap_modify_ext_s,--wrap=ldap_unbind_ext_s,--wrap=connect)
   add_test(NAME key-trust-cleanup COMMAND craft-key-trust-tests)
 
   # Integration harness for a disposable container only; tests/run-container-tests.sh installs and runs it.
@@ -109,5 +110,18 @@ if(BUILD_TESTING)
   target_compile_definitions(craft-maintain-proc PRIVATE CRAFT_USE_PIDFD=false)
   target_link_libraries(craft-maintain-proc PRIVATE PkgConfig::KRB5)
   add_executable(craft-maintain-tests tests/maintain-integration.cpp)
+endif()
+
+# Coverage-guided fuzzing of the parsers; TESTING.md has the procedure. libFuzzer comes with Clang.
+option(CRAFT_FUZZ "Build the libFuzzer target craft-fuzz (requires Clang)" OFF)
+if(CRAFT_FUZZ)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "CRAFT_FUZZ needs Clang: configure with -DCMAKE_CXX_COMPILER=clang++.")
+  endif()
+  add_executable(craft-fuzz tests/fuzz.cpp)
+  target_compile_options(craft-fuzz PRIVATE -g -O1 -U_FORTIFY_SOURCE
+                         -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined)
+  target_link_options(craft-fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+  target_link_libraries(craft-fuzz PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap)
 endif()
 # Intentionally no automatic setuid install target. Review before privileged install.

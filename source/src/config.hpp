@@ -87,10 +87,9 @@ inline Config parse_config(std::string_view text, bool home)
         const auto equals = line.find('=');
         need(equals != line.npos, "config line needs key=value");
         const auto key = trim(line.substr(0, equals)), value = trim(line.substr(equals + 1));
-        if (std::ranges::find(keys, key) == keys.end())
-            fail("unknown config key: " + sanitize_ascii(key, 64));
-        if (value.empty()) fail("empty config value: " + key);
-        if (!values.emplace(key, value).second) fail("duplicate config key: " + key);
+        if (std::ranges::find(keys, key) == keys.end()) fail("unknown config key", key);
+        if (value.empty()) fail("empty config value", key);
+        if (!values.emplace(key, value).second) fail("duplicate config key", key);
     }
     const auto optional = [&](std::string_view key, std::string fallback)
     {
@@ -100,7 +99,7 @@ inline Config parse_config(std::string_view text, bool home)
     const auto required = [&](std::string_view key, bool wanted = true)
     {
         const auto found = values.find(key);
-        if (wanted && found == values.end()) fail(std::format("missing config key: {}", key));
+        if (wanted && found == values.end()) fail("missing config key", key);
         return wanted ? found->second : std::string{};
     };
     const auto seconds = [&](std::string_view key, uint32_t fallback, uint32_t maximum)

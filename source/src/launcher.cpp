@@ -4,10 +4,10 @@ using namespace craft;
 
 int main(int argc, char **)
 {
+    const uid_t uid = getuid();
     try
     {
         // Validate real credentials and reset inherited process state.
-        const uid_t uid = getuid();
         const gid_t gid = getgid();
         need(argc == 1, "usage: craft (no arguments)");
         need(uid != 0 && (geteuid() == uid || geteuid() == 0), "run directly as a non-root user");
@@ -28,6 +28,9 @@ int main(int argc, char **)
         // Resolve the real UID and retain only validated worker inputs.
         const Account caller = lookup_uid(uid);
         need(simple_name(caller.name), "invalid calling account");
+
+        // Nothing privileged happens unless the host logging service takes this record.
+        audit(LOG_INFO, std::format("request started uid={} user={}", uid, caller.name));
         const int count = getgroups(0, nullptr);
         sysneed(count >= 0, "getgroups");
         std::vector<gid_t> groups(static_cast<size_t>(count));
@@ -92,6 +95,12 @@ int main(int argc, char **)
                  "worker returned no valid FILE-cache header");
             const Fd directory = caller_home(caller), lock = cache_lock(directory.get(), CACHE_LOCK);
             publish_cache(directory.get(), cache);
+            audit(LOG_NOTICE,
+                  std::format("request finished uid={} user={} outcome=published cache={}/{}",
+                              uid,
+                              caller.name,
+                              caller.home,
+                              CACHE_NAME));
             write_all(STDOUT_FILENO, byte_view(std::format("FILE:{}/{}\n", caller.home, CACHE_NAME)));
             return true;
         };
@@ -108,7 +117,7 @@ int main(int argc, char **)
     }
     catch (const std::exception &error)
     {
-        dprintf(STDERR_FILENO, "craft: %s\n", error.what());
+        report(error, std::format("request uid={}", uid));
         return 1;
     }
 }

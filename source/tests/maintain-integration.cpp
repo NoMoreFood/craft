@@ -11,7 +11,7 @@ namespace craft::integration
 {
 using Clock = std::chrono::steady_clock;
 using Status = std::map<std::string, std::string>;
-std::string maintain, fixtures, home, cache, mode, issuance;
+std::string maintain, fixtures, home, cache, mode, issuance, audit_log;
 
 struct Process
 {
@@ -141,6 +141,20 @@ Bytes read_file(const std::string &path, size_t maximum = MAX_BLOB)
     return read_all(file.get(), maximum);
 }
 
+std::string text_of_file(const std::string &path)
+{
+    const auto bytes = read_file(path, 32 * MAX_BLOB);
+    return {bytes.begin(), bytes.end()};
+}
+
+// True once the collected audit log holds `text`; records arrive a moment after they are sent.
+bool audited(std::string_view text)
+{
+    for (int attempt = 0; attempt < 500; ++attempt, poll(nullptr, 0, 20))
+        if (text_of_file(audit_log).find(text) != std::string::npos) return true;
+    return false;
+}
+
 Status status(pid_t pid)
 {
     const auto path = std::format("{}.maintain.{}.status", cache, pid);
@@ -267,6 +281,10 @@ void checks()
                           "status command did not report ready");
                  });
              need(status(watched).at("state") == "stopped", "job exit did not stop maintenance");
+             const auto session = std::format("uid={} job={}", getuid(), watched);
+             need(audited("]: maintenance started " + session) &&
+                      audited("]: maintenance stopped " + session),
+                  "the maintainer's start and stop were not recorded");
          });
     test("startup retains lifecycle descriptors with closed stdin and stderr",
          []
@@ -333,9 +351,15 @@ void checks()
                            const auto result = run(command(pid));
                            need(result.code == 0, result.error);
                            const auto report = status(pid);
+                           const auto &shown = report.at("last_error");
                            need(report.at("state") == "retrying" &&
-                                    report.at("last_error").find("renew user TGT") != std::string::npos,
-                                "renewal outage did not report retrying");
+                                    shown.find("renew user TGT: see the system log under craft-maintain[") !=
+                                        std::string::npos &&
+                                    shown.find("KDC") == std::string::npos,
+                                "renewal outage did not report retrying with a bare notice");
+                           need(audited(std::format(
+                                    "maintenance uid={} failed: renew user TGT: Cannot contact", getuid())),
+                                "the detail of the renewal failure was not recorded");
                            need(issued() == 0 && read_file(cache) == before,
                                 "renewal failure caused enrollment or cache loss");
                        });
@@ -453,7 +477,8 @@ int main(int argc, char **argv)
     using namespace craft::integration;
     try
     {
-        need(argc == 3, "usage: craft-maintain-tests CRAFT_MAINTAIN CRAFT_TESTS");
+        need(argc == 4, "usage: craft-maintain-tests CRAFT_MAINTAIN CRAFT_TESTS AUDIT_LOG");
+        audit_log = argv[3];
 
         // Refuse production accounts and verify the installed issuer is the synthetic fixture executable.
         const auto caller = lookup_uid(getuid());

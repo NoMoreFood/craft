@@ -7,15 +7,18 @@
 #include <sys/prctl.h>
 #include <sys/random.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <algorithm>
 #include <array>
@@ -26,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <format>
 #include <initializer_list>
 #include <span>
@@ -71,13 +75,33 @@ inline constexpr size_t MAX_BLOB = 1024 * 1024;
 using Bytes = std::vector<unsigned char>;
 using ByteView = std::span<const unsigned char>;
 
-// Every failure is an exception carrying its diagnostic. Messages that are costly to build belong behind an
-// explicit `if (...) fail(...)`, because arguments to need() are evaluated even when the check passes.
-[[noreturn]] inline void fail(std::string_view message)
+// Every failure is an exception. Its summary is fit for the caller to read; detail that names system files,
+// repeats what a server or a library said, or echoes configuration follows it in what() and is meant for the
+// audit log alone. Messages that are costly to build belong behind an explicit `if (...) fail(...)`, because
+// arguments to need() are evaluated even when the check passes.
+class Failure : public std::runtime_error
 {
-    throw std::runtime_error(std::string(message));
+    size_t summary_;
+
+public:
+    explicit Failure(std::string_view summary, std::string_view detail = {})
+        : std::runtime_error(detail.empty() ? std::string(summary) : std::format("{}: {}", summary, detail)),
+          summary_(summary.size())
+    {
+    }
+
+    [[nodiscard]] std::string_view summary() const noexcept
+    {
+        return std::string_view(what()).substr(0, summary_);
+    }
+};
+
+[[noreturn]] inline void fail(std::string_view summary, std::string_view detail = {})
+{
+    throw Failure(summary, detail);
 }
 
+// The text of a system error names no file, so it belongs to the summary.
 [[noreturn]] inline void sysfail(std::string_view message)
 {
     const int error = errno;
@@ -236,6 +260,70 @@ inline std::string sanitize_ascii(std::string_view text, size_t maximum = 500)
     return clean;
 }
 
+// The name this program reports and logs under; the worker and the maintainer set their own at startup.
+inline const char *program = "craft";
+
+// Hand one record to the host logging service and fail unless that service took it: CRAFT stops rather than
+// act unrecorded. What happens beyond the socket (storage, forwarding, alarms) is the service's own duty. The
+// record is bounded printable ASCII, so nothing a peer or a library says can forge another one.
+inline void audit(int priority, std::string_view message)
+{
+    const sockaddr_un service{.sun_family = AF_UNIX, .sun_path = "/dev/log"};
+    const time_t now = time(nullptr);
+    tm local{};
+    std::array<char, 16> stamp{};
+    if (localtime_r(&now, &local)) std::strftime(stamp.data(), stamp.size(), "%b %e %T", &local);
+    const auto record = std::format("<{}>{} {}[{}]: {}",
+                                    LOG_AUTHPRIV | priority,
+                                    stamp.data(),
+                                    program,
+                                    getpid(),
+                                    sanitize_ascii(message, 900));
+    const Fd log(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+    sysneed(log.get() >= 0 &&
+                connect(log.get(), reinterpret_cast<const sockaddr *>(&service), sizeof(service)) == 0 &&
+                retry([&] { return send(log.get(), record.data(), record.size(), MSG_NOSIGNAL); }) ==
+                    static_cast<ssize_t>(record.size()),
+            "submit an audit record to the host logging service");
+}
+
+// The same for a failure that is already being reported, when nothing is left to stop.
+inline bool try_audit(int priority, std::string_view message) noexcept
+{
+    try
+    {
+        audit(priority, message);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+// What the caller is told about a failure: its summary and, when there is more, where an administrator can
+// read the rest. Anything that is not a Failure is unexpected and is described no further.
+inline std::string caller_notice(const std::exception &error)
+{
+    const auto *failure = dynamic_cast<const Failure *>(&error);
+    const std::string_view summary = failure ? failure->summary() : "unexpected failure";
+    if (failure && summary.size() == std::strlen(error.what())) return sanitize_ascii(summary);
+    return sanitize_ascii(std::format("{}: see the system log under {}[{}]", summary, program, getpid()));
+}
+
+// Report a failure where a program gives up: all of it to the audit log, the notice to the caller.
+inline void report(const std::exception &error, std::string_view context) noexcept
+{
+    try
+    {
+        (void)try_audit(LOG_WARNING, std::format("{} failed: {}", context, error.what()));
+        dprintf(STDERR_FILENO, "%s: %s\n", program, caller_notice(error).c_str());
+    }
+    catch (...)
+    {
+    }
+}
+
 // Linux account names in strict ASCII syntax: nothing that could pass for a path, an option or a principal.
 inline bool simple_name(std::string_view name) noexcept
 {
@@ -284,7 +372,11 @@ enum class Trusted
 // Walk a root-controlled path component by component without following symlinks.
 [[nodiscard]] inline Fd root_open(const std::string &path, Trusted kind = Trusted::Data)
 {
-    need(path.starts_with('/'), "trusted path must be absolute");
+    const auto require = [&](bool ok, std::string_view why)
+    {
+        if (!ok) fail(why, path);
+    };
+    require(path.starts_with('/'), "trusted path must be absolute");
     Fd dir(::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
     sysneed(dir.get() >= 0, "open /");
     for (size_t start = 1;;)
@@ -292,34 +384,34 @@ enum class Trusted
         const auto slash = path.find('/', start);
         const bool last = slash == path.npos;
         const auto part = path.substr(start, last ? path.npos : slash - start);
-        need(!part.empty() && part != "." && part != "..", "invalid trusted path component");
+        require(!part.empty() && part != "." && part != "..", "invalid trusted path component");
         const int flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (last ? O_NONBLOCK : O_DIRECTORY);
         Fd next(::openat(dir.get(), part.c_str(), flags));
-        if (next.get() < 0) sysfail("open trusted path " + path);
+        if (next.get() < 0) fail(std::format("open trusted file: {}", std::strerror(errno)), path);
         struct stat st
         {
         };
         sysneed(fstat(next.get(), &st) == 0, "fstat trusted path");
-        if (st.st_uid != 0 || (st.st_mode & 0022))
-            fail("trusted path must be root-owned and not group/world-writable: " + path);
+        require(st.st_uid == 0 && !(st.st_mode & 0022),
+                "trusted file and its directories must be root-owned and not group/world-writable");
         if (last)
         {
-            need(S_ISREG(st.st_mode), "trusted file is not regular");
+            require(S_ISREG(st.st_mode), "trusted file is not regular");
             if (kind == Trusted::Worker || kind == Trusted::Launcher)
-                need((st.st_mode & 0111) &&
-                         (kind == Trusted::Launcher || !(st.st_mode & (S_ISUID | S_ISGID))),
-                     "trusted program mode is unsafe");
+                require((st.st_mode & 0111) &&
+                            (kind == Trusted::Launcher || !(st.st_mode & (S_ISUID | S_ISGID))),
+                        "trusted program mode is unsafe");
             else
-                need(st.st_size >= 0 && static_cast<uint64_t>(st.st_size) <= 8 * MAX_BLOB,
-                     "trusted file is too large");
+                require(st.st_size >= 0 && static_cast<uint64_t>(st.st_size) <= 8 * MAX_BLOB,
+                        "trusted file is too large");
 
             // Root owns a secret and others are denied, so only the service account's group can have opened
             // it.
             if (kind == Trusted::Secret)
-                need(!(st.st_mode & 0007), "secret must not be accessible to other users");
+                require(!(st.st_mode & 0007), "secret must not be accessible to other users");
             return next;
         }
-        need(S_ISDIR(st.st_mode), "trusted parent is not a directory");
+        require(S_ISDIR(st.st_mode), "trusted parent is not a directory");
         dir = std::move(next);
         start = slash + 1;
     }
@@ -410,7 +502,7 @@ inline pid_t waitpid_retry(pid_t pid, int *status = nullptr, int options = 0)
 // so a failure cannot unwind into the parent's logic or run its cleanup a second time.
 template <std::invocable F>
     requires std::convertible_to<std::invoke_result_t<F>, int>
-inline pid_t fork_child(F &&body, const char *program = "craft")
+inline pid_t fork_child(F &&body)
 {
     const pid_t pid = fork();
     sysneed(pid >= 0, "fork");
@@ -422,7 +514,7 @@ inline pid_t fork_child(F &&body, const char *program = "craft")
     }
     catch (const std::exception &error)
     {
-        dprintf(STDERR_FILENO, "%s: %s\n", program, sanitize_ascii(error.what()).c_str());
+        report(error, "child process");
     }
     catch (...)
     {

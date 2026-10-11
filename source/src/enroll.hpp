@@ -198,12 +198,19 @@ inline std::string node_text(xmlNodePtr node)
     return reinterpret_cast<const char *>(text.get());
 }
 
-// Parse a bounded response with DTDs, entities, network access and huge-document mode all refused.
+inline void discard_xml_message(void *, const char *, ...) noexcept
+{
+}
+
+// Parse a bounded response with DTDs, entities, network access and huge-document mode all refused. libxml2
+// prints some input errors on stderr whatever the parser options say, so its messages are discarded: nothing
+// a server sends may reach the caller's terminal that way.
 inline XmlDoc parse_soap(const std::string &body)
 {
     need(body.size() <= 2 * MAX_BLOB, "SOAP response exceeds limit");
     need(body.find("<!DOCTYPE") == std::string::npos && body.find("<!ENTITY") == std::string::npos,
          "DTD/entity declarations are forbidden");
+    xmlSetGenericErrorFunc(nullptr, discard_xml_message);
     XmlDoc doc(xmlReadMemory(body.data(),
                              static_cast<int>(body.size()),
                              "response.xml",
@@ -216,7 +223,7 @@ inline XmlDoc parse_soap(const std::string &body)
 inline void reject_fault(xmlDocPtr doc)
 {
     if (const auto fault = one(doc, "/s:Envelope/s:Body/s:Fault", false))
-        fail("CES SOAP fault: " + sanitize_ascii(node_text(fault)));
+        fail("CES SOAP fault", node_text(fault));
 }
 
 // Require a unique issued certificate for the generated key.
@@ -355,7 +362,7 @@ inline std::string send_ces(const Config &cfg, const std::string &request)
         headers.reset(appended);
     }
     opt(CURLOPT_HTTPHEADER, headers.get());
-    if (curl_easy_perform(c.get()) != CURLE_OK) fail("CES HTTPS failure: " + sanitize_ascii(error));
+    if (curl_easy_perform(c.get()) != CURLE_OK) fail("CES HTTPS failure", error);
     long status = 0;
     need(curl_easy_getinfo(c.get(), CURLINFO_RESPONSE_CODE, &status) == CURLE_OK, "HTTP response status");
 
@@ -363,10 +370,11 @@ inline std::string send_ces(const Config &cfg, const std::string &request)
     if (status == 500)
     {
         reject_fault(parse_soap(response).get());
-        fail("CES HTTP 500; inspect CA/CES logs");
+        fail("CES reported a server error", "HTTP 500 without a SOAP fault; inspect CA/CES logs");
     }
     if (status != 200)
-        fail(std::format("CES HTTP status {} (check endpoint, TLS mapping, SPN and authentication)", status));
+        fail("CES refused the request",
+             std::format("HTTP status {}; check endpoint, TLS mapping, SPN and authentication", status));
     return response;
 }
 

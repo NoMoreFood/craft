@@ -259,6 +259,13 @@ inline void set_text(std::span<char> field, std::string_view text)
     std::snprintf(field.data(), field.size(), "%.*s", static_cast<int>(text.size()), text.data());
 }
 
+// Record a failed operation: all of it in the audit log, the caller's notice in the status file.
+inline void record_failure(const std::exception &error, uid_t uid, Result &result)
+{
+    (void)try_audit(LOG_WARNING, std::format("maintenance uid={} failed: {}", uid, error.what()));
+    set_text(result.error, caller_notice(error));
+}
+
 // Invoke the fixed issuer with an empty environment, keeping a bounded prefix of its diagnostics.
 inline void enroll()
 {
@@ -279,8 +286,7 @@ inline void enroll()
             char *environment[] = {nullptr};
             fexecve(3, const_cast<char **>(args), environment);
             sysfail("exec issuer");
-        },
-        "craft-maintain"));
+        }));
     diagnostics.writer = Fd();
     std::string text;
     std::array<char, 4096> buffer{};
@@ -319,8 +325,8 @@ inline void claim_enrollment(int maintenance, uint32_t delay, Result &result)
     result.retry = std::min(backoff, delay);
 }
 
-// Renew with the cached session key and publish the result; a failed renewal never falls back to certificate
-// enrollment.
+// Renew with the cached session key and publish the result, once the renewal is on record; a failed renewal
+// never falls back to certificate enrollment.
 inline void renew(krb5_context ctx,
                   int home,
                   uid_t uid,
@@ -335,16 +341,13 @@ inline void renew(krb5_context ctx,
     validate_renewed_tgt(ctx, tgt, renewed, time(nullptr));
     auto bytes = renewed_cache(ctx, cache, renewed, time(nullptr));
     ScopeExit erase([&]() noexcept { wipe(bytes); });
+    audit(LOG_NOTICE, std::format("renewed TGT uid={} expiry={}", uid, renewed.times.endtime));
     publish_cache(home, bytes);
     result.end = renewed.times.endtime;
     result.renew = renewed.times.renew_till;
     const auto next = schedule(&renewed, time(nullptr));
     result.delay = next.action == Action::Idle ? next.delay : 1;
     result.success = true;
-    syslog(LOG_NOTICE,
-           "renewed TGT for uid=%lu expiry=%lld",
-           static_cast<unsigned long>(uid),
-           static_cast<long long>(result.end));
 }
 
 // One maintenance operation: leave a healthy cache alone, renew a ticket that is due, or obtain fresh
@@ -416,7 +419,7 @@ inline void update(const Account &caller, const std::string &expected, Result &r
         lock = Fd();
         enroll();
         result.retry = 0;
-        syslog(LOG_NOTICE, "obtained fresh credentials for uid=%lu", static_cast<unsigned long>(caller.uid));
+        audit(LOG_NOTICE, std::format("obtained fresh credentials uid={}", caller.uid));
     }
 }
 
@@ -497,12 +500,12 @@ run_update(const Account &caller, const std::string &expected, const Watch &watc
         }
         catch (const std::exception &error)
         {
-            set_text(result.error, sanitize_ascii(error.what()));
+            record_failure(error, caller.uid, result);
         }
         const auto count = write(channel.writer.get(), &result, sizeof(result));
         return count == static_cast<ssize_t>(sizeof(result)) ? 0 : 1;
     };
-    Child operation(fork_child(operate, "craft-maintain"), true);
+    Child operation(fork_child(operate), true);
     channel.writer = Fd();
     if (setpgid(operation.pid(), operation.pid()) != 0)
         need(errno == EACCES || errno == ESRCH, "set maintenance process group");
@@ -537,8 +540,6 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
         {
             if (ready >= 0) close(ready);
         });
-    openlog("craft-maintain", LOG_PID, LOG_AUTHPRIV);
-    ScopeExit close_log([]() noexcept { closelog(); });
     signal(SIGTERM, [](int) { stopping = 1; });
     signal(SIGINT, [](int) { stopping = 1; });
 
@@ -546,6 +547,8 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
     signal(SIGPIPE, SIG_IGN);
     try
     {
+        // Maintenance does not begin unless the host logging service takes this record.
+        audit(LOG_INFO, std::format("maintenance started uid={} job={}", caller.uid, option.watch));
         prune_stale_files(caller_home(caller).get(), time(nullptr));
         while (!stopping && Clock::now() < deadline && !exited(watch))
         {
@@ -559,7 +562,7 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
                 result.end = last.end;
                 result.renew = last.renew;
                 set_text(result.principal, expected);
-                set_text(result.error, error.what());
+                record_failure(error, caller.uid, result);
             }
             if (stopping || Clock::now() >= deadline || exited(watch)) break;
             last = result;
@@ -572,12 +575,9 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
             uint32_t delay = result.delay;
             if (result.success) failures = 0;
             else
-            {
-                syslog(LOG_WARNING, "%s", result.error);
                 delay = result.retry ? result.retry
                                      : std::min(300U, 30U << std::min(failures++, 4U)) +
                                            static_cast<uint32_t>(getpid() % 11);
-            }
             write_status(caller,
                          option.watch,
                          result.success ? "ready"
@@ -600,17 +600,18 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
     }
     catch (const std::exception &error)
     {
-        set_text(last.error, error.what());
-        syslog(LOG_ERR, "%s", last.error);
+        record_failure(error, caller.uid, last);
     }
+    const char *state = announced ? "stopped" : "failed";
     try
     {
-        write_status(caller, option.watch, announced ? "stopped" : "failed", last, 0);
+        write_status(caller, option.watch, state, last, 0);
     }
     catch (const std::exception &error)
     {
-        syslog(LOG_ERR, "%s", error.what());
+        record_failure(error, caller.uid, last);
     }
+    (void)try_audit(LOG_INFO, std::format("maintenance {} uid={} job={}", state, caller.uid, option.watch));
 }
 
 // Start the daemon in its own session and wait for it to report a usable cache.
@@ -637,8 +638,7 @@ inline void detach(const Account &caller, const Options &option, const Watch &wa
             signal(SIGHUP, SIG_IGN);
             serve(caller, option, Watch{Fd(3), watch.pollable}, 4);
             return 0;
-        },
-        "craft-maintain"));
+        }));
     startup.writer = Fd();
     need(intermediate.wait(), "background startup failed");
     const auto until = Clock::now() + std::chrono::seconds(160);

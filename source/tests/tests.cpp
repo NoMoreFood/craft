@@ -3,6 +3,8 @@
 #include "../src/enroll.hpp"
 #include "../src/maintain.hpp"
 #include "../src/pkinit.hpp"
+#include "audit-collector.hpp"
+#include "fuzz-targets.hpp"
 #include "harness.hpp"
 #include <sys/mman.h>
 #include <filesystem>
@@ -542,6 +544,74 @@ static void process_tests()
                                  "c\xc2\x80") == "a [31m b  c  ",
                   "control or non-ASCII byte kept");
              need(sanitize_ascii(std::string(600, 'x')).size() == 500, "diagnostic not bounded");
+         });
+
+    test("audit records are bounded printable text, and submission fails without the logging service",
+         [&]
+         {
+             testing::AuditCollector log(std::string(directory) + "/log");
+             audit(LOG_NOTICE, "issued\nforged[1]: uid=0 \x1b[31m" + std::string(5000, 'x'));
+             const auto record = log.next(true);
+             need(record.starts_with(std::format("<{}>", LOG_AUTHPRIV | LOG_NOTICE)) &&
+                      record.find(std::format(" craft[{}]: issued forged[1]: uid=0  [31mxxx", getpid())) !=
+                          record.npos &&
+                      record.size() < 1024 &&
+                      std::ranges::none_of(record, [](unsigned char c) { return c < 32 || c > 126; }),
+                  "audit record was not framed, bounded and reduced to printable text");
+             testing::audit_socket = std::string(directory) + "/gone";
+             rejects([] { audit(LOG_NOTICE, "unrecorded"); });
+             need(!try_audit(LOG_NOTICE, "unrecorded"), "a lost audit record was reported as submitted");
+         });
+
+    test("a failure shows the caller its summary and keeps the detail for the audit log",
+         [&]
+         {
+             const auto failure = [](std::invocable auto &&operation)
+             {
+                 try
+                 {
+                     operation();
+                 }
+                 catch (const std::exception &error)
+                 {
+                     return std::pair(std::string(error.what()), caller_notice(error));
+                 }
+                 fail("operation unexpectedly succeeded");
+             };
+             need(failure([] { fail("rate limit reached"); }).second == "rate limit reached",
+                  "a plain summary was not shown as it is");
+             const auto unexpected = failure([] { throw std::runtime_error("internal detail"); }).second;
+             need(unexpected.starts_with("unexpected failure: see the system log under craft[") &&
+                      unexpected.find("internal") == unexpected.npos,
+                  "an unexpected failure was described to the caller");
+
+             // System paths, configuration, server text and library text stay out of the caller's notice.
+             const auto hides = [&](std::string_view detail, std::invocable auto &&operation)
+             {
+                 const auto [what, shown] = failure(operation);
+                 if (what.find(detail) == what.npos || shown.find(detail) != shown.npos ||
+                     shown.find(": see the system log under craft[") == shown.npos)
+                     fail(std::format("caller notice '{}' for failure '{}'", shown, what));
+             };
+             hides("/proc/craft-missing", [] { (void)root_open("/proc/craft-missing"); });
+             hides("secret_setting", [] { fallback_config("enabled=yes\nsecret_setting=1\n"); });
+             hides("Denied by policy 7",
+                   []
+                   {
+                       parse_response(std::string("<s:Envelope xmlns:s=\"") + SOAP_NS +
+                                          "\"><s:Body><s:Fault><s:Reason>Denied by policy 7</s:Reason>"
+                                          "</s:Fault></s:Body></s:Envelope>",
+                                      nullptr);
+                   });
+             hides("error:",
+                   []
+                   {
+                       const Cert unreadable = read_cert(byte_view("-----BEGIN CERTIFICATE-----\nAA\n"));
+                       sslneed(unreadable != nullptr, "read certificate");
+                   });
+             KrbContext context;
+             need(krb5_init_context(out(context)) == 0, "notice test context");
+             hides("KDC", [&] { krb_check(context.get(), KRB5_KDC_UNREACH, "user PKINIT"); });
          });
 
     test("64-bit unsigned parsing for timestamps",
@@ -1665,6 +1735,8 @@ static void maintenance_update_tests()
         const Fd lock = cache_lock(home.get(), MAINTAIN_LOCK);
         need(ftruncate(lock.get(), 0) == 0, "reset enrollment backoff");
     };
+    const auto log_path = caller.home + "/.maintain-test-log";
+    testing::AuditCollector log(log_path);
 
     test("enrollment denial and shared cooldown cannot postpone a due renewal",
          [&]
@@ -1710,6 +1782,9 @@ static void maintenance_update_tests()
              maintenance_grant = nullptr;
              need(renewed.success && maintenance_renewals == 1 && renewed.end == grant.times.endtime,
                   "rollover did not renew the usable TGT");
+             need(log.records().find(std::format(
+                      "renewed TGT uid={} expiry={}", caller.uid, grant.times.endtime)) != std::string::npos,
+                  "the renewal left no audit record");
              need(read(".maintain-test-issuance") == issuance && read(MAINTAIN_LOCK) == retry,
                   "renewal bypassed or reset shared enrollment backoff");
              krb5_creds saved{};
@@ -1728,6 +1803,37 @@ static void maintenance_update_tests()
              rejects([&] { update(caller, {}, exhausted); });
              need(maintenance_renewals == 1 && exhausted.retry >= 45,
                   "an exhausted renewal window caused renewal or busy polling");
+         });
+    test("a renewal is not published while the logging service is unavailable",
+         [&]
+         {
+             reset();
+             const auto now = static_cast<krb5_timestamp>(time(nullptr));
+             auto due = original;
+             due.times.starttime = now - 28800 - 30;
+             due.times.endtime = now + 7200 - 30;
+             publish(due);
+             auto grant = due;
+             grant.times.starttime = now;
+             grant.times.endtime = now + 36000;
+             grant.ticket_flags &= ~TKT_FLG_INITIAL;
+             maintenance_grant = &grant;
+             ScopeExit restore(
+                 [&]() noexcept
+                 {
+                     maintenance_grant = nullptr;
+                     testing::audit_socket = log_path;
+                 });
+             const auto before = read(CACHE_NAME);
+             testing::audit_socket = caller.home + "/.maintain-test-no-log";
+             Result refused;
+             rejects([&] { update(caller, {}, refused); });
+             need(!refused.success && read(CACHE_NAME) == before, "an unrecorded renewal was published");
+             testing::audit_socket = log_path;
+             Result renewed;
+             update(caller, {}, renewed);
+             need(renewed.success && renewed.end == grant.times.endtime && read(CACHE_NAME) != before,
+                  "the renewal did not resume once it could be recorded");
          });
     for (const bool near_expiry : {false, true})
         test(near_expiry ? "a renewal grant already due for renewal is revisited promptly"
@@ -2326,12 +2432,73 @@ static void key_trust_tests(const Config &cfg, EVP_PKEY *key)
          });
 }
 
+// A seed corpus for the fuzzer, built from the fixtures the checks above use: one valid input per parser.
+static void write_fuzz_seeds(const std::string &directory)
+{
+    using testing::FuzzTarget;
+    const Key key = generate_key(2048);
+    const std::string oid = "1.3.6.1.4.1.311.21.8.999.1";
+    const Req req = make_request(key.get(), "alice@domain.local", oid, "alice");
+    const Cert leaf = fixture(key.get(), req.get());
+    const Bytes der = to_der(leaf.get(), i2d_X509, "seed certificate");
+    Bio certificate(BIO_new(BIO_s_mem())), private_key(BIO_new(BIO_s_mem()));
+    sslneed(certificate && private_key && PEM_write_bio_X509(certificate.get(), leaf.get()) == 1 &&
+                PEM_write_bio_PrivateKey(
+                    private_key.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1,
+            "seed PEM pair");
+    const auto seed = [&](const char *name, FuzzTarget target, ByteView content)
+    {
+        const Fd file(open((directory + "/" + name).c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+        sysneed(file.get() >= 0, "create fuzz seed");
+        const auto selector = static_cast<unsigned char>(target);
+        write_all(file.get(), {&selector, 1});
+        write_all(file.get(), content);
+    };
+    const std::string home = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
+    const auto fallback = home + "netbios=DOMAIN\ntemplate_oid=" + oid +
+                          "\nces_url=https://ca.domain.local/CES\nces_auth=mtls\n"
+                          "service_principal=submitter@DOMAIN.LOCAL\nkey_bits=3072\ntgt_seconds=36000\n";
+    std::string options;
+    for (const char *argument : {"--watch-pid", "123", "--max-duration", "21d", "--status"})
+        options.append(argument).push_back('\0');
+    seed("config", FuzzTarget::Config, byte_view(fallback));
+    seed("home-config", FuzzTarget::HomeConfig, byte_view(home));
+    seed("response", FuzzTarget::Response, byte_view(response_xml(der)));
+    seed("base64", FuzzTarget::Base64, byte_view(base64(der)));
+    seed("san", FuzzTarget::Extension, extension_bytes(leaf.get(), SAN_OID));
+    seed("template", FuzzTarget::Extension, extension_bytes(leaf.get(), TEMPLATE_OID));
+    seed("pem-certificate", FuzzTarget::Pem, bioview(certificate.get()));
+    seed("pem-key", FuzzTarget::Pem, bioview(private_key.get()));
+    seed("der", FuzzTarget::Der, der);
+    seed("ticket", FuzzTarget::Ticket, ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96));
+    seed("options", FuzzTarget::Options, byte_view(options));
+    seed("record", FuzzTarget::Record, byte_view(std::format("{:<63}\n", "1700000000 3")));
+    seed("text", FuzzTarget::Text, byte_view("Linux {user} {upn} {domain}"));
+    seed("stat",
+         FuzzTarget::ProcStat,
+         byte_view("1234 (sleep) S 1 1234 1234 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 100 1000 100\n"));
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 3 && std::string_view(argv[1]) == "--fuzz-seeds")
+    {
+        write_fuzz_seeds(argv[2]);
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--maintain-update-tests")
     {
         maintenance_update_tests();
         return failed ? 1 : 0;
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--collect-audit")
+    {
+        // Stand in for the host logging service inside the disposable test container, until killed.
+        testing::AuditCollector log(argv[2], false);
+        const Fd file(open(argv[3], O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+        sysneed(file.get() >= 0, "open the audit collection file");
+        for (;;)
+            write_all(file.get(), byte_view(log.next(true) + "\n"));
     }
     if (argc == 3 && std::string_view(argv[1]) == "--maintain-fixture")
     {

@@ -17,9 +17,22 @@ chmod 0700 /home/craft-maintain-test
 printf '%s\n' '[libdefaults]' ' dns_lookup_kdc = false' ' udp_preference_limit = 1' \
     '[realms]' ' DOMAIN.LOCAL = {' '  kdc = 127.0.0.1:9' ' }' >/etc/krb5.conf
 
+# Stand in for the host logging service, which a container lacks: CRAFT refuses to act without one.
+audit=$(mktemp)
+chmod 0644 "$audit"
+rm -f /dev/log
+"$build/craft-tests" --collect-audit /dev/log "$audit" &
+collector=$!
+trap 'kill "$collector" 2>/dev/null; rm -f "$audit" /dev/log' EXIT
+for attempt in 1 2 3 4 5; do
+    [ -S /dev/log ] && break
+    sleep 1
+done
+
 # Run the harness once per way of watching the job: a pidfd, and the /proc form used where pidfd_open is missing.
 install -o root -g root -m 0755 "$build/craft-tests" /usr/local/bin/craft
 for maintainer in craft-maintain craft-maintain-proc; do
     echo "== $maintainer"
-    runuser -u craft-maintain-test -- "$build/craft-maintain-tests" "$build/$maintainer" "$build/craft-tests"
+    runuser -u craft-maintain-test -- \
+        "$build/craft-maintain-tests" "$build/$maintainer" "$build/craft-tests" "$audit"
 done

@@ -4,6 +4,7 @@
 int main(int argc, char **argv)
 {
     using namespace craft;
+    program = "craft-maintain";
     try
     {
         ensure_standard_streams();
@@ -41,7 +42,7 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &error)
     {
-        dprintf(STDERR_FILENO, "craft-maintain: %s\n", error.what());
+        report(error, std::format("command uid={}", getuid()));
         return 1;
     }
 }

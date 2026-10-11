@@ -1,0 +1,25 @@
+# /etc/audit/rules.d/craft.rules - host audit coverage for CRAFT; load with `augenrules --load`.
+# These complete the records CRAFT writes itself (AUTHPRIV, tags craft, craft-worker and craft-maintain):
+# who read or changed its files, who ran the privileged launcher, and every address it connected to.
+# Paths are the default installation layout; change them to match a packaged build.
+
+# Changes to configuration, trust anchors, CRLs and secrets, with the login identity that made them.
+-w /etc/craft/ -p wa -k craft-config
+
+# Every read of a service secret, permitted or refused. Drop the lines for files this host does not hold.
+-w /etc/craft/submitter.keytab -p r -k craft-secret
+-w /etc/craft/agent.key -p r -k craft-secret
+-w /etc/craft/https-client.key -p r -k craft-secret
+
+# Replacement of the installed programs.
+-w /usr/local/bin/craft -p wa -k craft-program
+-w /usr/local/libexec/craft-worker -p wa -k craft-program
+-w /usr/local/bin/craft-maintain -p wa -k craft-program
+
+# Each use of the setuid launcher, as for any other privileged command.
+-a always,exit -F path=/usr/local/bin/craft -F perm=x -F auid>=1000 -F auid!=unset -k privileged-craft
+
+# Destination addresses: every connection the worker and the maintainer open, which covers CES, LDAP, the
+# KDC and name resolution whichever library makes the call.
+-a always,exit -F arch=b64 -S connect -F exe=/usr/local/libexec/craft-worker -k craft-network
+-a always,exit -F arch=b64 -S connect -F exe=/usr/local/bin/craft-maintain -k craft-network

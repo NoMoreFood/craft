@@ -20,6 +20,7 @@ The synthetic fixtures cover:
 - Exception-safe C output adoption, resource ownership, secret-buffer erasure, bounded I/O, sealed memfd behavior, WSTEP parsing and malformed/DTD/oversized responses.
 - Version-4 FILE cache serialization read back by MIT Kerberos.
 - Maintainer options/scheduling, renewal validation, service-ticket preservation, atomic publication, locking and job-exit tracking.
+- Audit records and caller notices: record framing, bounding and reduction to printable text; refusal when the logging service is absent; Key Trust add and remove records, and withdrawal of a key whose record was not taken; a renewal that is not published unrecorded; and failures whose system paths, configuration, server text and library text stay out of what the caller is shown.
 
 The test tickets use the literal marker `NOT-A-REAL-TICKET` as ciphertext. These are local parser/policy fixtures, not forged working tickets, authenticated Kerberos exchanges or proof that a Windows KDC grants the requested lifetime. No real user credentials, CA enrollment or domain-controller traffic was used.
 
@@ -63,9 +64,70 @@ The script creates the `craft-maintain-test` account, installs `craft-tests` as 
 against `craft-maintain-proc`, the same program forced onto the `/proc` job watch that kernels without
 `pidfd_open` (RHEL 8) use.
 
+The script also runs `craft-tests --collect-audit` as a stand-in for the host logging service, which a container
+lacks and without which CRAFT refuses to act; the harness reads the maintainer's audit records from what it collects.
+
 Checks cover startup/closed pipes, status, job-exit/duration cleanup, credential expiry/rollover, concurrent starts,
-shared backoff, cancellation and unsafe caches. The KDC address intentionally refuses connections to verify renewal
+shared backoff, cancellation, unsafe caches, the maintainer's start and stop records, and a failure whose detail
+reaches the audit log but not the status file. The KDC address intentionally refuses connections to verify renewal
 failures preserve credentials without enrollment. These checks establish lifecycle behavior, not live renewal success.
+
+## Fuzz Testing
+
+`craft-fuzz` is a libFuzzer harness over every parser that takes bytes someone else controls: the configuration,
+state records, supplied PEM certificates and keys, DER certificates, the hand-decoded subjectAltName and template
+extensions, the CES SOAP response, the outer Kerberos ticket, `/proc/<pid>/stat` and the `craft-maintain` command
+line. It builds with Clang, AddressSanitizer and UndefinedBehaviorSanitizer. `craft-tests --fuzz-seeds` writes one
+valid input per parser from the unit-test fixtures. From `source/`, after the ordinary build:
+
+```sh
+cmake -S . -B build-fuzz -DCMAKE_CXX_COMPILER=clang++ -DCRAFT_FUZZ=ON
+cmake --build build-fuzz --target craft-fuzz -j2
+mkdir -p corpus && ./build/craft-tests --fuzz-seeds corpus
+./build-fuzz/craft-fuzz -jobs=8 -workers=8 -max_total_time=420 -max_len=8192 corpus
+```
+
+An input the parser rejects is a pass. A crash, sanitizer report, leak, timeout or out-of-memory stop leaves a
+reproducer file and is a finding; so is anything a parser prints. Run the fuzzer by itself: on a starved machine
+libFuzzer writes `slow-unit-*` files for inputs that replay in milliseconds. Keep the corpus between runs, and record
+the commit, compiler and library versions, duration, executions and findings of each run. This exercises CRAFT's own
+parsing code. It is not a scan of an installed system and does not replace the live checks below.
+
+### Fuzz run — October 11, 2026
+
+Working tree based on `d540bd7`, in a disposable Ubuntu 24.04 container with Clang 18.1.3, libstdc++ 13.3,
+OpenSSL 3.0.13, MIT Kerberos 1.20.1 and libxml2 2.9.14.
+
+- Final sources: eight workers for 420 seconds, 25,786,400 executions, 2,068 coverage edges. No crash, sanitizer
+  report, leak, timeout or out-of-memory stop.
+- An earlier 20-minute run of about 46 million executions, before the fix below, also produced no crash or
+  sanitizer report. It shared the machine with three builds; its thirteen `slow-unit-*` inputs each replayed in
+  2 ms or less on an idle machine.
+- One finding, fixed: libxml2 printed `encoding error` messages for malformed CES responses on the worker's stderr,
+  which the caller sees, despite `XML_PARSE_NOERROR`. `parse_soap` now discards libxml2's messages.
+
+## Audit and Diagnostics Validation — October 11, 2026
+
+The same working tree built without warnings under `-DCMAKE_COMPILE_WARNING_AS_ERROR=ON` on Ubuntu 24.04 (GCC 13.3),
+AlmaLinux 8.10 and AlmaLinux 9 (gcc-toolset-13). On each: 109 offline checks (106 unprivileged), 10 Key Trust
+checks and 16 maintainer integration checks per job-watch variant passed. The Ubuntu build also passed every suite
+under AddressSanitizer and UndefinedBehaviorSanitizer.
+
+On AlmaLinux 8.10 the installed setuid launcher, worker and maintainer ran against a disposable MIT KDC 1.18.2 with
+PKINIT, a test CA with current CRLs, and `craft-tests --collect-audit` on `/dev/log`:
+
+- A home pair obtained a ten-hour AES256 TGT renewable for seven days. The log held `request started`,
+  `issued TGT request=...` and `request finished ... outcome=published`, tied together by the launcher's process ID.
+- `craft-maintain` started with no cache, obtained a three-minute TGT through the launcher and renewed it against
+  the KDC 144 seconds later. The log held `maintenance started`, `obtained fresh credentials`, `renewed TGT` and
+  `maintenance stopped`.
+- With the KDC unreachable, a group-writable or malformed configuration, and an unsafe home key, the caller saw only
+  the summary and a log reference, while the Kerberos message, the file path and the configuration key appeared
+  in the log alone. The rate limit and the unsafe key file were shown to the caller in full.
+- With no logging socket the launcher refused to start and no worker ran.
+
+Not exercised: AD, AD CS or CES; journald, rsyslog or auditd themselves; and the example host audit rules in
+`config/craft.audit.rules`, which a container cannot load.
 
 ## Maintainer Validation — September 30, 2026
 

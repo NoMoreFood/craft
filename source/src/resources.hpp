@@ -76,7 +76,7 @@ inline void krb_check(krb5_context ctx, krb5_error_code code, std::string_view o
     if (!code) return;
     if (!ctx) fail(operation);
     auto message = krb_owner<const char, krb5_free_error_message>(ctx, krb5_get_error_message(ctx, code));
-    fail(std::format("{}: {}", operation, message ? message.get() : "Kerberos error"));
+    fail(operation, message ? message.get() : "Kerberos error");
 }
 
 using KrbContext = Owned<std::remove_pointer_t<krb5_context>, krb5_free_context>;
