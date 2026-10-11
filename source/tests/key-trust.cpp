@@ -91,8 +91,8 @@ static void aborted_worker(const Config &cfg, int signum, int lock_fd)
         try
         {
             signal(SIGALRM, SIG_DFL);
-            pid_t guardian = -1;
-            Fd trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, lock_fd);
+            KeyCredentialGuard published;
+            published.publish(cfg, OBJECT_REF, KEY_VALUE, lock_fd);
             const unsigned char armed = 1;
             write_all(writer.get(), {&armed, 1});
             writer = Fd();
@@ -155,36 +155,20 @@ int main()
          [&]
          {
              directory_fixture->add_result = LDAP_TIMEOUT;
-             Fd trigger;
-             pid_t guardian = -1;
-             int status = -1;
-             bool rejected = false;
-             try
-             {
-                 ScopeExit cleanup(
-                     [&]() noexcept
-                     {
-                         trigger = Fd();
-                         if (guardian > 0) (void)waitpid_retry(guardian, &status);
-                     });
-                 trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, -1);
-             }
-             catch (const std::exception &)
-             {
-                 rejected = true;
-             }
-             need(rejected && WIFEXITED(status) && WEXITSTATUS(status) == 1 && !directory_fixture->attached &&
-                      directory_fixture->removals == 1 && !directory_fixture->wrong_target,
+             testing::rejects([&] { KeyCredentialGuard().publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             need(!directory_fixture->attached && directory_fixture->removals == 1 &&
+                      !directory_fixture->wrong_target,
                   "committed write was not removed after its response was lost");
          });
 
     test("successful acquisition waits for single-value cleanup",
          [&]
          {
-             pid_t guardian = -1;
-             Fd trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, -1);
-             finish_key_credential_cleanup(trigger, guardian);
-             need(guardian == -1 && !directory_fixture->attached && directory_fixture->removals == 1 &&
+             KeyCredentialGuard published;
+             published.publish(cfg, OBJECT_REF, KEY_VALUE, -1);
+             need(directory_fixture->attached, "publication returned before the key was written");
+             published.withdraw();
+             need(!directory_fixture->attached && directory_fixture->removals == 1 &&
                       !directory_fixture->wrong_target,
                   "successful acquisition returned before cleanup");
          });
@@ -196,19 +180,10 @@ int main()
              [&]
              {
                  directory_fixture->delete_result = result;
-                 pid_t guardian = -1;
-                 Fd trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, -1);
-                 bool rejected = false;
-                 try
-                 {
-                     finish_key_credential_cleanup(trigger, guardian);
-                 }
-                 catch (const std::exception &)
-                 {
-                     rejected = true;
-                 }
-                 need(rejected && directory_fixture->attached && directory_fixture->removals == 2 &&
-                          guardian == -1,
+                 KeyCredentialGuard published;
+                 published.publish(cfg, OBJECT_REF, KEY_VALUE, -1);
+                 testing::rejects([&] { published.withdraw(); });
+                 need(directory_fixture->attached && directory_fixture->removals == 2,
                       "cleanup failure was not retried and refused");
              });
     }
@@ -217,19 +192,8 @@ int main()
          [&]
          {
              directory_fixture->bind_result = LDAP_UNAVAILABLE;
-             pid_t guardian = -1;
-             bool rejected = false;
-             try
-             {
-                 Fd trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, -1);
-             }
-             catch (const std::exception &)
-             {
-                 rejected = true;
-             }
-             int status{};
-             if (guardian > 0) (void)waitpid_retry(guardian, &status);
-             need(rejected && !directory_fixture->attached && directory_fixture->removals == 0,
+             testing::rejects([&] { KeyCredentialGuard().publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             need(!directory_fixture->attached && directory_fixture->removals == 0,
                   "publication was allowed without armed cleanup");
          });
 
@@ -237,19 +201,8 @@ int main()
          [&]
          {
              directory_fixture->add_result = LDAP_INSUFFICIENT_ACCESS;
-             pid_t guardian = -1;
-             bool rejected = false;
-             try
-             {
-                 Fd trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, -1);
-             }
-             catch (const std::exception &)
-             {
-                 rejected = true;
-             }
-             int status{};
-             if (guardian > 0) (void)waitpid_retry(guardian, &status);
-             need(rejected && !directory_fixture->attached && directory_fixture->removals == 0,
+             testing::rejects([&] { KeyCredentialGuard().publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             need(!directory_fixture->attached && directory_fixture->removals == 0,
                   "a directory refusal was mistaken for an uncertain write");
          });
 
@@ -261,8 +214,8 @@ int main()
              sysneed(worker >= 0, "fixture publication worker");
              if (worker == 0)
              {
-                 pid_t guardian = -1;
-                 Fd trigger = start_key_credential_cleanup(cfg, OBJECT_REF, KEY_VALUE, guardian, -1);
+                 KeyCredentialGuard published;
+                 published.publish(cfg, OBJECT_REF, KEY_VALUE, -1);
                  _exit(1);
              }
              ScopeExit reap(

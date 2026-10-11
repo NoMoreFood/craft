@@ -304,79 +304,100 @@ detach_key_credential(const Config &cfg, LDAP *ld, const std::string &dn, const 
     return false;
 }
 
-// Publish the credential from an independent guardian process that also owns its removal, so the key is
-// withdrawn however the worker ends and even when the outcome of the LDAP write is uncertain. Closing the
-// returned descriptor triggers removal.
-inline Fd start_key_credential_cleanup(
-    const Config &cfg, const std::string &object_ref, const std::string &value, pid_t &child, int lock_fd)
+// A temporary key credential, published by an independent guardian process that also owns its removal: the
+// key is withdrawn however the worker ends, and even when the outcome of the LDAP write is uncertain.
+class KeyCredentialGuard
 {
-    Pipe control = make_pipe(), ready = make_pipe();
-    child = fork_child(
-        [&]
-        {
-            // Leave the caller's session and block every signal: the worker's alarm, its death, and the
-            // terminal's interrupt, quit, suspend and hangup must not stop cleanup or release the issuance
-            // lock.
-            sigset_t all;
-            sigfillset(&all);
-            alarm(0);
-            sysneed(setsid() >= 0 && prctl(PR_SET_PDEATHSIG, 0) == 0 &&
-                        sigprocmask(SIG_BLOCK, &all, nullptr) == 0,
-                    "isolate key cleanup process");
-            {
-                const Fd null(open("/dev/null", O_RDWR));
-                sysneed(null.get() >= 0 && dup2(null.get(), STDIN_FILENO) == STDIN_FILENO &&
-                            dup2(null.get(), STDOUT_FILENO) == STDOUT_FILENO,
-                        "key cleanup standard descriptors");
-            }
-            constexpr int trigger = 3, armed = 4; // the issuance lock, when held, stays open as 5
-            keep_only({control.reader.get(), ready.writer.get(), lock_fd});
-            try
-            {
-                // Bind a separate connection; an LDAP socket inherited across fork must never be shared.
-                const auto ld = ldap_connect(cfg.kt_dc_url);
-                bool cleanup_required = false, removed = false;
-                {
-                    ScopeExit cleanup(
-                        [&]() noexcept
-                        {
-                            if (cleanup_required)
-                                removed = detach_key_credential(cfg, ld.get(), object_ref, value);
-                        });
-                    modify_key_credential(ld.get(), object_ref, value, true, &cleanup_required);
-                    const unsigned char published = 1;
-                    write_all(armed, {&published, 1});
-                    ::close(armed);
-                    unsigned char ignored;
-                    (void)retry([&] { return read(trigger, &ignored, 1); });
-                }
-                return removed ? 0 : 1;
-            }
-            catch (const std::exception &error)
-            {
-                audit(
-                    LOG_WARNING,
-                    std::format("key trust directory operation failed for {}: {}", object_ref, error.what()));
-                throw;
-            }
-        },
-        "craft-worker");
-    control.reader = Fd();
-    ready.writer = Fd();
-    need(read_all(ready.reader.get(), 1) == Bytes{1},
-         "key trust publication failed; existing cache was not replaced");
-    return std::move(control.writer);
-}
+    Fd trigger_;
+    pid_t guardian_ = -1;
 
-// Release credentials only after the guardian confirms successful removal.
-inline void finish_key_credential_cleanup(Fd &trigger, pid_t &child)
-{
-    trigger = Fd();
-    int status{};
-    const pid_t pid = std::exchange(child, -1);
-    sysneed(waitpid_retry(pid, &status) == pid, "wait for key cleanup");
-    need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-         "temporary key credential cleanup failed; existing cache was not replaced");
-}
+public:
+    KeyCredentialGuard() = default;
+
+    KeyCredentialGuard(const KeyCredentialGuard &) = delete;
+
+    KeyCredentialGuard &operator=(const KeyCredentialGuard &) = delete;
+
+    // Closing the pipe has the guardian remove the key, which also covers an acquisition that throws.
+    ~KeyCredentialGuard()
+    {
+        trigger_ = Fd();
+        if (guardian_ > 0) (void)waitpid_retry(guardian_);
+    }
+
+    // Start the guardian and return once the directory holds the key. The caller's issuance lock, when it
+    // holds one, stays open in the guardian until the key is gone.
+    void publish(const Config &cfg, const std::string &object_ref, const std::string &value, int lock_fd)
+    {
+        need(guardian_ < 0, "a key credential is already published");
+        Pipe control = make_pipe(), ready = make_pipe();
+        guardian_ = fork_child(
+            [&]
+            {
+                // Leave the caller's session and block every signal: the worker's alarm, its death, and the
+                // terminal's interrupt, quit, suspend and hangup must not stop cleanup or release the
+                // issuance lock.
+                sigset_t all;
+                sigfillset(&all);
+                alarm(0);
+                sysneed(setsid() >= 0 && sigprocmask(SIG_BLOCK, &all, nullptr) == 0,
+                        "isolate key cleanup process");
+                {
+                    const Fd null(open("/dev/null", O_RDWR));
+                    sysneed(null.get() >= 0 && dup2(null.get(), STDIN_FILENO) == STDIN_FILENO &&
+                                dup2(null.get(), STDOUT_FILENO) == STDOUT_FILENO,
+                            "key cleanup standard descriptors");
+                }
+                constexpr int trigger = 3, armed = 4; // the issuance lock, when held, stays open as 5
+                keep_only({control.reader.get(), ready.writer.get(), lock_fd});
+                try
+                {
+                    // Bind a separate connection; an LDAP socket inherited across fork must never be shared.
+                    const auto ld = ldap_connect(cfg.kt_dc_url);
+                    bool cleanup_required = false, removed = false;
+                    {
+                        ScopeExit cleanup(
+                            [&]() noexcept
+                            {
+                                if (cleanup_required)
+                                    removed = detach_key_credential(cfg, ld.get(), object_ref, value);
+                            });
+                        modify_key_credential(ld.get(), object_ref, value, true, &cleanup_required);
+                        const unsigned char published = 1;
+                        write_all(armed, {&published, 1});
+                        ::close(armed);
+                        unsigned char ignored;
+                        (void)retry([&] { return read(trigger, &ignored, 1); });
+                    }
+                    return removed ? 0 : 1;
+                }
+                catch (const std::exception &error)
+                {
+                    audit(LOG_WARNING,
+                          std::format(
+                              "key trust directory operation failed for {}: {}", object_ref, error.what()));
+                    throw;
+                }
+            },
+            "craft-worker");
+        trigger_ = std::move(control.writer);
+        ready.writer = Fd();
+        need(read_all(ready.reader.get(), 1) == Bytes{1},
+             "key trust publication failed; existing cache was not replaced");
+    }
+
+    // Remove the key and confirm that it has gone: credentials may be released only after this returns.
+    // Nothing happens when no key was published.
+    void withdraw()
+    {
+        if (guardian_ < 0) return;
+        trigger_ = Fd();
+        int status{};
+        const pid_t pid = std::exchange(guardian_, -1);
+        sysneed(waitpid_retry(pid, &status) == pid, "wait for key cleanup");
+        need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+             "temporary key credential cleanup failed; existing cache was not replaced");
+    }
+};
 
 } // namespace craft

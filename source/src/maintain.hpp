@@ -2,10 +2,10 @@
 
 // Detached, unprivileged credential maintenance for an explicitly watched batch process.
 #include "resources.hpp"
+#include "unprivileged.hpp"
 #include <poll.h>
 #include <syslog.h>
 #include <chrono>
-#include <sstream>
 
 // The test suite builds a second maintainer with this off to exercise kernels without pidfd_open (RHEL 8).
 #ifndef CRAFT_USE_PIDFD
@@ -15,8 +15,9 @@
 namespace craft::maintain
 {
 using Clock = std::chrono::steady_clock;
+
+// Serializes one user's maintainers; the file also holds the enrollment backoff record they share.
 inline constexpr char MAINTAIN_LOCK[] = ".krb5cc_craft.maintain.lock";
-inline constexpr char RETRY_STATE[] = ".krb5cc_craft.maintain.retry";
 inline volatile sig_atomic_t stopping = 0;
 
 struct Options
@@ -293,6 +294,61 @@ inline void enroll()
     if (!issuer.wait()) fail("fresh credential acquisition failed: " + trim(text));
 }
 
+// Take the next fresh enrollment from the backoff that all of one user's jobs share, so an outage cannot
+// become a certificate storm. The record, "<earliest next attempt> <failures>", is kept in the maintenance
+// lock file, which the caller holds, and is cleared once the cache needs nothing again.
+inline void claim_enrollment(int maintenance, uint32_t delay, Result &result)
+{
+    uint64_t next = 0;
+    uint32_t failures = 0;
+    if (const auto state = read_record(maintenance); !state.empty())
+    {
+        const auto space = state.find(' ');
+        need(space != state.npos, "invalid enrollment retry state");
+        next = number<uint64_t>(std::string_view(state).substr(0, space));
+        failures = number(std::string_view(state).substr(space + 1), 7);
+    }
+    const auto now = static_cast<uint64_t>(time(nullptr));
+    if (next > now)
+    {
+        result.retry = static_cast<uint32_t>(std::min(next - now, uint64_t{delay}));
+        fail(std::format("fresh enrollment retry is delayed until Unix {}", next));
+    }
+    const uint32_t backoff = std::min(3600U, 60U << failures);
+    write_record(maintenance, std::format("{} {}", now + backoff, std::min(failures + 1, 7U)));
+    result.retry = std::min(backoff, delay);
+}
+
+// Renew with the cached session key and publish the result; a failed renewal never falls back to certificate
+// enrollment.
+inline void renew(krb5_context ctx,
+                  int home,
+                  uid_t uid,
+                  krb5_ccache cache,
+                  krb5_principal client,
+                  const krb5_creds &tgt,
+                  Result &result)
+{
+    krb5_creds renewed{};
+    ScopeExit free([&]() noexcept { krb5_free_cred_contents(ctx, &renewed); });
+    krb_check(ctx, krb5_get_renewed_creds(ctx, &renewed, client, cache, nullptr), "renew user TGT");
+    validate_renewed_tgt(ctx, tgt, renewed, time(nullptr));
+    auto bytes = renewed_cache(ctx, cache, renewed, time(nullptr));
+    ScopeExit erase([&]() noexcept { wipe(bytes); });
+    publish_cache(home, bytes);
+    result.end = renewed.times.endtime;
+    result.renew = renewed.times.renew_till;
+    const auto next = schedule(&renewed, time(nullptr));
+    result.delay = next.action == Action::Idle ? next.delay : 1;
+    result.success = true;
+    syslog(LOG_NOTICE,
+           "renewed TGT for uid=%lu expiry=%lld",
+           static_cast<unsigned long>(uid),
+           static_cast<long long>(result.end));
+}
+
+// One maintenance operation: leave a healthy cache alone, renew a ticket that is due, or obtain fresh
+// credentials and then check the cache they produced.
 inline void update(const Account &caller, const std::string &expected, Result &result)
 {
     const Fd home = caller_home(caller), maintenance = cache_lock(home.get(), MAINTAIN_LOCK);
@@ -344,62 +400,23 @@ inline void update(const Account &caller, const std::string &expected, Result &r
         }
         const auto plan = schedule(found ? &tgt : nullptr, time(nullptr));
         result.delay = plan.delay;
+        if (plan.action == Action::Renew)
+        {
+            renew(ctx, home.get(), caller.uid, cache.get(), client.get(), tgt, result);
+            return;
+        }
         if (plan.action == Action::Idle)
         {
-            unlinkat(home.get(), RETRY_STATE, 0);
+            sysneed(ftruncate(maintenance.get(), 0) == 0, "clear enrollment backoff");
             result.success = true;
             return;
         }
-        if (plan.action == Action::Enroll)
-        {
-            need(attempt == 0, "fresh enrollment returned no sufficiently usable TGT");
-
-            // Share enrollment backoff across jobs so outages cannot create a certificate storm.
-            const Fd retry = cache_lock(home.get(), RETRY_STATE);
-            uint64_t next = 0;
-            uint32_t failures = 0;
-            if (const auto state = read_record(retry.get()); !state.empty())
-            {
-                std::istringstream input(state);
-                need(static_cast<bool>(input >> next >> failures) && failures <= 7,
-                     "invalid enrollment retry state");
-            }
-            const auto now = static_cast<uint64_t>(time(nullptr));
-            if (next > now)
-            {
-                result.retry = static_cast<uint32_t>(std::min(next - now, uint64_t{plan.delay}));
-                fail(std::format("fresh enrollment retry is delayed until Unix {}", next));
-            }
-            result.retry = std::min(3600U, 60U << failures);
-            write_record(retry.get(), std::format("{} {}", now + result.retry, std::min(failures + 1, 7U)));
-            result.retry = std::min(result.retry, plan.delay);
-            lock = Fd();
-            enroll();
-            result.retry = 0;
-            syslog(
-                LOG_NOTICE, "obtained fresh credentials for uid=%lu", static_cast<unsigned long>(caller.uid));
-            continue;
-        }
-
-        // Renew using the cached session key; a failed renewal never falls back to certificate enrollment.
-        krb5_creds renewed{};
-        ScopeExit free_renewed([&]() noexcept { krb5_free_cred_contents(ctx, &renewed); });
-        krb_check(
-            ctx, krb5_get_renewed_creds(ctx, &renewed, client.get(), cache.get(), nullptr), "renew user TGT");
-        validate_renewed_tgt(ctx, tgt, renewed, time(nullptr));
-        auto bytes = renewed_cache(ctx, cache.get(), renewed, time(nullptr));
-        ScopeExit erase([&]() noexcept { wipe(bytes); });
-        publish_cache(home.get(), bytes);
-        result.end = renewed.times.endtime;
-        result.renew = renewed.times.renew_till;
-        const auto next = schedule(&renewed, time(nullptr));
-        result.delay = next.action == Action::Idle ? next.delay : 1;
-        result.success = true;
-        syslog(LOG_NOTICE,
-               "renewed TGT for uid=%lu expiry=%lld",
-               static_cast<unsigned long>(caller.uid),
-               static_cast<long long>(result.end));
-        return;
+        need(attempt == 0, "fresh enrollment returned no sufficiently usable TGT");
+        claim_enrollment(maintenance.get(), plan.delay, result);
+        lock = Fd();
+        enroll();
+        result.retry = 0;
+        syslog(LOG_NOTICE, "obtained fresh credentials for uid=%lu", static_cast<unsigned long>(caller.uid));
     }
 }
 
@@ -549,12 +566,18 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
             if (!expected.empty()) need(expected == result.principal, "maintenance identity changed");
             else if (result.principal[0]) expected = result.principal;
             const bool usable = result.end > time(nullptr) && result.principal[0];
+
+            // A failed operation that names no retry time backs off from 30 seconds to five minutes, offset
+            // per process so that jobs started together do not all retry together.
+            uint32_t delay = result.delay;
             if (result.success) failures = 0;
-            else syslog(LOG_WARNING, "%s", result.error);
-            const uint32_t delay = result.success ? result.delay
-                                   : result.retry ? result.retry
-                                                  : std::min(300U, 30U << std::min(failures++, 4U)) +
-                                                        static_cast<uint32_t>(getpid() % 11);
+            else
+            {
+                syslog(LOG_WARNING, "%s", result.error);
+                delay = result.retry ? result.retry
+                                     : std::min(300U, 30U << std::min(failures++, 4U)) +
+                                           static_cast<uint32_t>(getpid() % 11);
+            }
             write_status(caller,
                          option.watch,
                          result.success ? "ready"

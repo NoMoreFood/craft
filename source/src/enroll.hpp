@@ -98,17 +98,6 @@ make_request(EVP_PKEY *key, std::string_view upn, const std::string &template_id
     return req;
 }
 
-// Serialize any i2d-encodable OpenSSL object to DER.
-template <class T, class Encode> inline Bytes to_der(T *object, Encode encode, std::string_view what)
-{
-    const int n = encode(object, nullptr);
-    sslneed(n > 0, what);
-    Bytes b(static_cast<size_t>(n));
-    auto p = b.data();
-    sslneed(encode(object, &p) == n, what);
-    return b;
-}
-
 inline Bytes request_der(X509_REQ *req)
 {
     return to_der(req, i2d_X509_REQ, "CSR DER");
@@ -299,7 +288,7 @@ inline size_t receive(void *p, size_t size, size_t nmemb, void *target) noexcept
 inline std::string send_ces(const Config &cfg, const std::string &request)
 {
     const auto trust = path("https-trust.pem"), crls = path("https-crls.pem");
-    root_open(trust);
+    require_trusted(trust);
     Owned<CURL, curl_easy_cleanup> c(curl_easy_init());
     need(c != nullptr, "curl handle");
     std::string response;
@@ -336,12 +325,12 @@ inline std::string send_ces(const Config &cfg, const std::string &request)
     // An optional CRL bundle enforces revocation for the whole CES server chain.
     if (access(crls.c_str(), F_OK) == 0)
     {
-        root_open(crls);
+        require_trusted(crls);
         opt(CURLOPT_CRLFILE, crls.c_str());
     }
 
     // Permit only configured Negotiate or mTLS; CES must disallow GSS NTLM fallback.
-    if (cfg.ces_auth == "negotiate")
+    if (cfg.ces_negotiate)
     {
         need(curl_version_info(CURLVERSION_NOW)->features & CURL_VERSION_SPNEGO,
              "libcurl lacks SPNEGO; use a distribution libcurl with GSSAPI/MIT Kerberos support");
@@ -352,8 +341,8 @@ inline std::string send_ces(const Config &cfg, const std::string &request)
     else
     {
         const auto certificate = path("https-client.pem"), key = path("https-client.key");
-        root_open(certificate);
-        root_open(key, Trusted::Secret);
+        require_trusted(certificate);
+        require_trusted(key, Trusted::Secret);
         opt(CURLOPT_SSLCERT, certificate.c_str());
         opt(CURLOPT_SSLKEY, key.c_str());
     }

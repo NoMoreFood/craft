@@ -101,16 +101,22 @@ inline Bytes der(unsigned char tag, ByteView value)
     return join(std::move(b), value);
 }
 
-inline Bytes oid_der(const std::string &oid)
+// Serialize any i2d-encodable OpenSSL object to DER.
+template <class T, class Encode> inline Bytes to_der(T *object, Encode encode, std::string_view what)
 {
-    Obj o(OBJ_txt2obj(oid.c_str(), 1));
-    sslneed(o != nullptr, "OID parse");
-    const int n = i2d_ASN1_OBJECT(o.get(), nullptr);
-    sslneed(n > 0, "OID length");
+    const int n = encode(object, nullptr);
+    sslneed(n > 0, what);
     Bytes b(static_cast<size_t>(n));
     auto p = b.data();
-    sslneed(i2d_ASN1_OBJECT(o.get(), &p) == n, "OID DER");
+    sslneed(encode(object, &p) == n, what);
     return b;
+}
+
+inline Bytes oid_der(const std::string &oid)
+{
+    const Obj o(OBJ_txt2obj(oid.c_str(), 1));
+    sslneed(o != nullptr, "OID parse");
+    return to_der(o.get(), i2d_ASN1_OBJECT, "OID DER");
 }
 
 inline Bio membio(ByteView b)
@@ -223,7 +229,7 @@ inline UserIdentity load_user_identity(const UserIdentityFiles &files)
     return identity;
 }
 
-inline Key generate_key(int bits = 3072)
+inline Key generate_key(int bits)
 {
     Owned<EVP_PKEY_CTX, EVP_PKEY_CTX_free> ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr));
     sslneed(ctx && EVP_PKEY_keygen_init(ctx.get()) > 0 &&
@@ -367,8 +373,8 @@ inline time_t as_time(const ASN1_TIME *a)
 inline void verify_chain(X509 *x)
 {
     const auto trust = path("ca-trust.pem"), crls = path("ca-crls.pem");
-    root_open(trust);
-    root_open(crls);
+    require_trusted(trust);
+    require_trusted(crls);
     Owned<X509_STORE, X509_STORE_free> s(X509_STORE_new());
     sslneed(s && X509_STORE_load_locations(s.get(), trust.c_str(), nullptr) == 1, "load CA trust");
     X509_LOOKUP *lookup = X509_STORE_add_lookup(s.get(), X509_LOOKUP_file());
@@ -388,13 +394,11 @@ struct Mapping
     std::string name, upn, object_ref = {};
 };
 
-// Enforce logon identity and usage; enrollment additionally pins the template and short validity.
-inline time_t validate_leaf(X509 *c,
-                            EVP_PKEY *key,
-                            const Mapping &m,
-                            const Config &cfg,
-                            CertificateSource source = CertificateSource::Enrollment)
+// Enforce logon identity and usage for the configured certificate source; enrollment additionally pins the
+// template and short validity.
+inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Config &cfg)
 {
+    const auto source = cfg.source;
     sslneed(X509_check_private_key(c, key) == 1, "user certificate public key mismatch");
 
     // An end-entity certificate may omit basicConstraints, as stock AD CS templates do; only supplied home

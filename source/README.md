@@ -431,7 +431,7 @@ See [SECURITY.md](SECURITY.md) and [TESTING.md](TESTING.md) before deployment. T
 
 ## Request a Home Certificate on Windows
 
-[`Request-CRAFT-Certificate.cmd`](../scripts/Request-CRAFT-Certificate.cmd) is a CMD/Windows PowerShell 5.x polyglot that requests a certificate as the signed-in domain user and exports the home PEM pair. Run it without elevation on a Windows computer that can reach AD and its enterprise CA enrollment endpoints. Windows PowerShell 5.x, .NET Framework 4.6 or newer, and the Windows PKI module are required; RSAT and OpenSSL are unnecessary.
+[`Request-CRAFT-Certificate.cmd`](../scripts/Request-CRAFT-Certificate.cmd) is a CMD/Windows PowerShell 5.1 polyglot that requests a certificate as the signed-in domain user and exports the home PEM pair. Run it without elevation on a Windows computer that can reach AD and its enterprise CA enrollment endpoints. Windows PowerShell 5.1, .NET Framework 4.7.2 or newer, and the Windows PKI module are required; RSAT and OpenSSL are unnecessary.
 
 Choose a template's internal name or OID that permits this user's direct enrollment and exportable RSA or ECDSA software keys. Its certificate profile must meet the [home certificate requirements](#mode-3-workflow-unprivileged-windows-exported-certificate) and the KDC's mapping policy. The Windows account must map to the intended Linux username and realm. Windows [AD enrollment policy](https://learn.microsoft.com/en-us/powershell/module/pki/get-certificate) selects an eligible CA; no CA name, enrollment agent or administrator credential is supplied.
 

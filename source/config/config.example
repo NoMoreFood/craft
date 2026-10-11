@@ -35,7 +35,7 @@ template_oid=1.3.6.1.4.1.311.21.8.999.1
 certificate_cn={user}
 
 # Generated RSA key bit length for fallback credentials (mechanism=enrollment or key_trust).
-# Accepts 2048, 3072, or 4096 (bit_strength also accepted as alias). Defaults to 3072.
+# Accepts 2048, 3072, or 4096. Defaults to 3072.
 # For enrollment it must be at least the template's minimum key size, or the CA refuses the request.
 # key_bits=3072
 

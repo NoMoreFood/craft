@@ -42,8 +42,9 @@ int main(int argc, char **argv)
     try
     {
         // Reset inherited state and select the caller or dedicated-account workflow.
-        const bool home = argc == 4 && std::string_view(argv[1]) == "--home";
-        need(home || argc == 3, "worker is not a public interface; use craft");
+        const std::string_view mode = argc == 4 ? argv[1] : "";
+        const bool home = mode == "home";
+        need(home || mode == "fallback", "worker is not a public interface; use craft");
         sysneed(clearenv() == 0 && setenv("KRB5_CONFIG", path("krb5.conf").c_str(), 1) == 0 &&
                     setenv("HOME", "/nonexistent", 1) == 0 && setenv("LANG", "C", 1) == 0,
                 "set worker environment");
@@ -58,8 +59,8 @@ int main(int argc, char **argv)
                 "worker resource limits");
 
         // Re-resolve the runtime UID and validate the requesting account.
-        requesting_uid = number(argv[home ? 2 : 1]);
-        Mapping m{.name = argv[home ? 3 : 2], .upn = {}};
+        requesting_uid = number(argv[2]);
+        Mapping m{.name = argv[3], .upn = {}};
         need(requesting_uid != 0 && simple_name(m.name), "invalid requesting account");
         const Account caller = lookup_uid(requesting_uid);
         need(caller.name == m.name, "runtime UID/name changed; administrator review required");
@@ -84,11 +85,10 @@ int main(int argc, char **argv)
         }
 
         // The configuration selects the fallback mechanism when no home pair is present.
-        const Config cfg = config(home ? CertificateSource::Home : CertificateSource::Enrollment);
-        const CertificateSource source = cfg.source;
+        const Config cfg = config(home);
 
         // Only CA enrollment uses libcurl; balance its initialization across normal and exceptional exits.
-        const bool enrollment = source == CertificateSource::Enrollment;
+        const bool enrollment = cfg.source == CertificateSource::Enrollment;
         if (enrollment) need(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK, "curl initialize");
         ScopeExit cleanup_curl(
             [enrollment]() noexcept
@@ -97,8 +97,8 @@ int main(int argc, char **argv)
             });
         Fd lock;
         if (!home) lock = rate_limit(runtime_directory().get(), requesting_uid, cfg.interval, time(nullptr));
-        root_open(path("kdc-trust.pem"));
-        root_open(path("kdc-crls.pem"));
+        require_trusted(path("kdc-trust.pem"));
+        require_trusted(path("kdc-crls.pem"));
 
         // Keep the caller principal fixed; the KDC enforces certificate-to-account mapping in every mode.
         Kerberos krb;
@@ -106,18 +106,11 @@ int main(int argc, char **argv)
         ScopeExit erase([&]() noexcept { wipe(result); });
         time_t end = 0;
         {
-            // Acquire and validate the certificate identity, publishing no Key Trust key beyond this scope.
+            // Acquire and validate the certificate identity. A Key Trust key stays published no longer than
+            // this scope lasts, however it is left.
             UserIdentity identity;
             Cert kt_ca;
-            Fd kt_trigger;
-            pid_t kt_guardian = -1;
-            ScopeExit kt_cleanup(
-                [&]() noexcept
-                {
-                    // Closing the pipe also triggers removal when acquisition throws.
-                    kt_trigger = Fd();
-                    if (kt_guardian > 0) (void)waitpid_retry(kt_guardian);
-                });
+            KeyCredentialGuard published;
             if (home) identity = load_user_identity(files);
             else if (enrollment) identity = enroll(krb, cfg, m);
             else
@@ -132,17 +125,16 @@ int main(int argc, char **argv)
                 identity.certificate = std::move(pair.leaf);
                 kt_ca = std::move(pair.ca);
                 const auto blob = key_credential_blob(identity.key.get(), KEY_TRUST_DEVICE_ID, time(nullptr));
-                kt_trigger = start_key_credential_cleanup(
-                    cfg, m.object_ref, dn_binary(blob, m.object_ref), kt_guardian, lock.get());
+                published.publish(cfg, m.object_ref, dn_binary(blob, m.object_ref), lock.get());
             }
 
             // The Key Trust certificate is authorized by the directory write, not a CA chain.
-            if (source != CertificateSource::KeyTrust) verify_chain(identity.certificate.get());
-            end = validate_leaf(identity.certificate.get(), identity.key.get(), m, cfg, source);
+            if (cfg.source != CertificateSource::KeyTrust) verify_chain(identity.certificate.get());
+            end = validate_leaf(identity.certificate.get(), identity.key.get(), m, cfg);
             result = get_tgt(krb, cfg, m, identity.certificate.get(), identity.key.get(), kt_ca.get());
 
             // Remove the Key Trust key before any credential bytes leave this process.
-            if (kt_guardian > 0) finish_key_credential_cleanup(kt_trigger, kt_guardian);
+            published.withdraw();
         }
         audit(LOG_NOTICE,
               std::format("issued TGT uid={} user={} certificate_source={} certificate_expiry={}",

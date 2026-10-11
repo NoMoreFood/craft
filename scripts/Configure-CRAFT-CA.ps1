@@ -214,7 +214,7 @@ function Initialize-ExportDirectory([string]$Directory)
         }
     }
     $files = @(Get-ChildItem -LiteralPath $fullPath -Force)
-    $names = @('agent.pfx', 'submitter.keytab', 'ca.crt', 'ca.crl', 'config', 'krb5.conf', 'template_oid.txt')
+    $names = @('agent.pfx', 'submitter.keytab', 'ca.crt', 'ca.crl', 'config', 'krb5.conf')
     foreach ($file in $files)
     {
         $acl = Get-Acl -LiteralPath $file.FullName
@@ -222,7 +222,7 @@ function Initialize-ExportDirectory([string]$Directory)
             ($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
             $acl.GetOwner($sidType).Value -notin $allowed)
         {
-            throw "ExportPath must contain only ordinary, trusted CRAFT export files."
+            throw "ExportPath must contain only ordinary, trusted CRAFT export files; '$($file.Name)' is not one."
         }
         foreach ($rule in $acl.GetAccessRules($true, $true, $sidType))
         {
@@ -774,9 +774,6 @@ if (-not $existingOidObj)
                  } | Out-Null
     Write-Info "Registered Enterprise OID object: $oidCN"
 }
-
-# Write template OID to export file for CRAFT
-$newOid | Set-Content -Path (Join-Path $ExportPath "template_oid.txt") -Encoding ASCII
 
 # -----------------------------------------------------------------------------
 # 4. Configure Security Permissions (ACL) on Templates

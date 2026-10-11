@@ -46,6 +46,18 @@ static void rejects(std::invocable auto &&f)
     ERR_clear_error();
 }
 
+// Nearly every configuration check exercises the privileged fallback rather than a supplied home pair.
+static Config fallback_config(std::string_view text)
+{
+    return parse_config(text, false);
+}
+
+static Config with_source(Config cfg, CertificateSource source)
+{
+    cfg.source = source;
+    return cfg;
+}
+
 static Bytes biobytes(BIO *b)
 {
     const auto view = bioview(b);
@@ -72,9 +84,7 @@ static void remove_ext(X509 *c, const char *oid)
 
 static void set_ext_conf(X509 *c, int nid, const char *value)
 {
-    Ext ext(X509V3_EXT_conf_nid(nullptr, nullptr, nid, const_cast<char *>(value)));
-    sslneed(ext != nullptr, "fixture extension config");
-    add_ext(c, std::move(ext));
+    add_ext(c, conf_extension(nid, value));
 }
 
 static Cert fixture(EVP_PKEY *key, X509_REQ *req = nullptr)
@@ -123,16 +133,6 @@ static Cert fixture(EVP_PKEY *key, X509_REQ *req = nullptr)
 
     sslneed(X509_sign(c.get(), key, EVP_sha256()) > 0, "fixture certificate signature");
     return c;
-}
-
-static Bytes cert_der(X509 *c)
-{
-    int n = i2d_X509(c, nullptr);
-    sslneed(n > 0, "fixture cert length");
-    Bytes out(static_cast<size_t>(n));
-    auto p = out.data();
-    sslneed(i2d_X509(c, &p) == n, "fixture cert encoding");
-    return out;
 }
 
 static std::string response_xml(const Bytes &data, const std::string &value_type = X509_TOKEN)
@@ -291,7 +291,7 @@ static void helper_tests()
     test("configuration defaults and explicit limits",
          [&]
          {
-             const auto defaults = parse_config(valid);
+             const auto defaults = fallback_config(valid);
              need(defaults.tgt == 36000 && defaults.renew == 604800 && defaults.cert_remaining == 36000 &&
                       defaults.cert_total == 36000 && defaults.require_full_tgt_lifetime &&
                       defaults.certificate_cn == "{user}" && defaults.interval == 60 &&
@@ -299,7 +299,7 @@ static void helper_tests()
                       defaults.gc_base_dn == "DC=domain,DC=local",
                   "default policy changed");
 
-             const auto explicit_limits = parse_config(
+             const auto explicit_limits = fallback_config(
                  valid +
                  "tgt_seconds=120\nrenew_seconds=240\ncert_remaining_max_seconds=300\ncert_total_max_seconds="
                  "600\nminimum_interval_seconds=90\ngc_url=ldap://"
@@ -310,51 +310,41 @@ static void helper_tests()
                       explicit_limits.gc_base_dn == "DC=custom,DC=local",
                   "limits not parsed");
 
-             need(parse_config(valid + "renew_seconds=0\n").renew == 0, "renew=0 not accepted");
+             need(fallback_config(valid + "renew_seconds=0\n").renew == 0, "renew=0 not accepted");
          });
 
     test("configuration parses editable CN and explicit shorter-ticket consent",
          [&]
          {
              const auto c =
-                 parse_config(valid + "certificate_cn=Linux {user}\nrequire_full_tgt_lifetime=no\n");
+                 fallback_config(valid + "certificate_cn=Linux {user}\nrequire_full_tgt_lifetime=no\n");
              need(c.certificate_cn == "Linux {user}" && !c.require_full_tgt_lifetime,
                   "new configuration controls not parsed");
-             rejects([&] { parse_config(valid + "require_full_tgt_lifetime=maybe\n"); });
+             rejects([&] { fallback_config(valid + "require_full_tgt_lifetime=maybe\n"); });
          });
 
-    test("configuration parses key bit strength and aliases",
+    test("configuration accepts only the supported key sizes",
          [&]
          {
-             need(parse_config(valid + "key_bits=2048\n").key_bits == 2048, "key_bits=2048");
-             need(parse_config(valid + "key_bits=3072\n").key_bits == 3072, "key_bits=3072");
-             need(parse_config(valid + "key_bits=4096\n").key_bits == 4096, "key_bits=4096");
-             need(parse_config(valid + "bit_strength=2048\n").key_bits == 2048, "bit_strength=2048");
-             need(parse_config(valid + "bit_strength=3072\n").key_bits == 3072, "bit_strength=3072");
-             need(parse_config(valid + "bit_strength=4096\n").key_bits == 4096, "bit_strength=4096");
-             rejects([&] { parse_config(valid + "key_bits=1024\n"); });
-             rejects([&] { parse_config(valid + "key_bits=512\n"); });
-             rejects([&] { parse_config(valid + "key_bits=8192\n"); });
-             rejects([&] { parse_config(valid + "key_bits=invalid\n"); });
-             rejects([&] { parse_config(valid + "bit_strength=1024\n"); });
-             rejects([&] { parse_config(valid + "key_bits=2048\nbit_strength=2048\n"); });
+             for (const uint32_t bits : {2048U, 3072U, 4096U})
+                 need(fallback_config(valid + std::format("key_bits={}\n", bits)).key_bits == bits,
+                      "supported key size rejected");
+             for (auto setting :
+                  {"key_bits=1024\n", "key_bits=512\n", "key_bits=8192\n", "key_bits=invalid\n"})
+                 rejects([&] { fallback_config(valid + setting); });
          });
 
     test("home credential configuration needs no enrollment settings",
          []
          {
              const std::string text = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
-             const auto cfg = parse_config(text, CertificateSource::Home);
+             const auto cfg = parse_config(text, true);
              need(cfg.domain == "domain.local" && cfg.realm == "DOMAIN.LOCAL" &&
                       cfg.service_principal.empty() && cfg.ces_url.empty() && cfg.tgt == 36000 &&
                       cfg.renew == 604800 && cfg.source == CertificateSource::Home,
                   "home configuration policy");
-             rejects([&] { parse_config(text); });
-             rejects(
-                 [] {
-                     parse_config("enabled=no\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n",
-                                  CertificateSource::Home);
-                 });
+             rejects([&] { fallback_config(text); });
+             rejects([] { parse_config("enabled=no\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n", true); });
          });
 
     test("key trust mechanism selects the directory path without CA settings",
@@ -363,7 +353,7 @@ static void helper_tests()
              const std::string base = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
                                       "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n"
                                       "kt_dc_url=ldap://dc.domain.local\n";
-             const auto cfg = parse_config(base);
+             const auto cfg = fallback_config(base);
              need(cfg.source == CertificateSource::KeyTrust && cfg.kt_dc_url == "ldap://dc.domain.local" &&
                       cfg.service_principal == "svc@DOMAIN.LOCAL" && cfg.ces_url.empty() &&
                       cfg.template_oid.empty() && cfg.netbios.empty(),
@@ -373,41 +363,41 @@ static void helper_tests()
              rejects(
                  [&]
                  {
-                     parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                  "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n");
+                     fallback_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                     "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n");
                  });
              rejects(
                  [&]
                  {
-                     parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                  "mechanism=key_trust\nkt_dc_url=ldap://dc.domain.local\n");
+                     fallback_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                     "mechanism=key_trust\nkt_dc_url=ldap://dc.domain.local\n");
                  });
              rejects([&]
-                     { parse_config(base.substr(0, base.find("kt_dc_url=")) + "kt_dc_url=http://dc\n"); });
+                     { fallback_config(base.substr(0, base.find("kt_dc_url=")) + "kt_dc_url=http://dc\n"); });
              rejects(
                  [&]
                  {
-                     parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                  "mechanism=shadow\nservice_principal=svc@DOMAIN.LOCAL\n");
+                     fallback_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                     "mechanism=shadow\nservice_principal=svc@DOMAIN.LOCAL\n");
                  });
 
              // Active Directory refuses the GSSAPI security layer inside TLS, and no TLS trust is configured.
              const auto without_dc = base.substr(0, base.find("kt_dc_url="));
-             rejects([&] { parse_config(without_dc + "kt_dc_url=ldaps://dc.domain.local\n"); });
-             rejects([&] { parse_config(base + "gc_url=ldaps://gc.domain.local:3269\n"); });
-             rejects([&] { parse_config(base + "gc_url=ldap://user@gc.domain.local\n"); });
+             rejects([&] { fallback_config(without_dc + "kt_dc_url=ldaps://dc.domain.local\n"); });
+             rejects([&] { fallback_config(base + "gc_url=ldaps://gc.domain.local:3269\n"); });
+             rejects([&] { fallback_config(base + "gc_url=ldap://user@gc.domain.local\n"); });
          });
 
     test("configuration rejects disabled missing unknown and duplicate settings",
          [&]
          {
-             rejects([&] { parse_config(valid + "enabled=yes\n"); });
-             rejects([&] { parse_config(valid + "unknown=yes\n"); });
-             rejects([&] { parse_config(valid + "service_principal=\n"); });
-             rejects([&] { parse_config(std::string_view(valid).substr(12)); });
+             rejects([&] { fallback_config(valid + "enabled=yes\n"); });
+             rejects([&] { fallback_config(valid + "unknown=yes\n"); });
+             rejects([&] { fallback_config(valid + "service_principal=\n"); });
+             rejects([&] { fallback_config(std::string_view(valid).substr(12)); });
              auto disabled = valid;
              disabled.replace(8, 3, "no");
-             rejects([&] { parse_config(disabled); });
+             rejects([&] { fallback_config(disabled); });
          });
 
     test("configuration preserves lifetime rate and transport restrictions",
@@ -421,20 +411,21 @@ static void helper_tests()
                                   "minimum_interval_seconds=29\n",
                                   "cert_remaining_max_seconds=59\n",
                                   "cert_total_max_seconds=600\n"})
-                 rejects([&] { parse_config(valid + setting); });
+                 rejects([&] { fallback_config(valid + setting); });
 
              auto negotiate = valid;
              negotiate.replace(negotiate.find("mtls"), 4, "negotiate");
-             need(parse_config(negotiate).ces_auth == "negotiate", "configured Negotiate rejected");
+             need(fallback_config(negotiate).ces_negotiate && !fallback_config(valid).ces_negotiate,
+                  "CES authentication choice was not parsed");
              for (auto config : {valid, negotiate})
              {
                  const auto principal = config.find("service_principal=");
-                 rejects([&] { parse_config(config.substr(0, principal)); });
-                 rejects([&] { parse_config(config.substr(0, principal) + "service_principal=\n"); });
+                 rejects([&] { fallback_config(config.substr(0, principal)); });
+                 rejects([&] { fallback_config(config.substr(0, principal) + "service_principal=\n"); });
              }
              auto unsupported = valid;
              unsupported.replace(unsupported.find("mtls"), 4, "basic");
-             rejects([&] { parse_config(unsupported); });
+             rejects([&] { fallback_config(unsupported); });
          });
 
     test("configuration rejects malformed DNS labels in domains and realms",
@@ -445,14 +436,14 @@ static void helper_tests()
              {
                  auto config = valid;
                  config.replace(config.find("domain.local"), 12, domain);
-                 rejects([&] { parse_config(config); });
+                 rejects([&] { fallback_config(config); });
              }
              for (auto realm :
                   {"-DOMAIN.LOCAL", "DOMAIN-.LOCAL", "DOMAIN..LOCAL", ".DOMAIN.LOCAL", "DOMAIN.LOCAL."})
              {
                  auto config = valid;
                  config.replace(config.find("DOMAIN.LOCAL"), 12, realm);
-                 rejects([&] { parse_config(config); });
+                 rejects([&] { fallback_config(config); });
              }
              for (auto domain : {std::string(64, 'a') + ".local",
                                  std::string("Domain.local"),
@@ -461,11 +452,11 @@ static void helper_tests()
              {
                  auto config = valid;
                  config.replace(config.find("domain.local"), 12, domain);
-                 rejects([&] { parse_config(config); });
+                 rejects([&] { fallback_config(config); });
              }
              auto config = valid;
              config.replace(config.find("DOMAIN.LOCAL"), 12, "domain.local");
-             rejects([&] { parse_config(config); });
+             rejects([&] { fallback_config(config); });
          });
 
     test("domain_to_dn formats DNS domain to LDAP distinguished name",
@@ -601,12 +592,13 @@ static void process_tests()
              rejects([&] { write_record(file.get(), std::string(RECORD_SIZE, '1')); });
              need(read_record(file.get()) == "17", "rejected write changed the record");
 
-             // Records written by earlier releases were shorter and newline-terminated.
-             need(ftruncate(file.get(), 0) == 0 && pwrite(file.get(), "1700000001\n", 11, 0) == 11,
-                  "legacy record");
-             need(read_record(file.get()) == "1700000001", "legacy record unreadable");
-             need(ftruncate(file.get(), RECORD_SIZE + 1) == 0, "oversized record fixture");
-             rejects([&] { read_record(file.get()); });
+             // Anything but an empty file or one whole record is refused.
+             for (const size_t size : {size_t{11}, RECORD_SIZE + 1})
+             {
+                 need(ftruncate(file.get(), static_cast<off_t>(size)) == 0, "malformed record fixture");
+                 rejects([&] { read_record(file.get()); });
+             }
+             need(ftruncate(file.get(), 0) == 0 && read_record(file.get()).empty(), "cleared record");
          });
 
     test("private files refuse links, other users' access and oversized content",
@@ -701,7 +693,7 @@ static void process_tests()
              const auto kept = {".krb5cc_craft.maintain.222.status",
                                 ".krb5cc_craft",
                                 ".krb5cc_craft.lock",
-                                ".krb5cc_craft.maintain.retry",
+                                ".krb5cc_craft.maintain.lock",
                                 "unrelated.status"};
              for (const char *name : stale)
                  make(name, 8 * 86400);
@@ -914,14 +906,14 @@ static void process_tests()
                                       base + "//public",
                                       base,
                                       std::string("run/relative")})
-                 rejects([&] { root_open(path); });
-             rejects([&] { root_open(base + "/public", Trusted::Secret); });
-             rejects([&] { root_open(base + "/public", Trusted::Worker); });
-             rejects([&] { root_open(base + "/public", Trusted::Launcher); });
-             rejects([&] { root_open(base + "/setuid", Trusted::Worker); });
-             rejects([&] { root_open(base + "/program"); });
+                 rejects([&] { require_trusted(path); });
+             rejects([&] { require_trusted(base + "/public", Trusted::Secret); });
+             rejects([&] { require_trusted(base + "/public", Trusted::Worker); });
+             rejects([&] { require_trusted(base + "/public", Trusted::Launcher); });
+             rejects([&] { require_trusted(base + "/setuid", Trusted::Worker); });
+             rejects([&] { require_trusted(base + "/program"); });
              need(chmod((base + "/sub").c_str(), 0775) == 0, "writable parent fixture");
-             rejects([&] { root_open(base + "/sub/file"); });
+             rejects([&] { require_trusted(base + "/sub/file"); });
          });
 
     test("a privilege drop is permanent and leaves no dumps, new privileges or extra groups",
@@ -1665,11 +1657,19 @@ static void maintenance_update_tests()
         wipe(bytes);
     };
 
+    // Forget earlier issuances and the enrollment backoff, which is kept in the maintenance lock file.
+    auto reset = [&]
+    {
+        need(unlinkat(home.get(), ".maintain-test-issuance", 0) == 0 || errno == ENOENT,
+             "reset issuance count");
+        const Fd lock = cache_lock(home.get(), MAINTAIN_LOCK);
+        need(ftruncate(lock.get(), 0) == 0, "reset enrollment backoff");
+    };
+
     test("enrollment denial and shared cooldown cannot postpone a due renewal",
          [&]
          {
-             for (const char *name : {".maintain-test-issuance", ".krb5cc_craft.maintain.retry"})
-                 need(unlinkat(home.get(), name, 0) == 0 || errno == ENOENT, "reset enrollment state");
+             reset();
              const Fd mode(openat(home.get(), ".maintain-test-mode", O_WRONLY | O_CREAT | O_TRUNC, 0600));
              need(mode.get() >= 0, "deny test enrollment");
              write_all(mode.get(), byte_view("deny"));
@@ -1685,8 +1685,7 @@ static void maintenance_update_tests()
              rejects([&] { update(caller, {}, denied); });
              need(!denied.success && denied.retry > 0 && denied.retry <= 30,
                   "enrollment backoff delays renewal");
-             const auto issuance = read(".maintain-test-issuance"),
-                        retry = read(".krb5cc_craft.maintain.retry");
+             const auto issuance = read(".maintain-test-issuance"), retry = read(MAINTAIN_LOCK);
              need(std::ranges::count(issuance, '\n') == 1, "enrollment denial was not exercised");
              std::istringstream retry_state(std::string(retry.begin(), retry.end()));
              int64_t next = 0;
@@ -1711,8 +1710,7 @@ static void maintenance_update_tests()
              maintenance_grant = nullptr;
              need(renewed.success && maintenance_renewals == 1 && renewed.end == grant.times.endtime,
                   "rollover did not renew the usable TGT");
-             need(read(".maintain-test-issuance") == issuance &&
-                      read(".krb5cc_craft.maintain.retry") == retry,
+             need(read(".maintain-test-issuance") == issuance && read(MAINTAIN_LOCK) == retry,
                   "renewal bypassed or reset shared enrollment backoff");
              krb5_creds saved{};
              ScopeExit free([&]() noexcept { krb5_free_cred_contents(ctx, &saved); });
@@ -1736,9 +1734,7 @@ static void maintenance_update_tests()
                          : "a shortened renewal window triggers prompt enrollment",
              [&]
              {
-                 for (const char *name : {".maintain-test-issuance", ".krb5cc_craft.maintain.retry"})
-                     need(unlinkat(home.get(), name, 0) == 0 || errno == ENOENT,
-                          "reset shortened grant state");
+                 reset();
                  const Fd mode(openat(home.get(), ".maintain-test-mode", O_WRONLY | O_CREAT | O_TRUNC, 0600));
                  need(mode.get() >= 0, "enable test enrollment");
                  write_all(mode.get(), byte_view("healthy"));
@@ -1782,6 +1778,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
     need(mkdtemp(path) != nullptr, "user identity test directory");
     const Account caller{.uid = getuid(), .gid = getgid(), .name = "alice", .home = path};
     const auto config_path = caller.home + "/.config", directory_path = config_path + "/craft";
+    const Config home_cfg = with_source(cfg, CertificateSource::Home);
     ScopeExit cleanup(
         [&]() noexcept
         {
@@ -1828,8 +1825,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
              const auto files = user_identity_files(caller);
              auto identity = load_user_identity(files);
              need(X509_cmp(identity.certificate.get(), leaf) == 0 &&
-                      validate_leaf(
-                          identity.certificate.get(), identity.key.get(), map, cfg, CertificateSource::Home) >
+                      validate_leaf(identity.certificate.get(), identity.key.get(), map, home_cfg) >
                           time(nullptr),
                   "loaded identity differs");
              auto other_caller = caller;
@@ -1937,7 +1933,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
              set_ext_conf(certificate.get(), NID_ext_key_usage, SMARTCARD_OID);
              need(X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 365 * 86400),
                   "ordinary validity fixture");
-             need(validate_leaf(certificate.get(), key, map, cfg, CertificateSource::Home) > time(nullptr),
+             need(validate_leaf(certificate.get(), key, map, home_cfg) > time(nullptr),
                   "home certificate rejected ordinary profile");
              rejects([&] { validate_leaf(certificate.get(), key, map, cfg); });
          });
@@ -1946,10 +1942,11 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
          {
              Cert certificate(X509_dup(leaf));
              remove_ext(certificate.get(), "2.5.29.19");
-             need(validate_leaf(certificate.get(), key, map, cfg, CertificateSource::Home) > time(nullptr),
+             need(validate_leaf(certificate.get(), key, map, home_cfg) > time(nullptr),
                   "home certificate without basicConstraints rejected");
-             rejects([&] { validate_leaf(certificate.get(), key, map, cfg, CertificateSource::Enrollment); });
-             rejects([&] { validate_leaf(certificate.get(), key, map, cfg, CertificateSource::KeyTrust); });
+             const Config key_trust = with_source(cfg, CertificateSource::KeyTrust);
+             rejects([&] { validate_leaf(certificate.get(), key, map, cfg); });
+             rejects([&] { validate_leaf(certificate.get(), key, map, key_trust); });
          });
     test("home certificate retains logon identity usage and expiry checks",
          [&]
@@ -1958,7 +1955,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
              {
                  Cert certificate(X509_dup(leaf));
                  mutation(certificate.get());
-                 rejects([&] { validate_leaf(certificate.get(), key, map, cfg, CertificateSource::Home); });
+                 rejects([&] { validate_leaf(certificate.get(), key, map, home_cfg); });
              };
              reject([](X509 *c) { X509_gmtime_adj(X509_getm_notAfter(c), -1); });
              reject([](X509 *c) { X509_gmtime_adj(X509_getm_notBefore(c), 60); });
@@ -1996,65 +1993,11 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
          });
 }
 
-int main(int argc, char **argv)
+// The enrollment request, its enrollment-agent wrapping and the CES response, with the leaf checks they feed.
+static void enrollment_tests(
+    const Config &cfg, const Mapping &map, EVP_PKEY *key, EVP_PKEY *other, X509_REQ *req, X509 *leaf)
 {
-    if (argc == 2 && std::string_view(argv[1]) == "--maintain-update-tests")
-    {
-        maintenance_update_tests();
-        return failed ? 1 : 0;
-    }
-    if (argc == 3 && std::string_view(argv[1]) == "--maintain-fixture")
-    {
-        maintenance_fixture(argv[2]);
-        return 0;
-    }
-    if (std::string_view(argv[0]) == LAUNCHER)
-    {
-        const Account caller = lookup_uid(getuid());
-        const Fd home = caller_home(caller);
-        const Fd count(openat(home.get(), ".maintain-test-issuance", O_WRONLY | O_APPEND | O_CREAT, 0600));
-        write_all(count.get(), byte_view("issue\n"));
-        const Fd mode(openat(home.get(), ".maintain-test-mode", O_RDONLY));
-        const auto bytes = read_all(mode.get());
-        const std::string value(bytes.begin(), bytes.end());
-        if (value == "deny")
-        {
-            std::cerr << "synthetic enrollment denied\n";
-            return 1;
-        }
-        if (value == "delay") poll(nullptr, 0, 30000);
-        maintenance_fixture("healthy");
-        return 0;
-    }
-    helper_tests();
-    process_tests();
-
-    Key key = generate_key(), other = generate_key();
-    Config cfg{.domain = "domain.local",
-               .realm = "DOMAIN.LOCAL",
-               .netbios = "DOMAIN",
-               .template_oid = "1.3.6.1.4.1.311.21.8.999.1",
-               .ces_url = "https://ca.domain.local/test/service.svc/CES",
-               .ces_auth = "mtls",
-               .service_principal = "submitter@DOMAIN.LOCAL",
-               .certificate_cn = "{user}",
-               .gc_url = {},
-               .gc_base_dn = {},
-               .kt_dc_url = {},
-               .tgt = 36000,
-               .renew = 604800,
-               .cert_remaining = 36000,
-               .cert_total = 36000,
-               .interval = 60,
-               .key_bits = 3072,
-               .require_full_tgt_lifetime = true,
-               .source = CertificateSource::Enrollment};
-    Mapping map{.name = "alice", .upn = "alice@domain.local"};
-
-    Req req =
-        make_request(key.get(), "alice@domain.local", cfg.template_oid, common_name(cfg, "alice", map.upn));
-    Cert leaf = fixture(key.get(), req.get()), agent = fixture(other.get());
-    user_identity_tests(cfg, map, key.get(), leaf.get());
+    const Cert agent = fixture(other);
 
     test("base64 round trips and malformed input rejection",
          []
@@ -2073,15 +2016,15 @@ int main(int argc, char **argv)
     test("CSR self signature and requested extensions",
          [&]
          {
-             sslneed(X509_REQ_verify(req.get(), key.get()) == 1, "CSR signature");
-             need(certificate_upn(leaf.get()) == "alice@domain.local", "UPN encoding");
-             need(certificate_template(leaf.get()) == cfg.template_oid, "template encoding");
-             need(has_eku(leaf.get(), SMARTCARD_OID) && has_eku(leaf.get(), CLIENT_AUTH_OID) &&
-                      has_eku(leaf.get(), PKINIT_CLIENT_OID),
+             sslneed(X509_REQ_verify(req, key) == 1, "CSR signature");
+             need(certificate_upn(leaf) == "alice@domain.local", "UPN encoding");
+             need(certificate_template(leaf) == cfg.template_oid, "template encoding");
+             need(has_eku(leaf, SMARTCARD_OID) && has_eku(leaf, CLIENT_AUTH_OID) &&
+                      has_eku(leaf, PKINIT_CLIENT_OID),
                   "three requested EKUs");
          });
 
-    Bytes wrapped = wrap_eobo(req.get(), agent.get(), other.get(), "DOMAIN\\alice");
+    Bytes wrapped = wrap_eobo(req, agent.get(), other, "DOMAIN\\alice");
 
     test("EOBO CMS signature and encapsulated PKCS10",
          [&]
@@ -2099,7 +2042,7 @@ int main(int argc, char **argv)
                                        out.get(),
                                        CMS_NO_SIGNER_CERT_VERIFY | CMS_BINARY) == 1,
                      "CMS verify signature");
-             need(biobytes(out.get()) == request_der(req.get()), "encapsulated CSR differs");
+             need(biobytes(out.get()) == request_der(req), "encapsulated CSR differs");
          });
 
     test("EOBO requestername is a signed BMP pair",
@@ -2125,14 +2068,14 @@ int main(int argc, char **argv)
          });
 
     test("valid pinned UPN template and lifetime accepted",
-         [&] { need(validate_leaf(leaf.get(), key.get(), map, cfg) > time(nullptr), "leaf validation"); });
+         [&] { need(validate_leaf(leaf, key, map, cfg) > time(nullptr), "leaf validation"); });
 
     test("valid leaf without SID extension accepted",
          [&]
          {
-             Cert c(X509_dup(leaf.get()));
+             Cert c(X509_dup(leaf));
              remove_ext(c.get(), SID_OID);
-             need(validate_leaf(c.get(), key.get(), map, cfg) > time(nullptr), "leaf validation without SID");
+             need(validate_leaf(c.get(), key, map, cfg) > time(nullptr), "leaf validation without SID");
          });
 
     test("wrong UPN rejected",
@@ -2141,24 +2084,24 @@ int main(int argc, char **argv)
              Mapping bad = map;
              bad.name = "bob";
              bad.upn = "bob@domain.local";
-             rejects([&] { validate_leaf(leaf.get(), key.get(), bad, cfg); });
+             rejects([&] { validate_leaf(leaf, key, bad, cfg); });
          });
 
-    test("wrong key rejected", [&] { rejects([&] { validate_leaf(leaf.get(), other.get(), map, cfg); }); });
+    test("wrong key rejected", [&] { rejects([&] { validate_leaf(leaf, other, map, cfg); }); });
 
     test("wrong template rejected",
          [&]
          {
              Config bad = cfg;
              bad.template_oid += ".2";
-             rejects([&] { validate_leaf(leaf.get(), key.get(), map, bad); });
+             rejects([&] { validate_leaf(leaf, key, map, bad); });
          });
 
     auto reject_leaf = [&](auto &&mutator)
     {
-        Cert c(X509_dup(leaf.get()));
+        Cert c(X509_dup(leaf));
         mutator(c.get());
-        rejects([&] { validate_leaf(c.get(), key.get(), map, cfg); });
+        rejects([&] { validate_leaf(c.get(), key, map, cfg); });
     };
 
     test("missing EKU rejected", [&] { reject_leaf([](X509 *c) { remove_ext(c, "2.5.29.37"); }); });
@@ -2194,25 +2137,19 @@ int main(int argc, char **argv)
     test("X509 WSTEP response accepted",
          [&]
          {
-             Cert got = parse_response(response_xml(cert_der(leaf.get())), key.get());
-             need(X509_cmp(got.get(), leaf.get()) == 0, "returned certificate differs");
+             Cert got = parse_response(response_xml(to_der(leaf, i2d_X509, "fixture certificate")), key);
+             need(X509_cmp(got.get(), leaf) == 0, "returned certificate differs");
          });
 
     test("CMS WSTEP response selects correct leaf",
          [&]
          {
              Cms cms(CMS_sign(nullptr, nullptr, nullptr, nullptr, CMS_BINARY | CMS_PARTIAL));
-             sslneed(cms && CMS_add1_cert(cms.get(), agent.get()) == 1 &&
-                         CMS_add1_cert(cms.get(), leaf.get()) == 1,
+             sslneed(cms && CMS_add1_cert(cms.get(), agent.get()) == 1 && CMS_add1_cert(cms.get(), leaf) == 1,
                      "fixture CMS certificate set");
-             int n = i2d_CMS_ContentInfo(cms.get(), nullptr);
-             sslneed(n > 0, "fixture CMS length");
-             Bytes b(static_cast<size_t>(n));
-             auto p = b.data();
-             i2d_CMS_ContentInfo(cms.get(), &p);
-
-             Cert got = parse_response(response_xml(b, std::string(SECURITY_NS) + "#PKCS7"), key.get());
-             need(X509_cmp(got.get(), leaf.get()) == 0, "CMS selected wrong certificate");
+             const Bytes b = to_der(cms.get(), i2d_CMS_ContentInfo, "fixture CMS");
+             Cert got = parse_response(response_xml(b, std::string(SECURITY_NS) + "#PKCS7"), key);
+             need(X509_cmp(got.get(), leaf) == 0, "CMS selected wrong certificate");
          });
 
     test("SOAP fault rejected",
@@ -2221,7 +2158,7 @@ int main(int argc, char **argv)
              std::string xml =
                  std::string("<s:Envelope xmlns:s=\"") + SOAP_NS +
                  "\"><s:Body><s:Fault><s:Reason>Denied</s:Reason></s:Fault></s:Body></s:Envelope>";
-             rejects([&] { parse_response(xml, key.get()); });
+             rejects([&] { parse_response(xml, key); });
          });
 
     test("DTD and external entity rejected",
@@ -2229,8 +2166,7 @@ int main(int argc, char **argv)
          {
              rejects(
                  [&] {
-                     parse_response("<!DOCTYPE x [<!ENTITY a SYSTEM 'file:///etc/passwd'>]><x>&a;</x>",
-                                    key.get());
+                     parse_response("<!DOCTYPE x [<!ENTITY a SYSTEM 'file:///etc/passwd'>]><x>&a;</x>", key);
                  });
          });
 
@@ -2238,17 +2174,19 @@ int main(int argc, char **argv)
          [&]
          {
              rejects(
-                 [&]
-                 {
-                     parse_response(std::string("<s:Envelope xmlns:s=\"") + SOAP_NS +
-                                        "\"><s:Body/></s:Envelope>",
-                                    key.get());
+                 [&] {
+                     parse_response(
+                         std::string("<s:Envelope xmlns:s=\"") + SOAP_NS + "\"><s:Body/></s:Envelope>", key);
                  });
          });
 
     test("oversized response rejected",
-         [&] { rejects([&] { parse_response(std::string(2 * MAX_BLOB + 1, 'x'), key.get()); }); });
+         [&] { rejects([&] { parse_response(std::string(2 * MAX_BLOB + 1, 'x'), key); }); });
+}
 
+// Sealed memory files and the FILE cache encoding that MIT Kerberos must read back.
+static void cache_tests()
+{
     test("sealed memfd cannot be modified",
          []
          {
@@ -2306,13 +2244,17 @@ int main(int argc, char **argv)
              output = {};
              need(krb5_cc_next_cred(ctx, cc.get(), &cursor, &output) == KRB5_CC_END, "extra credentials");
          });
+}
 
+// Key Trust: the key credential blob, its DN-Binary framing and the ephemeral certificate pair.
+static void key_trust_tests(const Config &cfg, EVP_PKEY *key)
+{
     test("key credential blob encodes an NGC RSA key with hash integrity",
          [&]
          {
              const Bytes device(16, 0);
              const auto now = time(nullptr);
-             const Bytes blob = key_credential_blob(key.get(), device, now);
+             const Bytes blob = key_credential_blob(key, device, now);
              need(blob.size() > 8 && blob[0] == 0x00 && blob[1] == 0x02 && blob[2] == 0 && blob[3] == 0,
                   "key credential version 2 header");
 
@@ -2342,7 +2284,7 @@ int main(int argc, char **argv)
              need(entries[0x03].size() > 8 &&
                       std::string(entries[0x03].begin(), entries[0x03].begin() + 4) == "RSA1",
                   "key material is a BCRYPT_RSAPUBLIC_BLOB");
-             rejects([&] { key_credential_blob(key.get(), Bytes(15, 0), now); });
+             rejects([&] { key_credential_blob(key, Bytes(15, 0), now); });
          });
 
     test("DN-Binary value frames the hex blob length and object DN",
@@ -2370,18 +2312,81 @@ int main(int argc, char **argv)
                   "leaf issuer matches ephemeral CA");
              need(certificate_upn(c.get()) == "alice@domain.local", "key trust UPN SAN");
              need(has_eku(c.get(), SMARTCARD_OID) && has_eku(c.get(), PKINIT_CLIENT_OID), "key trust EKUs");
-             need(validate_leaf(c.get(), fresh.get(), kmap, cfg, CertificateSource::KeyTrust) > time(nullptr),
+             const Config key_trust = with_source(cfg, CertificateSource::KeyTrust);
+             need(validate_leaf(c.get(), fresh.get(), kmap, key_trust) > time(nullptr),
                   "key trust certificate rejected");
 
              // The key trust certificate must still fail the CA enrollment checks.
-             rejects([&] { validate_leaf(c.get(), fresh.get(), kmap, cfg, CertificateSource::Enrollment); });
+             rejects([&] { validate_leaf(c.get(), fresh.get(), kmap, cfg); });
 
              // Key trust binds to the directory-resolved UPN; a mismatch must fail.
              Mapping bad = kmap;
              bad.upn = "bob@domain.local";
-             rejects([&] { validate_leaf(c.get(), fresh.get(), bad, cfg, CertificateSource::KeyTrust); });
+             rejects([&] { validate_leaf(c.get(), fresh.get(), bad, key_trust); });
          });
+}
 
+int main(int argc, char **argv)
+{
+    if (argc == 2 && std::string_view(argv[1]) == "--maintain-update-tests")
+    {
+        maintenance_update_tests();
+        return failed ? 1 : 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--maintain-fixture")
+    {
+        maintenance_fixture(argv[2]);
+        return 0;
+    }
+    if (std::string_view(argv[0]) == LAUNCHER)
+    {
+        const Account caller = lookup_uid(getuid());
+        const Fd home = caller_home(caller);
+        const Fd count(openat(home.get(), ".maintain-test-issuance", O_WRONLY | O_APPEND | O_CREAT, 0600));
+        write_all(count.get(), byte_view("issue\n"));
+        const Fd mode(openat(home.get(), ".maintain-test-mode", O_RDONLY));
+        const auto bytes = read_all(mode.get());
+        const std::string value(bytes.begin(), bytes.end());
+        if (value == "deny")
+        {
+            std::cerr << "synthetic enrollment denied\n";
+            return 1;
+        }
+        if (value == "delay") poll(nullptr, 0, 30000);
+        maintenance_fixture("healthy");
+        return 0;
+    }
+    helper_tests();
+    process_tests();
+
+    Key key = generate_key(2048), other = generate_key(2048);
+    Config cfg{.domain = "domain.local",
+               .realm = "DOMAIN.LOCAL",
+               .netbios = "DOMAIN",
+               .template_oid = "1.3.6.1.4.1.311.21.8.999.1",
+               .ces_url = "https://ca.domain.local/test/service.svc/CES",
+               .service_principal = "submitter@DOMAIN.LOCAL",
+               .certificate_cn = "{user}",
+               .gc_url = {},
+               .gc_base_dn = {},
+               .kt_dc_url = {},
+               .tgt = 36000,
+               .renew = 604800,
+               .cert_remaining = 36000,
+               .cert_total = 36000,
+               .interval = 60,
+               .key_bits = 3072,
+               .require_full_tgt_lifetime = true,
+               .source = CertificateSource::Enrollment};
+    Mapping map{.name = "alice", .upn = "alice@domain.local"};
+
+    Req req =
+        make_request(key.get(), "alice@domain.local", cfg.template_oid, common_name(cfg, "alice", map.upn));
+    Cert leaf = fixture(key.get(), req.get());
+    user_identity_tests(cfg, map, key.get(), leaf.get());
+    enrollment_tests(cfg, map, key.get(), other.get(), req.get(), leaf.get());
+    cache_tests();
+    key_trust_tests(cfg, key.get());
     revision_tests(cfg, map, key.get(), req.get(), leaf.get());
     maintenance_tests();
 

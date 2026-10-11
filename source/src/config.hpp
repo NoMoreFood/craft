@@ -1,7 +1,7 @@
 #pragma once
 
 // Strict parsing of the administrator's configuration, independent of privileged file access.
-#include "common.hpp"
+#include "unprivileged.hpp"
 #include <map>
 #include <ranges>
 #include <regex>
@@ -23,12 +23,12 @@ enum class CertificateSource
 
 struct Config
 {
-    std::string domain, realm, netbios, template_oid, ces_url, ces_auth, service_principal;
+    std::string domain, realm, netbios, template_oid, ces_url, service_principal;
     std::string certificate_cn = "{user}";
     std::string gc_url, gc_base_dn, kt_dc_url;
     uint32_t tgt = 36000, renew = 604800, cert_remaining = 36000, cert_total = 36000, interval = 60;
     uint32_t key_bits = 3072;
-    bool require_full_tgt_lifetime = true;
+    bool ces_negotiate = false, require_full_tgt_lifetime = true;
     CertificateSource source = CertificateSource::Enrollment;
 };
 
@@ -54,10 +54,11 @@ inline bool plain_url(std::string_view url, std::string_view scheme)
            std::ranges::all_of(rest, [](unsigned char c) { return c > 32 && c < 127; });
 }
 
-// The caller's hint selects home versus the privileged fallback; configuration picks the fallback mechanism.
-inline Config parse_config(std::string_view text, CertificateSource source = CertificateSource::Enrollment)
+// `home` says the caller supplied a certificate pair; otherwise the configuration picks the privileged
+// fallback mechanism, and only then are that mechanism's settings required.
+inline Config parse_config(std::string_view text, bool home)
 {
-    static constexpr std::array<std::string_view, 21> keys{"enabled",
+    static constexpr std::array<std::string_view, 20> keys{"enabled",
                                                            "domain",
                                                            "realm",
                                                            "netbios",
@@ -69,7 +70,6 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
                                                            "kt_dc_url",
                                                            "certificate_cn",
                                                            "key_bits",
-                                                           "bit_strength",
                                                            "require_full_tgt_lifetime",
                                                            "tgt_seconds",
                                                            "renew_seconds",
@@ -109,7 +109,8 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
         return found == values.end() ? fallback : number(found->second, maximum);
     };
     need(required("enabled") == "yes", "service disabled; review configuration and set enabled=yes");
-    if (source != CertificateSource::Home)
+    auto source = CertificateSource::Home;
+    if (!home)
     {
         const auto mechanism = optional("mechanism", "enrollment");
         need(mechanism == "enrollment" || mechanism == "key_trust",
@@ -125,15 +126,14 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     c.netbios = required("netbios", enrollment);
     c.template_oid = required("template_oid", enrollment);
     c.ces_url = required("ces_url", enrollment);
-    c.ces_auth = required("ces_auth", enrollment);
+    const auto ces_auth = required("ces_auth", enrollment);
+    c.ces_negotiate = ces_auth == "negotiate";
     c.service_principal = required("service_principal", enrollment || key_trust); // LDAP/GSSAPI and CES
     c.kt_dc_url = required("kt_dc_url", key_trust);
     c.gc_url = optional("gc_url", "ldap://" + c.domain + ":3268");
     c.gc_base_dn = optional("gc_base_dn", domain_to_dn(c.domain));
     c.certificate_cn = optional("certificate_cn", c.certificate_cn);
-    need(!(values.contains("key_bits") && values.contains("bit_strength")),
-         "cannot specify both key_bits and bit_strength");
-    c.key_bits = number(optional("key_bits", optional("bit_strength", std::to_string(c.key_bits))));
+    c.key_bits = number(optional("key_bits", std::to_string(c.key_bits)));
     need(c.key_bits == 2048 || c.key_bits == 3072 || c.key_bits == 4096,
          "key_bits must be 2048, 3072, or 4096");
     c.tgt = seconds("tgt_seconds", c.tgt, 604800);
@@ -159,7 +159,7 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
                  c.netbios.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == c.netbios.npos,
              "invalid NetBIOS domain");
         need(c.template_oid.size() < 128 && std::regex_match(c.template_oid, oid_re), "invalid template OID");
-        need(c.ces_auth == "negotiate" || c.ces_auth == "mtls", "ces_auth must be negotiate or mtls");
+        need(c.ces_negotiate || ces_auth == "mtls", "ces_auth must be negotiate or mtls");
         need(plain_url(c.ces_url, "https://"),
              "ces_url must be an https:// URL without credentials, query or fragment");
     }
@@ -168,8 +168,7 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     if (key_trust)
         need(plain_url(c.kt_dc_url, "ldap://"),
              "kt_dc_url must be an ldap:// URL naming the writable domain controller");
-    if (source != CertificateSource::Home)
-        need(plain_url(c.gc_url, "ldap://"), "gc_url must be an ldap:// URL");
+    if (!home) need(plain_url(c.gc_url, "ldap://"), "gc_url must be an ldap:// URL");
     need(c.certificate_cn.size() <= 256, "certificate CN pattern is too long");
     need(c.renew == 0 || c.renew > c.tgt, "renew_seconds must be 0 or exceed tgt_seconds");
     need(c.tgt >= 60 && c.cert_remaining >= 60 && c.cert_total >= c.cert_remaining && c.interval >= 30,
@@ -177,9 +176,9 @@ inline Config parse_config(std::string_view text, CertificateSource source = Cer
     return c;
 }
 
-inline Config config(CertificateSource source = CertificateSource::Enrollment)
+inline Config config(bool home)
 {
-    return parse_config(root_text(path("config")), source);
+    return parse_config(root_text(path("config")), home);
 }
 
 // Expand only administrator-configured CN placeholders; identity still comes from the directory UPN.

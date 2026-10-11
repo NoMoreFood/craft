@@ -198,8 +198,12 @@ void with_jobs(size_t count, auto action)
 
 void reset(std::string_view kind = {}, std::string_view issuer = "healthy")
 {
-    for (const auto &path : {cache, issuance, cache + ".maintain.retry"})
+    for (const auto &path : {cache, issuance})
         sysneed(unlink(path.c_str()) == 0 || errno == ENOENT, "reset test fixture");
+
+    // The enrollment backoff is a record in the maintenance lock file: clear it and leave the lock in place.
+    sysneed(truncate((cache + ".maintain.lock").c_str(), 0) == 0 || errno == ENOENT,
+            "reset enrollment backoff");
     const Fd file(open(mode.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600));
     sysneed(file.get() >= 0 && fchmod(file.get(), 0600) == 0, "write issuer mode");
     write_all(file.get(), byte_view(issuer));

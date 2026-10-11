@@ -16,7 +16,7 @@ class Kerberos
 public:
     Kerberos() : transport_(nullptr, {nullptr})
     {
-        root_open(path("krb5.conf"));
+        require_trusted(path("krb5.conf"));
         const auto code = krb5_init_context(out(context_));
         krb_check(ctx(), code, "initialize MIT Kerberos");
         transport_ = KrbCache(nullptr, {ctx()});
@@ -31,7 +31,7 @@ public:
     void acquire_transport(const Config &c)
     {
         const auto keytab = path("submitter.keytab");
-        root_open(keytab, Trusted::Secret);
+        require_trusted(keytab, Trusted::Secret);
         const auto p = parse_principal(ctx(), c.service_principal);
         auto kt = krb_owner<std::remove_pointer_t<krb5_keytab>, krb5_kt_close>(ctx());
         auto o = krb_owner<krb5_get_init_creds_opt, krb5_get_init_creds_opt_free>(ctx());
@@ -46,7 +46,7 @@ public:
         krb5_get_init_creds_opt_set_renew_life(o.get(), 0);
 
         // Only the isolated transport account requests forwardability, for CES constrained delegation.
-        krb5_get_init_creds_opt_set_forwardable(o.get(), c.ces_auth == "negotiate");
+        krb5_get_init_creds_opt_set_forwardable(o.get(), c.ces_negotiate);
         krb5_get_init_creds_opt_set_proxiable(o.get(), 0);
         krb_check(ctx(),
                   krb5_get_init_creds_keytab(ctx(), &cred, p.get(), kt.get(), 0, nullptr, o.get()),

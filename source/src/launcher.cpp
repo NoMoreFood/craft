@@ -34,7 +34,6 @@ int main(int argc, char **)
         if (count) sysneed(getgroups(count, groups.data()) == count, "getgroups");
         const Fd binary = root_open(WORKER, Trusted::Worker);
         const auto uidarg = std::to_string(uid);
-        const pid_t launcher = getpid();
 
         // Run the fixed worker as `account` and publish the cache it returns. In home mode the worker first
         // reports whether the caller supplied a certificate pair; false means the fallback is needed.
@@ -54,15 +53,10 @@ int main(int argc, char **)
                     if (geteuid() != 0) sysneed(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0, "no_new_privs");
                     else if (home) drop(account.uid, gid, groups);
                     else drop(account.uid, account.gid);
-                    sysneed(prctl(PR_SET_PDEATHSIG, SIGKILL) == 0, "worker parent-death signal");
-                    need(getppid() == launcher, "launcher disappeared");
 
                     // Execute the verified descriptor with an empty environment; the worker sets its own.
-                    const char *args[] = {WORKER,
-                                          home ? "--home" : uidarg.c_str(),
-                                          home ? uidarg.c_str() : caller.name.c_str(),
-                                          home ? caller.name.c_str() : nullptr,
-                                          nullptr};
+                    const char *args[] = {
+                        WORKER, home ? "home" : "fallback", uidarg.c_str(), caller.name.c_str(), nullptr};
                     char *environment[] = {nullptr};
                     fexecve(3, const_cast<char **>(args), environment);
                     sysfail("exec fixed worker");

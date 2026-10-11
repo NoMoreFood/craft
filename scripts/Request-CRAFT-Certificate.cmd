@@ -51,7 +51,7 @@ ECHO Usage: %~nx0 template-name destination-directory ^
     [/RenewBeforeDays days] [/DeleteAfterExport] [/WhatIf]
 EXIT /B 64
 #>
-#requires -Version 5.0
+#requires -Version 5.1
 <#
 .SYNOPSIS
     Requests a user certificate and exports CRAFT's PEM certificate and private key.
@@ -100,7 +100,7 @@ EXIT /B 64
     Ensure a current PEM pair and remove its Windows-store certificate after success.
 
 .NOTES
-    Windows PowerShell 5.x, .NET Framework 4.6 or newer, and the Windows PKI module are required.
+    Windows PowerShell 5.1, .NET Framework 4.7.2 or newer, and the Windows PKI module are required.
     The CMD wrapper uses built-in Windows PowerShell modules even when invoked from PowerShell 7.
     The wrapper runs this file as an unsigned in-memory script. Where AppLocker or WDAC script rules put
     such scripts in Constrained Language Mode it stops with a warning: copy the file to
@@ -290,9 +290,7 @@ namespace Craft
                     generator.GetBytes(random);
                 string password = Convert.ToBase64String(random);
                 pfx = certificate.Export(X509ContentType.Pkcs12, password);
-                X509KeyStorageFlags flags = X509KeyStorageFlags.Exportable;
-                flags |= Enum.IsDefined(typeof(X509KeyStorageFlags), "EphemeralKeySet")
-                    ? (X509KeyStorageFlags)32 : X509KeyStorageFlags.UserKeySet;
+                X509KeyStorageFlags flags = X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
 
                 using (X509Certificate2 copy = new X509Certificate2(pfx, password, flags))
                 using (RSA rsa = RSACertificateExtensions.GetRSAPrivateKey(copy))
@@ -505,19 +503,17 @@ function Read-CraftExportState($Target, [string]$Template)
     {
         throw 'Managed output was changed or belongs to a different template. Choose a new destination.'
     }
-    if (-not $state.PSObject.Properties['PendingCleanup'])
-    {
-        $state | Add-Member -NotePropertyName PendingCleanup -NotePropertyValue @()
-    }
-    $state.PendingCleanup = @($state.PendingCleanup | Select-Object -Unique)
-    if ($state.PendingCleanup.Count -gt 32 -or
-        @($state.PendingCleanup | Where-Object { $_ -isnot [string] -or $_ -notmatch '^[0-9A-F]{40}$' }).Count)
+    $cleanup = @($state.PendingCleanup)
+    if (-not $state.PSObject.Properties['PendingCleanup'] -or $cleanup.Count -gt 32 -or
+        @($cleanup | Where-Object { $_ -isnot [string] -or $_ -notmatch '^[0-9A-F]{40}$' }).Count)
     {
         throw 'Invalid certificate cleanup tracking data.'
     }
+    $state.PendingCleanup = @($cleanup | Select-Object -Unique)
+
+    # The recorded hash already pins these bytes to the ones this helper wrote.
     $pem = [System.IO.File]::ReadAllText((Join-Path $Target.Path 'user.pem'))
-    if ($pem -notmatch '\A-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)' +
-        '-----END CERTIFICATE-----\r?\n\z')
+    if ($pem -notmatch '\A-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=\n]+)-----END CERTIFICATE-----\n\z')
     {
         throw 'Managed certificate PEM is invalid.'
     }

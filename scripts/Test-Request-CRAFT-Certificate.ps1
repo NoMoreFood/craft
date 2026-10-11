@@ -1,5 +1,5 @@
 # Offline enrollment/export checks; only newly created synthetic certificates are used.
-#requires -Version 5.0
+#requires -Version 5.1
 [CmdletBinding()]
 param()
 
