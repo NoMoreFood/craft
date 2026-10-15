@@ -19,7 +19,7 @@ int main(int argc, char **)
         sysneed(sigprocmask(SIG_SETMASK, &empty, nullptr) == 0, "reset signal mask");
         for (const int signum : {SIGPIPE, SIGCHLD, SIGALRM})
             signal(signum, SIG_DFL);
-        alarm(120);
+        alarm(ACQUISITION_SECONDS);
 
         ensure_standard_streams();
         close_from(3);
@@ -37,11 +37,16 @@ int main(int argc, char **)
         if (count) sysneed(getgroups(count, groups.data()) == count, "getgroups");
         const Fd binary = root_open(WORKER, Trusted::Worker);
         const auto uidarg = std::to_string(uid);
+        const auto request = random_hex();
+        Bytes modes;
+        bool may_continue = true;
 
-        // Run the fixed worker as `account` and publish the cache it returns. In home mode the worker first
-        // reports whether the caller supplied a certificate pair; false means the fallback is needed.
-        const auto run_worker = [&](const Account &account, bool home)
+        // Read policy as the caller, then run each enabled mode under its required identity. Only a complete,
+        // validated acquisition permits the parent to drop privilege and receive credential bytes.
+        const auto run_worker = [&](const Account &account, std::string_view mode)
         {
+            const bool policy = mode == "policy", caller_worker = policy || mode == "home";
+
             // The worker's input is a pipe that is never written: its closing tells the worker, whatever
             // identity it runs under, that this launcher has gone.
             Pipe channel = make_pipe(), alive = make_pipe();
@@ -54,12 +59,12 @@ int main(int argc, char **)
                             "worker standard streams");
                     keep_only({binary.get()});
                     if (geteuid() != 0) sysneed(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0, "no_new_privs");
-                    else if (home) drop(account.uid, gid, groups);
+                    else if (caller_worker) drop(account.uid, gid, groups);
                     else drop(account.uid, account.gid);
 
                     // Execute the verified descriptor with an empty environment; the worker sets its own.
                     const char *args[] = {
-                        WORKER, home ? "home" : "fallback", uidarg.c_str(), caller.name.c_str(), nullptr};
+                        WORKER, mode.data(), uidarg.c_str(), caller.name.c_str(), request.c_str(), nullptr};
                     char *environment[] = {nullptr};
                     fexecve(3, const_cast<char **>(args), environment);
                     sysfail("exec fixed worker");
@@ -71,18 +76,25 @@ int main(int argc, char **)
                 need(worker.wait(), "credential acquisition failed; existing cache was not replaced");
             };
 
-            // Read only the source-selection byte while elevated; credentials require a permanent drop.
-            if (home)
+            if (policy)
             {
-                unsigned char selected{};
-                const auto length = retry([&] { return read(channel.reader.get(), &selected, 1); });
-                need(length == 1 && selected <= 1,
-                     "user certificate selection failed; existing cache was not replaced");
-                if (!selected)
-                {
-                    finish();
-                    return false;
-                }
+                modes = read_all(channel.reader.get(), MODE_NAMES.size());
+                finish();
+                return false;
+            }
+
+            // A reported acquisition failure allows the next mode. A crash, failed cleanup or broken
+            // protocol stops the request because successful cleanup and credential validation are unknown.
+            may_continue = false;
+            unsigned char ready{};
+            const auto length = retry([&] { return read(channel.reader.get(), &ready, 1); });
+            need(length == 1 && ready <= 2, "worker interrupted; existing cache was not replaced");
+            if (ready != 1)
+            {
+                need(!worker.wait(), "worker returned an inconsistent acquisition result");
+                need(ready == 0, "credential cleanup failed; existing cache was not replaced");
+                may_continue = true;
+                return false;
             }
             if (geteuid() == 0) drop(uid, gid, groups);
             auto cache = read_all(channel.reader.get());
@@ -105,15 +117,38 @@ int main(int argc, char **)
             return true;
         };
 
-        // Apply mode policy under the caller before starting any broker acquisition.
-        if (run_worker(caller, true)) return 0;
-        need(geteuid() == 0,
-             "the configured broker mode requires the setuid-root launcher; "
-             "home certificates are unavailable or disabled by service-ticket-only policy");
-        const Account service = service_account();
-        need(uid != service.uid, "invalid calling account");
-        run_worker(service, false);
-        return 0;
+        // The policy response contains only a unique, bounded list; every worker independently verifies
+        // that its mode is still enabled in the administrator's configuration.
+        run_worker(caller, "policy");
+        need(!modes.empty(), "no operating modes enabled");
+        std::array<bool, MODE_NAMES.size()> seen{};
+        for (const auto mode : modes)
+        {
+            need(mode < seen.size() && !seen[mode], "invalid operating mode policy");
+            seen[mode] = true;
+        }
+        for (const auto mode : modes)
+        {
+            const auto name = MODE_NAMES[mode];
+            try
+            {
+                Account account = caller;
+                if (name != "home")
+                {
+                    need(geteuid() == 0, "broker mode requires the setuid-root launcher");
+                    account = service_account();
+                    need(uid != account.uid, "invalid calling account");
+                }
+                if (run_worker(account, name)) return 0;
+            }
+            catch (const std::exception &error)
+            {
+                if (!may_continue) throw;
+                report(error, std::format("mode={} uid={}", name, uid));
+            }
+            audit(LOG_WARNING, std::format("mode failed uid={} mode={}", uid, name));
+        }
+        fail("all enabled operating modes failed; existing cache was not replaced");
     }
     catch (const std::exception &error)
     {

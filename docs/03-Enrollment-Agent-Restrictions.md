@@ -2,7 +2,7 @@
 
 For **mode 1 privileged enrollment**, restrict the actual enrollment-agent identity to a dedicated user template and a small approved recipient group on every CA that can accept it. An agent private key permits enrollment for other users; its Certificate Request Agent EKU does not encode a recipient allowlist. Strong KDC mapping can authenticate a correctly issued privileged certificate, so prohibited issuance must be refused by the CA.
 
-Mode 2 uses [Key Trust delegation](04-Key-Credential-Link-Delegation.md). Mode 3 uses an existing certificate and KDC mapping without the agent. A complete home pair takes priority; these recipient rules do not authorize or revoke certificates obtained through another path. See [mode selection and setup](../source/README.md#mode-selection-and-process-boundaries).
+Mode 2 uses [Key Trust delegation](04-Key-Credential-Link-Delegation.md). Mode 3 uses an existing certificate and KDC mapping without the agent. The administrator's `modes` list selects and orders the enabled workflows; these recipient rules do not authorize or revoke credentials obtained through another path. Use `modes=enrollment` to test this authorization independently. See [mode selection and setup](../source/README.md#configure-mode-selection).
 
 ## Identify the authorization roles
 

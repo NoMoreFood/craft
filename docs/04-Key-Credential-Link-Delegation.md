@@ -2,7 +2,7 @@
 
 For **mode 2 privileged credential linking**, delegate only ReadProperty/WriteProperty on `msDS-KeyCredentialLink` over a reviewed set of ordinary users. This write permits authentication as those accounts, so its scope is the authorization boundary. It requires no user-certificate CA enrollment, CES, agent or user template; KDC certificate trust and current CRLs remain required.
 
-Complete [mode 2 setup](../source/README.md#mode-2-setup-privileged-credential-linking). CRAFT first checks the caller's home pair; test delegation with both PEM files absent. A valid pair uses [mode 3](../source/README.md#mode-3-setup-unprivileged-windows-exported-certificate) without the directory write, while partial/invalid inputs fail without privileged acquisition.
+Complete [mode 2 setup](../source/README.md#mode-2-setup-privileged-credential-linking). Use `modes=key_trust` to validate this workflow independently. Add and order other modes only when their fallback authority is intended; for example, `modes=home key_trust` tries a supplied certificate before directory linking, including when that certificate is absent or invalid.
 
 ## Prepare the service identity and DC
 

@@ -48,12 +48,6 @@ static void rejects(std::invocable auto &&f)
     ERR_clear_error();
 }
 
-// Nearly every configuration check exercises the privileged fallback rather than a supplied home pair.
-static Config fallback_config(std::string_view text)
-{
-    return parse_config(text, false);
-}
-
 static Config with_source(Config cfg, CertificateSource source)
 {
     cfg.source = source;
@@ -286,14 +280,14 @@ static void helper_tests()
          });
 
     const std::string valid =
-        "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\nnetbios=DOMAIN\n"
+        "enabled=yes\nmodes=enrollment\ndomain=domain.local\nrealm=DOMAIN.LOCAL\nnetbios=DOMAIN\n"
         "template_oid=1.3.6.1.4.1.311.21.8.999.1\nces_url=https://ca.domain.local/CES\nces_auth=mtls\n"
         "service_principal=submitter@DOMAIN.LOCAL\n";
 
     test("configuration defaults and explicit limits",
          [&]
          {
-             const auto defaults = fallback_config(valid);
+             const auto defaults = parse_config(valid);
              need(defaults.tgt == 36000 && defaults.renew == 604800 && defaults.cert_remaining == 36000 &&
                       defaults.cert_total == 36000 && defaults.require_full_tgt_lifetime &&
                       defaults.certificate_cn == "{user}" && defaults.interval == 60 &&
@@ -301,7 +295,7 @@ static void helper_tests()
                       defaults.gc_base_dn == "DC=domain,DC=local",
                   "default policy changed");
 
-             const auto explicit_limits = fallback_config(
+             const auto explicit_limits = parse_config(
                  valid +
                  "tgt_seconds=120\nrenew_seconds=240\ncert_remaining_max_seconds=300\ncert_total_max_seconds="
                  "600\nminimum_interval_seconds=90\ngc_url=ldap://"
@@ -312,50 +306,77 @@ static void helper_tests()
                       explicit_limits.gc_base_dn == "DC=custom,DC=local",
                   "limits not parsed");
 
-             need(fallback_config(valid + "renew_seconds=0\n").renew == 0, "renew=0 not accepted");
+             need(parse_config(valid + "renew_seconds=0\n").renew == 0, "renew=0 not accepted");
          });
 
     test("configuration parses editable CN and explicit shorter-ticket consent",
          [&]
          {
              const auto c =
-                 fallback_config(valid + "certificate_cn=Linux {user}\nrequire_full_tgt_lifetime=no\n");
+                 parse_config(valid + "certificate_cn=Linux {user}\nrequire_full_tgt_lifetime=no\n");
              need(c.certificate_cn == "Linux {user}" && !c.require_full_tgt_lifetime,
                   "new configuration controls not parsed");
-             rejects([&] { fallback_config(valid + "require_full_tgt_lifetime=maybe\n"); });
+             rejects([&] { parse_config(valid + "require_full_tgt_lifetime=maybe\n"); });
          });
 
     test("configuration accepts only the supported key sizes",
          [&]
          {
              for (const uint32_t bits : {2048U, 3072U, 4096U})
-                 need(fallback_config(valid + std::format("key_bits={}\n", bits)).key_bits == bits,
+                 need(parse_config(valid + std::format("key_bits={}\n", bits)).key_bits == bits,
                       "supported key size rejected");
              for (auto setting :
                   {"key_bits=1024\n", "key_bits=512\n", "key_bits=8192\n", "key_bits=invalid\n"})
-                 rejects([&] { fallback_config(valid + setting); });
+                 rejects([&] { parse_config(valid + setting); });
          });
 
     test("home credential configuration needs no enrollment settings",
          []
          {
-             const std::string text = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
-             const auto cfg = parse_config(text, true);
+             const std::string text = "enabled=yes\nmodes=home\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
+             const auto cfg = parse_config(text, CertificateSource::Home);
              need(cfg.domain == "domain.local" && cfg.realm == "DOMAIN.LOCAL" &&
                       cfg.service_principal.empty() && cfg.ces_url.empty() && cfg.tgt == 36000 &&
                       cfg.renew == 604800 && cfg.source == CertificateSource::Home,
                   "home configuration policy");
-             rejects([&] { fallback_config(text); });
-             rejects([] { parse_config("enabled=no\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n", true); });
+             rejects([&] { parse_config(text, CertificateSource::Enrollment); });
+             rejects([] { parse_config("enabled=no\nmodes=home\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"); });
          });
 
-    test("key trust mechanism selects the directory path without CA settings",
+    test("enabled modes preserve order, reject disabled selection and validate every enabled mode",
+         [&]
+         {
+             auto text = valid;
+             text.replace(text.find("modes=enrollment"), std::strlen("modes=enrollment"),
+                          "modes=home key_trust enrollment constrained_delegation");
+             text += "kt_dc_url=ldap://dc.domain.local\nservice_spns=cifs/files.domain.local@DOMAIN.LOCAL\n";
+             const auto cfg = parse_config(text);
+             need(cfg.modes == std::vector{CertificateSource::Home,
+                                          CertificateSource::KeyTrust,
+                                          CertificateSource::Enrollment,
+                                          CertificateSource::ConstrainedDelegation},
+                  "configured mode order changed");
+             for (const auto mode : cfg.modes)
+                 need(parse_config(text, mode).source == mode, "enabled mode could not be selected");
+             rejects([&] { parse_config(valid, CertificateSource::Home); });
+             rejects([&] { parse_config(text.substr(0, text.find("kt_dc_url="))); });
+             for (const auto mode : {"home home", "home unknown", "home,enrollment", ""})
+             {
+                 auto bad = valid;
+                 bad.replace(bad.find("modes=enrollment"), std::strlen("modes=enrollment"),
+                             std::string("modes=") + mode);
+                 rejects([&] { parse_config(bad); });
+             }
+             rejects([&] { parse_config(valid + "mechanism=enrollment\n"); });
+         });
+
+    test("key trust mode selects the directory path without CA settings",
          []
          {
              const std::string base = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                      "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n"
+                                      "modes=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n"
                                       "kt_dc_url=ldap://dc.domain.local\n";
-             const auto cfg = fallback_config(base);
+             const auto cfg = parse_config(base);
              need(cfg.source == CertificateSource::KeyTrust && cfg.kt_dc_url == "ldap://dc.domain.local" &&
                       cfg.service_principal == "svc@DOMAIN.LOCAL" && cfg.ces_url.empty() &&
                       cfg.template_oid.empty() && cfg.netbios.empty(),
@@ -365,41 +386,41 @@ static void helper_tests()
              rejects(
                  [&]
                  {
-                     fallback_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                     "mechanism=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n");
+                     parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                  "modes=key_trust\nservice_principal=svc@DOMAIN.LOCAL\n");
                  });
              rejects(
                  [&]
                  {
-                     fallback_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                     "mechanism=key_trust\nkt_dc_url=ldap://dc.domain.local\n");
+                     parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                  "modes=key_trust\nkt_dc_url=ldap://dc.domain.local\n");
                  });
              rejects([&]
-                     { fallback_config(base.substr(0, base.find("kt_dc_url=")) + "kt_dc_url=http://dc\n"); });
+                     { parse_config(base.substr(0, base.find("kt_dc_url=")) + "kt_dc_url=http://dc\n"); });
              rejects(
                  [&]
                  {
-                     fallback_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                                     "mechanism=shadow\nservice_principal=svc@DOMAIN.LOCAL\n");
+                     parse_config("enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
+                                  "modes=shadow\nservice_principal=svc@DOMAIN.LOCAL\n");
                  });
 
              // Active Directory refuses the GSSAPI security layer inside TLS, and no TLS trust is configured.
              const auto without_dc = base.substr(0, base.find("kt_dc_url="));
-             rejects([&] { fallback_config(without_dc + "kt_dc_url=ldaps://dc.domain.local\n"); });
-             rejects([&] { fallback_config(base + "gc_url=ldaps://gc.domain.local:3269\n"); });
-             rejects([&] { fallback_config(base + "gc_url=ldap://user@gc.domain.local\n"); });
+             rejects([&] { parse_config(without_dc + "kt_dc_url=ldaps://dc.domain.local\n"); });
+             rejects([&] { parse_config(base + "gc_url=ldaps://gc.domain.local:3269\n"); });
+             rejects([&] { parse_config(base + "gc_url=ldap://user@gc.domain.local\n"); });
          });
 
     test("configuration rejects disabled missing unknown and duplicate settings",
          [&]
          {
-             rejects([&] { fallback_config(valid + "enabled=yes\n"); });
-             rejects([&] { fallback_config(valid + "unknown=yes\n"); });
-             rejects([&] { fallback_config(valid + "service_principal=\n"); });
-             rejects([&] { fallback_config(std::string_view(valid).substr(12)); });
+             rejects([&] { parse_config(valid + "enabled=yes\n"); });
+             rejects([&] { parse_config(valid + "unknown=yes\n"); });
+             rejects([&] { parse_config(valid + "service_principal=\n"); });
+             rejects([&] { parse_config(std::string_view(valid).substr(12)); });
              auto disabled = valid;
              disabled.replace(8, 3, "no");
-             rejects([&] { fallback_config(disabled); });
+             rejects([&] { parse_config(disabled); });
          });
 
     test("configuration preserves lifetime rate and transport restrictions",
@@ -413,21 +434,21 @@ static void helper_tests()
                                   "minimum_interval_seconds=29\n",
                                   "cert_remaining_max_seconds=59\n",
                                   "cert_total_max_seconds=600\n"})
-                 rejects([&] { fallback_config(valid + setting); });
+                 rejects([&] { parse_config(valid + setting); });
 
              auto negotiate = valid;
              negotiate.replace(negotiate.find("mtls"), 4, "negotiate");
-             need(fallback_config(negotiate).ces_negotiate && !fallback_config(valid).ces_negotiate,
+             need(parse_config(negotiate).ces_negotiate && !parse_config(valid).ces_negotiate,
                   "CES authentication choice was not parsed");
              for (auto config : {valid, negotiate})
              {
                  const auto principal = config.find("service_principal=");
-                 rejects([&] { fallback_config(config.substr(0, principal)); });
-                 rejects([&] { fallback_config(config.substr(0, principal) + "service_principal=\n"); });
+                 rejects([&] { parse_config(config.substr(0, principal)); });
+                 rejects([&] { parse_config(config.substr(0, principal) + "service_principal=\n"); });
              }
              auto unsupported = valid;
              unsupported.replace(unsupported.find("mtls"), 4, "basic");
-             rejects([&] { fallback_config(unsupported); });
+             rejects([&] { parse_config(unsupported); });
          });
 
     test("configuration rejects malformed DNS labels in domains and realms",
@@ -438,14 +459,14 @@ static void helper_tests()
              {
                  auto config = valid;
                  config.replace(config.find("domain.local"), 12, domain);
-                 rejects([&] { fallback_config(config); });
+                 rejects([&] { parse_config(config); });
              }
              for (auto realm :
                   {"-DOMAIN.LOCAL", "DOMAIN-.LOCAL", "DOMAIN..LOCAL", ".DOMAIN.LOCAL", "DOMAIN.LOCAL."})
              {
                  auto config = valid;
                  config.replace(config.find("DOMAIN.LOCAL"), 12, realm);
-                 rejects([&] { fallback_config(config); });
+                 rejects([&] { parse_config(config); });
              }
              for (auto domain : {std::string(64, 'a') + ".local",
                                  std::string("Domain.local"),
@@ -454,11 +475,11 @@ static void helper_tests()
              {
                  auto config = valid;
                  config.replace(config.find("domain.local"), 12, domain);
-                 rejects([&] { fallback_config(config); });
+                 rejects([&] { parse_config(config); });
              }
              auto config = valid;
              config.replace(config.find("DOMAIN.LOCAL"), 12, "domain.local");
-             rejects([&] { fallback_config(config); });
+             rejects([&] { parse_config(config); });
          });
 
     test("domain_to_dn formats DNS domain to LDAP distinguished name",
@@ -594,7 +615,7 @@ static void process_tests()
                      fail(std::format("caller notice '{}' for failure '{}'", shown, what));
              };
              hides("/proc/craft-missing", [] { (void)root_open("/proc/craft-missing"); });
-             hides("secret_setting", [] { fallback_config("enabled=yes\nsecret_setting=1\n"); });
+             hides("secret_setting", [] { parse_config("enabled=yes\nsecret_setting=1\n"); });
              hides("Denied by policy 7",
                    []
                    {
@@ -745,6 +766,26 @@ static void process_tests()
              const Fd record = open_private(dir.get(), "1234.lock", O_RDWR, "issuance lock");
              write_record(record.get(), "not a time");
              rejects([&] { rate_limit(dir.get(), 1234, 60, now); });
+         });
+
+    test("broker fallback shares one request admission without bypassing locks or restarting the cooldown",
+         [&]
+         {
+             const time_t now = 1700000000;
+             const auto request = random_hex(), other = random_hex();
+             {
+                 const Fd first = rate_limit(dir.get(), 5678, 60, now, request);
+                 rejects([&] { rate_limit(dir.get(), 5678, 60, now + 1, request); });
+             }
+             {
+                 const Fd next = rate_limit(dir.get(), 5678, 60, now + 1, request);
+                 need(read_record(next.get()) == std::format("{} {}", now, request),
+                      "fallback reset its request's cooldown");
+             }
+             rejects([&] { rate_limit(dir.get(), 5678, 60, now + 59, other); });
+             const Fd admitted = rate_limit(dir.get(), 5678, 60, now + 60, other);
+             need(read_record(admitted.get()) == std::format("{} {}", now + 60, other),
+                  "a new request did not replace the admission identifier");
          });
 
     test("stale status and temporary files are pruned after a week; recent and unrelated files stay",
@@ -2487,14 +2528,14 @@ static void write_fuzz_seeds(const std::string &directory)
         write_all(file.get(), content);
     };
     const std::string home = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n";
-    const auto fallback = home + "netbios=DOMAIN\ntemplate_oid=" + oid +
+    const auto fallback = home + "modes=enrollment\nnetbios=DOMAIN\ntemplate_oid=" + oid +
                           "\nces_url=https://ca.domain.local/CES\nces_auth=mtls\n"
                           "service_principal=submitter@DOMAIN.LOCAL\nkey_bits=3072\ntgt_seconds=36000\n";
     std::string options;
     for (const char *argument : {"--watch-pid", "123", "--max-duration", "21d", "--status"})
         options.append(argument).push_back('\0');
     seed("config", FuzzTarget::Config, byte_view(fallback));
-    seed("home-config", FuzzTarget::HomeConfig, byte_view(home));
+    seed("home-config", FuzzTarget::HomeConfig, byte_view(home + "modes=home\n"));
     seed("response", FuzzTarget::Response, byte_view(response_xml(der)));
     seed("base64", FuzzTarget::Base64, byte_view(base64(der)));
     seed("san", FuzzTarget::Extension, extension_bytes(leaf.get(), SAN_OID));

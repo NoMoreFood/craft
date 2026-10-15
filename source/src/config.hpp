@@ -3,6 +3,7 @@
 // Strict parsing of the administrator's configuration, independent of privileged file access.
 #include "unprivileged.hpp"
 #include <map>
+#include <optional>
 #include <ranges>
 #include <regex>
 #include <sstream>
@@ -14,20 +15,13 @@ inline std::string path(std::string_view name)
     return std::format("{}/{}", CONFIG_DIR, name);
 }
 
-enum class CertificateSource
-{
-    Enrollment,
-    Home,
-    KeyTrust,
-    ConstrainedDelegation
-};
-
 struct Config
 {
     std::string domain, realm, netbios, template_oid, ces_url, service_principal;
     std::string certificate_cn = "{user}";
     std::string gc_url, gc_base_dn, kt_dc_url;
     std::vector<std::string> service_spns{};
+    std::vector<CertificateSource> modes{};
     uint32_t service_ticket_seconds = 36000;
     uint32_t tgt = 36000, renew = 604800, cert_remaining = 36000, cert_total = 36000, interval = 60;
     uint32_t key_bits = 3072;
@@ -57,9 +51,8 @@ inline bool plain_url(std::string_view url, std::string_view scheme)
            std::ranges::all_of(rest, [](unsigned char c) { return c > 32 && c < 127; });
 }
 
-// The caller-side probe uses home policy unless service-only mode is configured. The broker worker
-// requires the settings for its selected mechanism.
-inline Config parse_config(std::string_view text, bool home)
+// Validate the whole enabled policy before acquisition; a worker may select only a listed mode.
+inline Config parse_config(std::string_view text, std::optional<CertificateSource> selected = {})
 {
     static constexpr std::array<std::string_view, 22> keys{"enabled",
                                                            "domain",
@@ -69,7 +62,7 @@ inline Config parse_config(std::string_view text, bool home)
                                                            "ces_url",
                                                            "ces_auth",
                                                            "service_principal",
-                                                           "mechanism",
+                                                           "modes",
                                                            "service_spns",
                                                            "service_ticket_seconds",
                                                            "kt_dc_url",
@@ -113,20 +106,26 @@ inline Config parse_config(std::string_view text, bool home)
         return found == values.end() ? fallback : number(found->second, maximum);
     };
     need(required("enabled") == "yes", "service disabled; review configuration and set enabled=yes");
-    const auto mechanism = optional("mechanism", "enrollment");
-    auto source = mechanism == "constrained_delegation" ? CertificateSource::ConstrainedDelegation
-                                                       : CertificateSource::Home;
-    if (!home && source != CertificateSource::ConstrainedDelegation)
-    {
-        need(mechanism == "enrollment" || mechanism == "key_trust",
-             "mechanism must be enrollment, key_trust or constrained_delegation");
-        source = mechanism == "key_trust" ? CertificateSource::KeyTrust : CertificateSource::Enrollment;
-    }
-    const bool enrollment = source == CertificateSource::Enrollment; // CA, CES and enrollment agent
-    const bool key_trust = source == CertificateSource::KeyTrust;    // msDS-KeyCredentialLink
-    const bool delegated = source == CertificateSource::ConstrainedDelegation;
     Config c;
-    c.source = source;
+    std::istringstream modes(required("modes"));
+    for (std::string name; modes >> name;)
+    {
+        const auto found = std::ranges::find(MODE_NAMES, name);
+        need(found != MODE_NAMES.end(), "modes must list home, enrollment, key_trust or constrained_delegation");
+        const auto mode = static_cast<CertificateSource>(found - MODE_NAMES.begin());
+        need(std::ranges::find(c.modes, mode) == c.modes.end(), "duplicate operating mode");
+        c.modes.push_back(mode);
+    }
+    need(!c.modes.empty(), "modes requires at least one operating mode");
+    c.source = selected.value_or(c.modes.front());
+    need(std::ranges::find(c.modes, c.source) != c.modes.end(), "requested operating mode is disabled");
+    const auto includes = [&](CertificateSource mode)
+    {
+        return std::ranges::find(c.modes, mode) != c.modes.end();
+    };
+    const bool enrollment = includes(CertificateSource::Enrollment);
+    const bool key_trust = includes(CertificateSource::KeyTrust);
+    const bool delegated = includes(CertificateSource::ConstrainedDelegation);
     c.domain = required("domain");
     c.realm = required("realm");
     c.netbios = required("netbios", enrollment);
@@ -197,7 +196,7 @@ inline Config parse_config(std::string_view text, bool home)
     if (key_trust)
         need(plain_url(c.kt_dc_url, "ldap://"),
              "kt_dc_url must be an ldap:// URL naming the writable domain controller");
-    if (!home) need(plain_url(c.gc_url, "ldap://"), "gc_url must be an ldap:// URL");
+    if (enrollment || key_trust) need(plain_url(c.gc_url, "ldap://"), "gc_url must be an ldap:// URL");
     need(c.certificate_cn.size() <= 256, "certificate CN pattern is too long");
     need(c.renew == 0 || c.renew > c.tgt, "renew_seconds must be 0 or exceed tgt_seconds");
     need(c.tgt >= 60 && c.cert_remaining >= 60 && c.cert_total >= c.cert_remaining && c.interval >= 30,
@@ -205,9 +204,9 @@ inline Config parse_config(std::string_view text, bool home)
     return c;
 }
 
-inline Config config(bool home)
+inline Config config(std::optional<CertificateSource> selected = {})
 {
-    return parse_config(root_text(path("config")), home);
+    return parse_config(root_text(path("config")), selected);
 }
 
 // Expand only administrator-configured CN placeholders; identity still comes from the directory UPN.

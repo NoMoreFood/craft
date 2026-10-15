@@ -234,11 +234,12 @@ def process_guide(images):
         "CRAFT Linux Operating Modes and Tickets",
         "Certificate Request Agent for Tickets  |  Process overview")
     paragraph(doc, (
+        "Administrators select and order CRAFT modes to fit their environment's capabilities and needs. "
         "CRAFT obtains Kerberos credentials from Linux without storing the user's AD password. "
         "Modes 1-3 obtain a user TGT through PKINIT. Mode 4 uses broker constrained delegation "
         "to obtain only approved service tickets. Domain membership is not required."
     ))
-    doc.add_heading("Choose an operating mode", 1)
+    doc.add_heading("Choose operating modes", 1)
     table(doc, ["Mode", "Credential source and authority", "Setup"], [
         ["1  Privileged enrollment", (
             'Linux generates a user key and enrolls a certificate through CES and AD '
@@ -261,10 +262,10 @@ def process_guide(images):
     ], [1.65, 4.15, 1.34])
     doc.add_heading("How CRAFT selects the mode", 1)
     paragraph(doc, (
-        'mechanism=constrained_delegation selects mode 4 and ignores home certificates. '
-        'Otherwise a complete NSS-home ~/.config/craft/user.pem and user.key pair selects '
-        'mode 3. Partial or invalid pairs fail. Only an absent pair selects enrollment '
-        'or Key Trust from mechanism; failures never switch mechanisms.'
+        'The ordered modes list enables one or more workflows. For example, modes=home enrollment '
+        'tries the caller PEM pair, then enrollment after acquisition failure. The first success supplies '
+        'the cache. Invalid policy, worker interruption, failed key cleanup and publication errors stop '
+        'the request. Use modes=constrained_delegation alone to require service tickets without a TGT.'
     ))
     paragraph(doc, (
         'Mode 3 uses ordinary executables. Modes 1, 2 and 4 require the setuid launcher, '
@@ -457,7 +458,7 @@ def configuration_guide():
         'Certificate Request Agent for Tickets  |  Administrator reference'
     ))
     paragraph(doc, (
-        'Configure one of four Linux operating modes: privileged certificate '
+        'Select and order one or more Linux operating modes to fit the environment: certificate '
         'enrollment through CES and AD CS, privileged credential linking through '
         'msDS-KeyCredentialLink, or unprivileged PKINIT with a certificate '
         'exported from Windows, or service-only constrained delegation with a broker keytab. This guide gives '
@@ -492,6 +493,12 @@ def configuration_guide():
         'Mode 4 uses the same privileged Linux installation as modes 1 and 2, plus a dedicated '
         'broker AES keytab with protocol transition and approved target SPNs. It requires no '
         'certificates, CRLs, PKINIT, LDAP or CES. See the mode 4 setup page.'
+    ))
+    paragraph(doc, (
+        'Set modes to an ordered list, such as home enrollment or key_trust enrollment. '
+        'Configure every enabled mode. Acquisition failures advance to the next mode; the first success '
+        'supplies the cache. Broker modes share one account/keytab and request cooldown. '
+        'Use constrained_delegation alone to prohibit a user TGT.'
     ))
     page(doc, "Shared Linux preparation")
     paragraph(doc, (
@@ -559,7 +566,7 @@ def configuration_guide():
 enabled=no
 domain=domain.local
 realm=DOMAIN.LOCAL
-mechanism=enrollment
+modes=enrollment
 netbios=DOMAIN
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 template_oid=1.3.6.1.4.1.311.21.8.999.1
@@ -602,8 +609,8 @@ minimum_interval_seconds=60
     paragraph(doc, (
         'Validate the template profile on the next page and prove CA refusal for '
         'out-of-scope recipients. Set enabled=yes and enable the setuid launcher '
-        'only when ready. Test as an approved user with both home PEM files '
-        'absent, so the supplied-certificate path does not hide the enrollment '
+        'only when ready. Test as an approved user with modes=enrollment '
+        'so another acquisition path does not hide the enrollment '
         'setup.'
     ))
     page(doc, "Mode 1 certificate and ticket policy")
@@ -706,7 +713,7 @@ minimum_interval_seconds=60
 enabled=no
 domain=domain.local
 realm=DOMAIN.LOCAL
-mechanism=key_trust
+modes=key_trust
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 kt_dc_url=ldap://dc01.domain.local
 key_bits=3072
@@ -747,7 +754,7 @@ minimum_interval_seconds=60
     ))
     paragraph(doc, (
         'Review delegation and trust, set enabled=yes, and enable the setuid '
-        'launcher. Test with both home PEM files absent. Verify the returned '
+        'launcher. Test with modes=key_trust. Verify the returned '
         'caller principal, attribute cleanup, existing-key preservation and '
         'directory refusal for out-of-scope accounts; repeat after revoking the '
         'delegation.'
@@ -799,7 +806,7 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'passphrase prompts, PKCS#11 and hardware-key backends are unsupported.'
     ))
     code(doc, (
-        'enabled=no\ndomain=domain.local\nrealm=DOMAIN.LOCAL\ntgt_seconds=36000\n'
+        'enabled=no\nmodes=home\ndomain=domain.local\nrealm=DOMAIN.LOCAL\ntgt_seconds=36000\n'
         'renew_seconds=604800\nrequire_full_tgt_lifetime=yes'
     ))
     paragraph(doc, (
@@ -813,9 +820,8 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'enrollment template/ten-hour certificate cap in this mode.'
     ))
     paragraph(doc, (
-        'Set enabled=yes when ready. There is no mechanism=home setting: the '
-        'complete PEM pair selects this path, including on privileged '
-        'installations. Partial or invalid pairs fail without fallback. Repeat '
+        'Set enabled=yes when ready. modes=home requires the supplied pair. Add other modes '
+        'only when their fallback authority is intended and provisioned. Repeat '
         'the Windows helper to check renewal and transfer replacements before '
         'expiry. Its default window is one calendar month; /RenewBeforeDays '
         'changes it, and /DeleteAfterExport optionally removes the Windows-store '
@@ -835,7 +841,7 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
 enabled=no
 domain=domain.local
 realm=DOMAIN.LOCAL
-mechanism=constrained_delegation
+modes=constrained_delegation
 service_principal=CRAFT/broker.domain.local@DOMAIN.LOCAL
 service_spns=cifs/files.domain.local@DOMAIN.LOCAL HTTP/portal.domain.local@DOMAIN.LOCAL
 service_ticket_seconds=36000
@@ -864,7 +870,7 @@ minimum_interval_seconds=60
         'Stop existing maintainers and remove the old TGT cache before switching to mode 4. '
         'After enabling acquisition, verify every cache record, service authentication with a client '
         'that accepts a service-only cache, '
-        'unapproved-target and nondelegable-user denial, home-pair precedence and cache preservation. '
+        'unapproved-target and nondelegable-user denial, disabled home mode and cache preservation. '
         'Existing credentials are not revoked by configuration changes.'
     ))
     paragraph(doc, (
@@ -889,9 +895,9 @@ minimum_interval_seconds=60
             'encryption and actual lifetimes. Test a real Kerberos-enabled service.'
         )],
         ["Selection and failure", (
-            'Mode 4 ignores home certificates. In modes 1-3, a complete home pair takes priority. Invalid files must'
-            ' preserve the cache without either privileged mechanism. With both '
-            'absent, use only the configured mechanism. Test wrong mapping, stale '
+            'Verify configured order, fallback after acquisition errors and refusal of disabled modes. '
+            'A service-only list must never produce a TGT. All-mode failure must preserve the cache. '
+            'Test wrong mapping, stale '
             'required CRLs, key mismatch, KDC outage, RC4 and shortened strict-mode '
             'grants.'
         )],
@@ -973,7 +979,7 @@ minimum_interval_seconds=60
         )],
         ["Stop fresh acquisition", (
             'Set enabled=no or remove launcher execute access. Removing only setuid stops '
-            'modes 1, 2 and 4; a supplied pair remains usable only in certificate modes.'
+            'modes 1, 2 and 4; a supplied pair remains usable only if home is enabled.'
         )],
         ["Stop ticket renewal", (
             'Inspect job status and send SIGTERM to each recorded maintainer_pid. '

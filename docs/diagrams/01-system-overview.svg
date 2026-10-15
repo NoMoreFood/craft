@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="01-system-overview-title 01-system-overview-desc">
   <title id="01-system-overview-title">Four Linux operating modes</title>
-  <desc id="01-system-overview-desc">The configured constrained_delegation mode bypasses home certificates and obtains only approved service tickets. Otherwise a complete home pair selects mode 3; an absent pair selects enrollment or Key Trust. Invalid home inputs fail. Validated credentials are published as the caller.</desc>
+  <desc id="01-system-overview-desc">CRAFT reads the administrator's ordered modes list and tries each enabled workflow until one succeeds. Reported acquisition failures advance to the next mode. Invalid policy, interruption, failed key cleanup or publication errors stop the request. Only validated credentials are published.</desc>
   <rect x="0" y="0" width="1600" height="1000" rx="0" fill="#F6F9FB" stroke="none" stroke-width="1" />
   <rect x="0" y="0" width="1600" height="181" rx="0" fill="#112D43" stroke="none" stroke-width="1" />
   <rect x="64" y="40" width="5" height="26" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
@@ -9,7 +9,7 @@
   <text x="193" y="55.53" font-size="13" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">CERTIFICATE REQUEST AGENT FOR TICKETS</text>
   <text x="1536" y="55.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="end">01 / 07</text>
   <text x="64" y="114.78" font-size="38" font-family="'Segoe UI', Arial, sans-serif" fill="#FFFFFF" font-weight="600" text-anchor="start">Four Linux operating modes</text>
-  <text x="64" y="153.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">Service-only policy takes precedence. Certificate modes check the caller's home PEM pair first.</text>
+  <text x="64" y="153.58" font-size="18" font-family="'Segoe UI', Arial, sans-serif" fill="#C2D7E4" font-weight="400" text-anchor="start">Administrators select one or more modes and their order to fit the environment.</text>
   <rect x="64" y="220" width="350" height="110" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="84" y="241" width="4" height="23" rx="0" fill="#18334A" stroke="none" stroke-width="1" />
   <text x="100" y="258.63" font-size="23" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Invoke craft as the user</text>
@@ -17,26 +17,22 @@
   <text x="86" y="316.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">No arguments; no sudo</text>
   <rect x="480" y="220" width="1056" height="110" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="500" y="241" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
-  <text x="516" y="261.87" font-size="27" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Read administrator-controlled mechanism policy</text>
-  <text x="502" y="291.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">constrained_delegation selects service tickets only; otherwise inspect the home PEM pair</text>
+  <text x="516" y="261.87" font-size="27" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Read administrator-controlled mode order</text>
+  <text x="502" y="291.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Example: modes=home key_trust enrollment constrained_delegation</text>
   <polyline points="414,275 480,275" fill="none" stroke="#18334A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   <polygon points="480,275 472.0,270.6 472.0,279.4" fill="#18334A" />
-  <rect x="64" y="370" width="1098" height="100" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
+  <rect x="64" y="370" width="1472" height="100" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="84" y="391" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
-  <text x="100" y="410.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Certificate modes check user.pem and user.key</text>
-  <text x="86" y="441.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Complete pair: mode 3. Both absent: configured mode 1 or 2. Invalid or partial pair: fail.</text>
+  <text x="100" y="410.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Try the next enabled mode; stop at the first success</text>
+  <text x="86" y="441.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">A reported acquisition failure advances through the list. Mode numbers identify workflows, not priority.</text>
   <polyline points="800,330 800,370" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   <polygon points="800,370 804.4,362.0 795.6,362.0" fill="#315DC0" />
-  <polyline points="1361,330 1361,525" fill="none" stroke="#7752A3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-  <polygon points="1361,525 1365.4,517.0 1356.6,517.0" fill="#7752A3" />
-  <text x="1361" y="400.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#7752A3" font-weight="600" text-anchor="middle">MODE 4</text>
-  <text x="1361" y="431.2" font-size="20" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">Ignore home PEM</text>
   <polyline points="239,470 239,525" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   <polygon points="239,525 243.4,517.0 234.6,517.0" fill="#007F7C" />
   <rect x="64" y="525" width="350" height="260" rx="12" fill="#E2F2EF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="84" y="546" width="4" height="23" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
   <text x="100" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">1  Enrollment</text>
-  <text x="86" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">mechanism=enrollment</text>
+  <text x="86" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">enrollment</text>
   <text x="86" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Service keytab + agent + CES</text>
   <text x="86" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">CA issues a user certificate</text>
   <text x="86" y="671.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">PKINIT obtains a user TGT</text>
@@ -48,7 +44,7 @@
   <rect x="438" y="525" width="350" height="260" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="458" y="546" width="4" height="23" rx="0" fill="#7752A3" stroke="none" stroke-width="1" />
   <text x="474" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">2  Key Trust</text>
-  <text x="460" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">mechanism=key_trust</text>
+  <text x="460" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">key_trust</text>
   <text x="460" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Service keytab + writable DC</text>
   <text x="460" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Link a temporary public key</text>
   <text x="460" y="671.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">PKINIT obtains a user TGT</text>
@@ -60,13 +56,15 @@
   <rect x="812" y="525" width="350" height="260" rx="12" fill="#E3EBFA" stroke="#D5E0E7" stroke-width="1" />
   <rect x="832" y="546" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
   <text x="848" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">3  Windows PEM</text>
-  <text x="834" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Complete home PEM pair</text>
-  <text x="834" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Caller validates certificate</text>
+  <text x="834" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">home</text>
+  <text x="834" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Caller validates home PEM pair</text>
   <text x="834" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">PKINIT obtains a user TGT</text>
   <text x="834" y="671.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">KDC maps certificate to user</text>
   <text x="834" y="696.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Supplied PEM pair persists</text>
   <polyline points="987,785 987,818 800,818 800,850" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   <polygon points="800,850 804.4,842.0 795.6,842.0" fill="#315DC0" />
+  <polyline points="1361,470 1361,525" fill="none" stroke="#7752A3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <polygon points="1361,525 1365.4,517.0 1356.6,517.0" fill="#7752A3" />
   <rect x="1186" y="525" width="350" height="260" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="1206" y="546" width="4" height="23" rx="0" fill="#7752A3" stroke="none" stroke-width="1" />
   <text x="1222" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">4  Service tickets</text>

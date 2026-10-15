@@ -2,6 +2,8 @@
 
 Mode 4 uses a dedicated AD broker account to obtain selected service tickets for the calling Linux user. S4U2Self performs protocol transition; S4U2Proxy requests each approved service. The published cache contains only those final tickets and session keys. The broker TGT, S4U2Self evidence and proxy metadata remain private to the worker. There is no user TGT and no certificate enrollment, PKINIT or directory write.
 
+Set `modes=constrained_delegation` to require this workflow exclusively. Adding certificate modes to the ordered list explicitly authorizes a TGT if one of them succeeds. Use only the service mode when a TGT would violate the deployment's policy; otherwise choose the order that fits application needs and the environment's capabilities.
+
 ## Authorize the broker
 
 Use a dedicated ordinary service account with an AES keytab and a unique SPN. On an authorized AD administration host, adapt this example for an existing broker account and the actual services:
@@ -38,7 +40,7 @@ SPN restrictions do not provide isolation between services sharing an AD account
 
 ## Use and maintain the cache
 
-Run `craft` as the intended non-root Linux user. Point applications at the returned `KRB5CCNAME`. They must request the configured SPNs exactly, including case; aliases, canonicalization or additional services may require additional approved entries. Validate the actual application: some Kerberos clients require a TGT before attempting service authentication and cannot use a service-only cache. A cache without a TGT cannot obtain arbitrary new service tickets. One failed target prevents the entire replacement, preserving the previous cache.
+Run `craft` as the intended non-root Linux user. Point applications at the returned `KRB5CCNAME`. They must request the configured SPNs exactly, including case; aliases, canonicalization or additional services may require additional approved entries. Validate the actual application: some Kerberos clients require a TGT before attempting service authentication and cannot use a service-only cache. A cache without a TGT cannot obtain arbitrary new service tickets. One failed target rejects this mode's entire batch; the old cache remains unless another explicitly enabled mode succeeds.
 
 `service_ticket_seconds` requests the maximum lifetime, default ten hours. The KDC may shorten it, and CRAFT accepts a shorter usable AES grant. TGT lifetime/renewal settings do not control this mode. Final service tickets can carry forwardable/forwarded flags from S4U; this does not mean a TGT was exported.
 

@@ -53,9 +53,19 @@ stat -c '%U %a %n' ~/.krb5cc_craft
 
 Configure system Kerberos for applications and maintenance as well as CRAFT's acquisition configuration. Do not infer ten-hour/seven-day grants from requested values alone.
 
+## Mode selection acceptance checks
+
+Validate each mode alone before combining them. Then test the exact ordered list intended for deployment.
+
+1. Confirm the first successful mode supplies the cache and later modes are not attempted. Reverse the order and verify the selected mode in AUTHPRIV records.
+2. Cause a reported acquisition failure in each preferred mode and verify the next enabled mode runs. Include absent, partial, invalid and unsafe home pairs, server denial and unavailable endpoints. Disabled modes must never run.
+3. Verify broker attempts within one invocation share the per-user cooldown, while a new invocation cannot reuse that admission. Check concurrent requests and directory cleanup.
+4. Reject an invalid configuration before acquisition, including missing prerequisites for a later mode. Worker termination, unconfirmed Key Trust cleanup and cache-publication failure must stop fallback and preserve the cache.
+5. When both credential kinds are enabled, exercise automatic maintenance from service tickets to a TGT through fallback. Verify status, renewal deadlines, application access and watched-job exit. Use only `constrained_delegation` if policy prohibits a TGT.
+
 ## Live acceptance checklist
 
-These checks apply to **mode 1 enrollment**. Test with both home PEM files absent so supplied credentials cannot hide incomplete enrollment setup.
+These checks apply to **mode 1 enrollment**. Set `modes=enrollment` so other modes cannot hide incomplete enrollment setup.
 
 1. Verify the launcher is `root:craft-users` mode 4750, the worker/maintainer are ordinary executables, private credentials are `root:craft` mode 0640 and `/run/craft` is `craft:craft` mode 0700. Callers must not belong to the service group or invoke its credentials directly.
 2. Verify the service principal/AES keytab, GC DNS/SPN/search base and SASL GSSAPI plugin. Resolve exactly one intended account, including an alternate UPN suffix where used; unknown/ambiguous users fail. Both CES authentication modes require the directory keytab.
@@ -68,7 +78,7 @@ These checks apply to **mode 1 enrollment**. Test with both home PEM files absen
 
 ## Key Trust acceptance checks
 
-These checks apply to **mode 2**. Use disposable ordinary accounts and both home PEM files absent.
+These checks apply to **mode 2**. Use disposable ordinary accounts and `modes=key_trust`.
 
 1. Pin the same writable DC for `kt_dc_url` and Kerberos. Verify Key Trust capability, KDC certificate/CRLs, MIT PKINIT freshness interoperability, service AES keytab and LDAP/GSSAPI encryption at SSF 128 or higher.
 2. Inspect the delegation: exactly ReadProperty/WriteProperty on `msDS-KeyCredentialLink` for a reviewed OU or single user. Keep privileged identities outside the scope and protect its membership/ACL administrators.
@@ -87,9 +97,9 @@ These checks apply to **mode 3**, including supplied certificates on a privilege
 1. Run the Windows helper as the intended ordinary domain user with an authorized template. Validate eligible-CA selection, exportable software-key policy, pending/denied outcomes and the exported pair's Linux/KDC mapping.
 2. Verify ordinary mode-0755 executables, readable root-controlled public configuration/trust/CRLs, and successful acquisition without a service account, private service credentials or `/run/craft`. Test inherited `no_new_privs`.
 3. Supply the pair in the NSS home with safe directories, caller ownership and private key permissions. Validate both ordinary certificate validity and alternate UPN suffixes where used.
-4. Verify a valid pair takes priority on a privileged installation: no LDAP/CES operation, agent/keytab access or privileged acquisition timestamp is required. Partial/invalid pairs must fail without either privileged mechanism.
+4. With `modes=home`, verify that valid pairs need no LDAP/CES operation, agent/keytab access or privileged acquisition timestamp. Partial/invalid pairs must fail and preserve the cache.
 5. Reject symlinks, extra hard links, wrong ownership, public private-key permissions, nonregular/empty/oversized files, encrypted/malformed or mismatched keys, invalid profiles and wrong-account mapping. Preserve the previous cache.
-6. Remove both files: an ordinary installation must refuse privileged acquisition; a setuid installation must use only its configured mechanism. Neither failure nor a partial pair permits switching modes.
+6. Remove both files and confirm home-only policy fails. With an explicitly enabled broker fallback, verify that absent, partial and malformed pairs advance to that mode. Reverse the order and confirm successful broker acquisition does not inspect home files.
 7. Repeat Windows export/reuse/renewal and optional local-store deletion. Transfer replacements only after success and before expiry. Test Linux failure with an incomplete replacement, then restore the valid pair.
 8. If maintenance is used, test cache-only renewal, fresh authentication with the replaced pair, outages and watched-job exit. Neither CRAFT nor the maintainer renews the supplied certificate.
 
@@ -98,7 +108,7 @@ These checks apply to **mode 3**, including supplied certificates on a privilege
 These checks apply to **mode 4**. Use a dedicated lab broker and disposable ordinary users.
 
 1. Verify broker SPN/keytab identity, AES keys, protocol transition, `TrustedForDelegation=false`, and the exact AD target SPNs. Keep broker permissions separate from enrollment and Key Trust.
-2. Run with `mechanism=constrained_delegation`, at least two approved targets, and both absent and present home PEM pairs. A valid or invalid home pair must not select PKINIT. No CA/CRL files, LDAP or CES credentials are required.
+2. Run with `modes=constrained_delegation`, at least two approved targets, and both absent and present home PEM pairs. A valid or invalid home pair must not select PKINIT. No CA/CRL files, LDAP or CES credentials are required.
 3. Inspect every FILE-cache credential with MIT Kerberos: the client must be the Linux caller and every server an exact configured target. No `krbtgt`, broker credential, S4U2Self `second_ticket`, or proxy metadata may be present. Check AES ticket/session encryption and the lifetime cap.
 4. Authenticate to a real approved service with the published cache. Attempt an uncached, unapproved SPN; it must fail because the cache contains no TGT.
 5. Configure one approved and one AD-denied target. Acquisition must fail as a batch and preserve the previous cache byte-for-byte. Repeat with a nondelegable user, disabled protocol transition, withdrawn delegation, wrong keytab and unavailable KDC.
@@ -116,9 +126,9 @@ These are recorded repository observations, not acceptance results for your curr
 
 All four modes were exercised on Ubuntu 24.04.5 LTS with GCC 13.3 and MIT Kerberos 1.20.1, and Rocky Linux 9.8 with GCC Toolset 15.2.1 and MIT Kerberos 1.21.1. The lab used Windows Server 2022 AD/AD CS/CES and Server 2019/2025 member servers. Build dependencies were checked against the distribution repositories; Rocky's libcurl packages were updated to 7.76.1-40.el9_8.8. Both release builds completed without warnings.
 
-Each Linux client passed 107 offline checks, 10 synthetic Key Trust cleanup checks and nine constrained-delegation checks as an ordinary user. Detached-maintainer integration passed 19 checks with pidfd watching and 19 with the `/proc` fallback on each client, including interruption of a service refresh without cache loss or incorrect ticket-kind status. Ubuntu also passed all 107 offline and nine delegation checks under AddressSanitizer and UndefinedBehaviorSanitizer. These suites use synthetic credentials and isolated test resources.
+Each Linux client passed 109 offline checks, 11 synthetic Key Trust cleanup checks and nine constrained-delegation checks as an ordinary user. Detached-maintainer integration passed 19 checks with pidfd watching and 19 with the `/proc` fallback on each client, including interruption of a service refresh without cache loss or incorrect ticket-kind status. Ubuntu also passed all 129 checks across those three suites under AddressSanitizer and UndefinedBehaviorSanitizer, including leak detection. These suites use synthetic credentials and isolated test resources.
 
-Each client passed 33 live acquisition, application, failure and maintenance checks. All three Windows helper suites passed on each Windows guest. The live mode coverage was:
+Each client passed 55 live acquisition, application, failure and maintenance checks, including 20 ordered-mode checks and two checks of maintenance across a change in credential kind. All three Windows helper suites passed on each Windows guest. The live mode coverage was:
 
 | Mode | Recorded coverage |
 | --- | --- |
@@ -127,13 +137,15 @@ Each client passed 33 live acquisition, application, failure and maintenance che
 | 3 Windows export | Export, reuse, forced renewal and confirmed Windows-store cleanup for all three RSA sizes on Server 2019/2022/2025; all nine exported pairs used for PKINIT on each Linux client |
 | 4 Constrained delegation | Two exact CIFS targets on both clients, with 60-second and default ten-hour service grants; no TGT, broker credential or evidence in the published cache |
 
-Modes 1-3 produced ten-hour AES TGTs with seven-day renewal, within the configured five-second tolerance, and authenticated to LDAP and both SMB servers. Ordinary non-setuid home mode also succeeded with private broker files absent and inherited `no_new_privs`. Partial and malformed home identities failed without fallback and preserved the cache. The maintainer's renewal operation was invoked directly against real ten-hour TGTs from each mode, retaining authentication time, the absolute renewal deadline and usable service tickets; detached startup, status and watched-job exit also passed. An experimental 120-second TGT was issued but AD refused its renewal with `Ticket expired`; CRAFT retained the cache and reported the failure. Short TGT behavior must be validated against the actual KDC.
+Modes 1-3 produced ten-hour AES TGTs with seven-day renewal, within the configured five-second tolerance, and authenticated to LDAP and both SMB servers. Ordinary non-setuid home mode also succeeded with private broker files absent and inherited `no_new_privs`. With `modes=home`, partial and malformed identities failed and preserved the cache. The maintainer's renewal operation was invoked directly against real ten-hour TGTs from each mode, retaining authentication time, the absolute renewal deadline and usable service tickets; detached startup, status and watched-job exit also passed. A separate short-ticket experiment issued a 120-second TGT but AD refused its renewal with `Ticket expired`; CRAFT retained the cache and reported the failure. Short TGT behavior must be validated against the actual KDC.
 
-Mode 4 used a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs, with unconstrained delegation disabled. It ignored malformed and parseable home pairs and ran without CA/CRL configuration. MIT cache inspection verified the fixed caller, exact targets, AES credentials, lifetime bounds and absence of TGTs, broker credentials, S4U2Self evidence and proxy metadata. Grants of 60, 120 and 36000 seconds were exercised. The private broker TGT requested at least 600 seconds for S4U processing.
+Mode 4 used a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs, with unconstrained delegation disabled. It ignored malformed and parseable home pairs and ran without CA/CRL configuration. MIT cache inspection verified the fixed caller, exact targets, AES credentials, lifetime bounds and absence of TGTs, broker credentials, S4U2Self evidence and proxy metadata. The ordered-mode run exercised 60- and 36000-second grants; a separate service-only run also exercised 120-second grants. The private broker TGT requested at least 600 seconds for S4U processing.
 
 Both clients read files from both Windows shares using Kerberos-only authentication; server security events confirmed network logons from each client. Ubuntu used Samba `smbclient` 4.19.5. Rocky used `smbprotocol` 1.16.1 with GSSAPI and encrypted SMB because its bundled `smbclient` 4.23.5 required TGT credentials. Case differences between cached SPNs and application requests also prevented service-only authentication. Validate the actual client and exact SPN spelling.
 
-Both clients preserved their cache when a target was denied by AD, the user was nondelegable, protocol transition was disabled, delegation was withdrawn, the broker keytab was wrong or the KDC was unreachable. An uncached target could not be acquired without a TGT. Rate limits and non-setuid refusal preserved the cache, including when a valid home pair was present. Automatic maintenance refreshed both 60-second service tickets, retained the cache and watched job during a KDC outage, recovered when the KDC returned, and stopped when the job exited. Status reported `ticket_kind=service` and `renew_until=0`.
+Both clients preserved their cache when a target was denied by AD or the KDC was unreachable. Separate service-only validation also covered a nondelegable user, disabled protocol transition, withdrawn delegation and a wrong broker keytab. An uncached target could not be acquired without a TGT. Rate limits and non-setuid refusal preserved the cache, including when a valid home pair was present. Automatic maintenance refreshed both 60-second service tickets, retained the cache and watched job during a KDC outage, recovered when the KDC returned, and stopped when the job exited. Status reported `ticket_kind=service` and `renew_until=0`.
+
+The ordered-mode checks exercised forward and reverse four-mode lists, first-success short-circuiting, disabled-mode refusal and fallback after absent/partial/invalid/unsafe home identities, CES/LDAP connection failures and an actual AD-denied Key Trust write. Audit records confirmed each attempted mode and the winner. They also verified shared broker admission without bypass by a new invocation, ordinary-installation fallback to home, all-failure cache preservation, up-front validation of later-mode prerequisites, and refusal to continue after cache-publication failure or a killed worker. Automatic maintenance changed a service-only cache to a renewable home-certificate TGT after the preferred delegation attempt failed, updated status, retained LDAP/SMB access and stopped with the watched job.
 
 Temporary AD/Linux identities and test shares were removed, guest credential copies were cleared, and guests started for the run were returned to their original powered-off state. Private mount namespaces kept test binaries, configuration and runtime files separate from the existing installation.
 

@@ -543,7 +543,7 @@ run_update(const Account &caller, const std::string &expected, const Watch &watc
     channel.writer = Fd();
     if (setpgid(operation.pid(), operation.pid()) != 0)
         need(errno == EACCES || errno == ESRCH, "set maintenance process group");
-    const auto until = std::min(Clock::now() + std::chrono::seconds(150), deadline);
+    const auto until = std::min(Clock::now() + std::chrono::seconds(ACQUISITION_SECONDS + 30), deadline);
     while (!stopping && Clock::now() < until)
     {
         const auto wake = wait_for(watch, channel.reader.get(), until);
@@ -676,7 +676,7 @@ inline void detach(const Account &caller, const Options &option, const Watch &wa
         }));
     startup.writer = Fd();
     need(intermediate.wait(), "background startup failed");
-    const auto until = Clock::now() + std::chrono::seconds(160);
+    const auto until = Clock::now() + std::chrono::seconds(ACQUISITION_SECONDS + 40);
     Wake wake;
     do
         wake = wait_for(watch, startup.reader.get(), until);

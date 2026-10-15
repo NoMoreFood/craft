@@ -1,21 +1,38 @@
 # CRAFT build installation and configuration
 
-This guide is for administrators compiling CRAFT on Linux, provisioning Active Directory and PKI prerequisites, and operating the installed system. CRAFT obtains the calling user's Kerberos credentials without storing the user's AD password. Modes 1-3 obtain a ticket-granting ticket (TGT) through PKINIT; mode 4 obtains only approved service tickets through a broker's constrained delegation. It does not perform an MFA challenge.
+This guide helps administrators combine CRAFT's operating modes into a Kerberos credential solution suited to their environment's capabilities and application needs. CRAFT obtains the calling user's credentials on Linux without storing the user's AD password. Modes 1-3 obtain a ticket-granting ticket (TGT) through PKINIT; mode 4 obtains approved service tickets through broker constrained delegation. It does not perform an MFA challenge.
 
-| Mode | Credential source | Linux acquisition identity | Setup |
+| Mode | Credential source | Linux acquisition identity | Guides |
 | --- | --- | --- | --- |
-| **1. Privileged certificate enrollment** | Temporary AD CS user certificate enrolled through CES with an enrollment-agent signature | Dedicated `craft` service account through the setuid launcher | [Mode 1](#mode-1-setup-privileged-certificate-enrollment) |
-| **2. Privileged credential linking (Key Trust)** | Temporary public key in the user's `msDS-KeyCredentialLink` | Dedicated `craft` service account through the setuid launcher | [Mode 2](#mode-2-setup-privileged-credential-linking) |
-| **3. Unprivileged Windows-exported certificate** | Persistent certificate and private-key PEM pair in the Linux user's home | Calling user through ordinary executables | [Mode 3](#mode-3-setup-unprivileged-windows-exported-certificate) |
-| **4. Service tickets through constrained delegation** | Broker keytab with protocol transition and an explicit target SPN list | Dedicated `craft` service account through the setuid launcher | [Mode 4](#mode-4-setup-service-tickets-through-constrained-delegation) |
+| **1. Privileged certificate enrollment** | Temporary AD CS user certificate enrolled through CES with an enrollment-agent signature | Dedicated `craft` service account through the setuid launcher | [Setup](#mode-1-setup-privileged-certificate-enrollment) · [Flow](../docs/diagrams/02-enrollment-sequence.svg) |
+| **2. Privileged credential linking (Key Trust)** | Temporary public key in the user's `msDS-KeyCredentialLink` | Dedicated `craft` service account through the setuid launcher | [Setup](#mode-2-setup-privileged-credential-linking) · [Flow](../docs/diagrams/03-credential-linking-sequence.svg) |
+| **3. Unprivileged Windows-exported certificate** | Persistent certificate and private-key PEM pair in the Linux user's home | Calling user through ordinary executables | [Setup](#mode-3-setup-unprivileged-windows-exported-certificate) · [Flow](../docs/diagrams/04-windows-exported-certificate.svg) |
+| **4. Service tickets through constrained delegation** | Broker keytab with protocol transition and an explicit target SPN list | Dedicated `craft` service account through the setuid launcher | [Setup](#mode-4-setup-service-tickets-through-constrained-delegation) · [Flow](../docs/diagrams/07-constrained-delegation.svg) |
 
 ## Mode selection and process boundaries
 
 Run `/usr/local/bin/craft` with no arguments as the intended non-root user, without `sudo`. CRAFT uses the real UID, NSS username and NSS home; `$USER`, `$HOME`, `SUDO_USER`, `XDG_CONFIG_HOME` and caller Kerberos overrides cannot select another identity. Linux usernames must match the intended AD `sAMAccountName`, be at most 64 characters, start with a lowercase letter or underscore, and contain only lowercase letters, digits, underscores, periods or hyphens.
 
-`mechanism=constrained_delegation` selects mode 4 before inspecting any home PEM pair. It never invokes PKINIT, enrollment or Key Trust, including when a valid home pair exists. For the other mechanisms, a complete NSS-home `~/.config/craft/user.pem` and `user.key` pair selects mode 3, including on a setuid installation. Partial, unsafe or invalid inputs fail without privileged acquisition. Only an absent pair selects `mechanism=enrollment` (the default) or `mechanism=key_trust`; an ordinary installation then fails because it cannot use a privileged mode. CRAFT never switches between the privileged mechanisms after a failure.
+The administrator's `modes` list controls which modes may run and their order. A policy worker reads it as the caller; each acquisition worker independently verifies its selected mode. Certificate, LDAP, CES and Kerberos processing remain outside the elevated launcher. Only after a worker has validated its complete result, removed any temporary directory key and recorded issuance does the launcher drop to the caller and receive the cache.
 
 All modes request `<Linux username>@<configured realm>`. The KDC enforces certificate mapping or broker delegation; CRAFT validates the returned principals, flags, encryption and ticket times. Mode 4 requires every configured service to succeed before publishing a cache, excluding broker credentials and S4U2Self evidence. Certificate, LDAP, CES and Kerberos work run as the caller or service account. The cache writer runs as the caller. See the [process overview](../docs/01-CRAFT-Process-Overview.pdf) for the acquisition diagrams.
+
+## Configure mode selection
+
+Set `modes` to one or more unique names separated by spaces, in preference order. There is no implicit mode. CRAFT tries the next listed mode after a reported acquisition failure, including an absent, invalid or expired home pair, server denial or unavailable broker privilege. It stops at the first success. Configuration errors, worker interruption, unconfirmed Key Trust cleanup and cache-publication failures stop the request. If every enabled mode fails, the old cache remains unchanged.
+
+| Policy | Behavior |
+| --- | --- |
+| `modes=home` | Require the caller's PEM pair; no broker access |
+| `modes=enrollment` | Always use AD CS/CES, ignoring home files |
+| `modes=home enrollment` | Prefer the caller's certificate, then try enrollment |
+| `modes=key_trust enrollment` | Prefer directory linking, then try AD CS/CES |
+| `modes=constrained_delegation` | Require only the approved service tickets; never issue a user TGT |
+| `modes=constrained_delegation home` | Prefer service tickets, but explicitly allow a home-certificate TGT on failure |
+
+Provision and configure every enabled mode; all required settings are validated before acquisition. Broker modes share `service_principal`, `submitter.keytab` and the `craft` account, so their permissions must cover each enabled workflow. Use separate installations and service identities when those authorities must remain isolated. Home files are inspected only when `home` is reached. Each launcher invocation gets one broker rate-limit admission shared by its fallback attempts; new invocations still observe the cooldown.
+
+Fresh acquisition by `craft-maintain` follows the same list. Its resulting cache may change between TGT and service-only credentials if both kinds are enabled. Cached TGT renewal does not consult acquisition policy; stop maintainers and remove the old cache when narrowing a deployment to service-ticket-only operation. Configure only `constrained_delegation` when obtaining a TGT would violate policy.
 
 ## Build
 
@@ -77,7 +94,7 @@ sudo install -o root -g root -m 0644 source/config/config.example /etc/craft/con
 sudo install -o root -g root -m 0644 source/config/krb5.conf.example /etc/craft/krb5.conf
 ```
 
-Replace `/etc/craft/config` with the snippet for your selected mode, then edit the actual values. Keep `enabled=no` during setup. Preserve `root:root` ownership and mode 0644 after editing.
+Replace `/etc/craft/config` with the snippet for your chosen mode, or combine the required settings and set the ordered `modes` list for multiple modes. Keep `enabled=no` during setup. Preserve `root:root` ownership and mode 0644 after editing.
 
 Pin the actual realm and KDC in `/etc/craft/krb5.conf`. Retain AES-only permitted enctypes. For modes 1-3, retain `pkinit_require_crl_checking=true`, `pkinit_eku_checking=kpKDC`, and the expected KDC DNS name in `pkinit_kdc_hostname`. Provision a KDC certificate supporting the configured identity and EKU checks. Maintain DNS resolution, time synchronization and network access to the pinned KDC, LDAP/GC and CES endpoints needed by your mode.
 
@@ -130,7 +147,7 @@ After completing mode 1, 2 or 4 setup, set `enabled=yes` and enable the launcher
 sudo chmod 4750 /usr/local/bin/craft
 ```
 
-Only the launcher is setuid; the worker and maintainer remain mode 0755. `nosuid` mounts or inherited `no_new_privs` prevent privileged acquisition. Invoke `craft` directly as the approved user. Removing setuid still permits a valid home pair in modes 1-3; mode 4 requires the broker.
+Only the launcher is setuid; the worker and maintainer remain mode 0755. `nosuid` mounts or inherited `no_new_privs` prevent broker acquisition. Invoke `craft` directly as the approved user. Without setuid, broker modes fail and the list may continue to `home` only if enabled.
 
 ## Mode 1 setup: Privileged certificate enrollment
 
@@ -143,7 +160,7 @@ Only the launcher is setuid; the worker and maintainer remain mode 0755. `nosuid
 enabled=no
 domain=domain.local
 realm=DOMAIN.LOCAL
-mechanism=enrollment
+modes=enrollment
 netbios=DOMAIN
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 template_oid=1.3.6.1.4.1.311.21.8.999.1
@@ -159,7 +176,7 @@ cert_total_max_seconds=36000
 minimum_interval_seconds=60
 ```
 
-The CES URL and template OID are placeholders. `template_oid` is the template's `msPKI-Cert-Template-OID`, not its name. Configure `gc_url`/`gc_base_dn` when the defaults do not uniquely resolve users. Enable acquisition and setuid only when ready, then run the [enrollment acceptance checks](TESTING.md#live-acceptance-checklist) as an approved user with both home PEM files absent. Confirm CA refusal for prohibited recipients independently of CRAFT.
+The CES URL and template OID are placeholders. `template_oid` is the template's `msPKI-Cert-Template-OID`, not its name. Configure `gc_url`/`gc_base_dn` when the defaults do not uniquely resolve users. Enable acquisition and setuid only when ready, then run the [enrollment acceptance checks](TESTING.md#live-acceptance-checklist) as an approved user with `modes=enrollment`. Confirm CA refusal for prohibited recipients independently of CRAFT.
 
 ## Assumptions and Windows preparation
 
@@ -210,7 +227,7 @@ CRAFT pins the endpoint and template locally; it does not query a Certificate En
 enabled=no
 domain=domain.local
 realm=DOMAIN.LOCAL
-mechanism=key_trust
+modes=key_trust
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 kt_dc_url=ldap://dc01.domain.local
 key_bits=3072
@@ -222,7 +239,7 @@ minimum_interval_seconds=60
 
 Only `ldap://` is accepted; LDAP/GSSAPI supplies integrity and encryption with a minimum SASL SSF of 128. No user-certificate CA enrollment, template, agent or CES credentials are required. Retain KDC trust and CRLs and configure the intermediate pool as described in shared installation. The generated certificate carries the directory-authorized public key; review its [temporary issuer trust scope](SECURITY.md#key-trust-certificate-handling).
 
-Enable acquisition and setuid when ready, then complete [Key Trust acceptance](TESTING.md#key-trust-acceptance-checks) with both home files absent. CRAFT adds and removes its exact value while preserving existing keys. Removal must succeed before credentials are published. Independent cleanup also attempts removal after acquisition failure or worker termination; continuing directory outages or host failure can leave a key requiring manual removal. Monitor CRITICAL logs and the target attribute after interruptions. Key Trust capability is provided by Windows Server 2016 or later, but verify the deployed KDC and MIT PKINIT freshness policy rather than relying on a domain-functional-level label.
+Enable acquisition and setuid when ready, then complete [Key Trust acceptance](TESTING.md#key-trust-acceptance-checks) with `modes=key_trust`. CRAFT adds and removes its exact value while preserving existing keys. Removal must succeed before credentials are published. Independent cleanup also attempts removal after acquisition failure or worker termination; continuing directory outages or host failure can leave a key requiring manual removal. Monitor CRITICAL logs and the target attribute after interruptions. Key Trust capability is provided by Windows Server 2016 or later, but verify the deployed KDC and MIT PKINIT freshness policy rather than relying on a domain-functional-level label.
 
 ## Mode 3 setup: Unprivileged Windows-exported certificate
 
@@ -248,6 +265,7 @@ Replace `/etc/craft/config` with the actual values:
 
 ```ini
 enabled=no
+modes=home
 domain=domain.local
 realm=DOMAIN.LOCAL
 tgt_seconds=36000
@@ -255,7 +273,7 @@ renew_seconds=604800
 require_full_tgt_lifetime=yes
 ```
 
-Install the public user-certificate and KDC trust/CRL bundles, then set `enabled=yes` when ready. There is no `mechanism=home` value: the complete pair selects this path. Complete [home workflow acceptance](TESTING.md#home-workflow-acceptance-checks). Replace the pair before expiry; neither CRAFT nor `craft-maintain` renews or transfers it. An approved existing PEM pair can also be supplied without using the Windows helper.
+Install the public user-certificate and KDC trust/CRL bundles, then set `enabled=yes` when ready. `modes=home` requires the supplied pair; add other modes only when their fallback authority is intended and provisioned. Complete [home workflow acceptance](TESTING.md#home-workflow-acceptance-checks). Replace the pair before expiry; neither CRAFT nor `craft-maintain` renews or transfers it. An approved existing PEM pair can also be supplied without using the Windows helper.
 
 ### Certificate and identity checks
 
@@ -274,7 +292,7 @@ Home mode performs no LDAP lookup or directory-UPN comparison. The KDC must map 
 enabled=no
 domain=domain.local
 realm=DOMAIN.LOCAL
-mechanism=constrained_delegation
+modes=constrained_delegation
 service_principal=CRAFT/broker.domain.local@DOMAIN.LOCAL
 service_spns=cifs/files.domain.local@DOMAIN.LOCAL HTTP/portal.domain.local@DOMAIN.LOCAL
 service_ticket_seconds=36000
@@ -299,13 +317,13 @@ CRAFT configuration uses case-sensitive `key=value` entries and full-line `#` co
 | `tgt_seconds` | `36000`; integer 60–604800 | 1-3 |
 | `renew_seconds` | `604800`; 0 disables renewal, otherwise greater than `tgt_seconds`, at most 604800 | 1-3 |
 | `require_full_tgt_lifetime` | `yes`; `no` accepts shorter initial/renewal grants with a warning | 1-3 |
-| `mechanism` | `enrollment`, `key_trust` or `constrained_delegation`; default `enrollment`; mode 4 overrides home certificates | 1, 2 and 4 |
+| `modes` | Required ordered list of unique `home`, `enrollment`, `key_trust`, `constrained_delegation` names; no default | All |
 | `service_principal` | Required exact AD principal matching `submitter.keytab` | 1, 2 and 4 |
 | `key_bits` | `3072`; accepts 2048, 3072 or 4096; satisfy the enrollment template minimum | Generated identities in 1 and 2 |
 | `service_spns` | Required whitespace-separated exact service/host@REALM list, 1-32 entries | 4 |
 | `service_ticket_seconds` | 36000; 60-604800; shorter KDC grants accepted | 4 |
 | `certificate_cn` | `{user}`; tokens `{user}`, directory `{upn}`, `{domain}`; expansion 1–64 printable ASCII characters without braces | Generated identities in 1 and 2 |
-| `minimum_interval_seconds` | `60`; integer 30–86400; failed attempts also count | 1, 2 and 4 |
+| `minimum_interval_seconds` | `60`; integer 30–86400; one admission per invocation, including failed broker attempts | 1, 2 and 4 |
 | `netbios` | Required uppercase AD NetBIOS domain, at most 15 characters | 1 |
 | `template_oid` | Required actual `msPKI-Cert-Template-OID` | 1 |
 | `ces_url` | Required plain `https://host[:port]/path`, without credentials, query or fragment | 1 |
@@ -316,7 +334,7 @@ CRAFT configuration uses case-sensitive `key=value` entries and full-line `#` co
 | `cert_total_max_seconds` | `36000`; integer 60–86400, includes backdating | 1 |
 | `kt_dc_url` | Required `ldap://` URL naming the same writable DC as the KDC | 2 |
 
-Shared numeric and length limits are parsed even when a setting is unused by the selected mode. Omit irrelevant settings rather than leaving invalid placeholders.
+Shared numeric and length limits are parsed even when unused. Required settings for every enabled mode are validated before acquisition. Omit irrelevant settings rather than leaving invalid placeholders.
 
 Ticket validity and certificate validity are separate. Modes 1-3 request ten hours initially and seven days of renewal by default, while the KDC controls the actual grant. Certificate/key lifetime can constrain initial PKINIT validity. Strict policy compares grants with a five-second tolerance and refuses shortened or excessive grants before replacing the cache. Setting `require_full_tgt_lifetime=no` permits shorter grants; it does not permit wrong principals, flags, non-AES encryption or excessive lifetimes. Use policy appropriate to the domain rather than increasing certificate caps to accommodate an unintended template. See [RFC 4556 ticket lifetime rules](https://www.rfc-editor.org/rfc/rfc4556#section-3.2.3).
 
@@ -381,7 +399,7 @@ Callers receive a failure summary and a log identity/PID for system, server or l
 | Symptom | Administrator checks |
 | --- | --- |
 | Missing audit socket or audit submission failure | Host logging service, `/dev/log` and permissions; do not substitute a dummy logger on a deployed host |
-| No home pair on an ordinary installation | Supply both PEM files, or deliberately complete the privileged installation |
+| No home pair on an ordinary installation | Supply both PEM files with `home` enabled, or enable and provision a broker mode |
 | Home-file rejection | NSS home, owner/mode, symlinks, hard links, PEM format, matching key and certificate profile |
 | Trust or PKINIT rejection | Clock, current CRLs, CA/KDC chains, PKINIT plugin, pinned KDC identity/EKU, mapping and actual ticket policy |
 | LDAP/GSSAPI failure | SASL GSSAPI plugin, DNS/SPN, exact service principal, AES keytab and writable DC/GC access |

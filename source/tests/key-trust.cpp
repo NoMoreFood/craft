@@ -163,10 +163,24 @@ int main()
          [&]
          {
              directory_fixture->add_result = LDAP_TIMEOUT;
-             testing::rejects([&] { KeyCredentialGuard().publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             KeyCredentialGuard published;
+             testing::rejects([&] { published.publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             published.withdraw();
              need(!directory_fixture->attached && directory_fixture->removals == 1 &&
                       !directory_fixture->wrong_target,
                   "committed write was not removed after its response was lost");
+         });
+
+    test("uncertain publication with failed cleanup refuses fallback",
+         [&]
+         {
+             directory_fixture->add_result = LDAP_TIMEOUT;
+             directory_fixture->delete_result = LDAP_UNAVAILABLE;
+             KeyCredentialGuard published;
+             testing::rejects([&] { published.publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             testing::rejects([&] { published.withdraw(); });
+             need(directory_fixture->attached && directory_fixture->removals == 2,
+                  "an uncertain write with failed cleanup was treated as safe to continue");
          });
 
     test("successful acquisition waits for single-value cleanup",
@@ -224,7 +238,9 @@ int main()
          [&]
          {
              directory_fixture->add_result = LDAP_INSUFFICIENT_ACCESS;
-             testing::rejects([&] { KeyCredentialGuard().publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             KeyCredentialGuard published;
+             testing::rejects([&] { published.publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+             published.withdraw();
              need(!directory_fixture->attached && directory_fixture->removals == 0,
                   "a directory refusal was mistaken for an uncertain write");
          });

@@ -84,10 +84,10 @@ void run(testing::FuzzTarget target, ByteView input, Fixture &fixture)
     switch (target)
     {
     case FuzzTarget::Config:
-        (void)parse_config(text, false);
+        (void)parse_config(text);
         break;
     case FuzzTarget::HomeConfig:
-        (void)parse_config(text, true);
+        (void)parse_config(text, CertificateSource::Home);
         break;
     case FuzzTarget::Response:
         inspect(parse_response(text, fixture.key.get()).get(), fixture);

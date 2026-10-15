@@ -200,40 +200,36 @@ class Page:
 
 def overview(pdf):
     p = Page(pdf, "01-system-overview", 1, "Four Linux operating modes",
-             "Service-only policy takes precedence. Certificate modes check the caller's home PEM pair first.",
-             "The configured constrained_delegation mode bypasses home certificates and obtains only approved "
-             "service tickets. Otherwise a complete home pair selects mode 3; an absent pair selects enrollment "
-             "or Key Trust. Invalid home inputs fail. Validated credentials are published as the caller.")
+             "Administrators select one or more modes and their order to fit the environment.",
+             "CRAFT reads the administrator's ordered modes list and tries each enabled workflow until one "
+             "succeeds. Reported acquisition failures advance to the next mode. Invalid policy, interruption, "
+             "failed key cleanup or publication errors stop the request. Only validated credentials are published.")
     p.node(64, 220, 350, 110, "Invoke craft as the user",
            ["Real UID, NSS name and home", "No arguments; no sudo"], title_size=23)
-    p.node(480, 220, 1056, 110, "Read administrator-controlled mechanism policy",
-           ["constrained_delegation selects service tickets only; otherwise inspect the home PEM pair"],
+    p.node(480, 220, 1056, 110, "Read administrator-controlled mode order",
+           ["Example: modes=home key_trust enrollment constrained_delegation"],
            color=BLUE, title_size=27)
     p.arrow([(414, 275), (480, 275)])
-    p.node(64, 370, 1098, 100, "Certificate modes check user.pem and user.key",
-           ["Complete pair: mode 3. Both absent: configured mode 1 or 2. Invalid or partial pair: fail."],
+    p.node(64, 370, 1472, 100, "Try the next enabled mode; stop at the first success",
+           ["A reported acquisition failure advances through the list. Mode numbers identify workflows, not priority."],
            color=BLUE, title_size=25)
     p.arrow([(800, 330), (800, 370)], BLUE)
-    p.arrow([(1361, 330), (1361, 525)], PURPLE)
-    p.text(1361, 383, "MODE 4", 21, PURPLE, "semibold", align="center")
-    p.text(1361, 415, "Ignore home PEM", 20, MUTED, align="center")
     entries = [
         (64, "1  Enrollment", TEAL, TEAL_LIGHT,
-         ["mechanism=enrollment", "Service keytab + agent + CES", "CA issues a user certificate",
+         ["enrollment", "Service keytab + agent + CES", "CA issues a user certificate",
           "PKINIT obtains a user TGT", "CA restricts recipients"]),
         (438, "2  Key Trust", PURPLE, WHITE,
-         ["mechanism=key_trust", "Service keytab + writable DC", "Link a temporary public key",
+         ["key_trust", "Service keytab + writable DC", "Link a temporary public key",
           "PKINIT obtains a user TGT", "Remove the linked key"]),
         (812, "3  Windows PEM", BLUE, BLUE_LIGHT,
-         ["Complete home PEM pair", "Caller validates certificate", "PKINIT obtains a user TGT",
+         ["home", "Caller validates home PEM pair", "PKINIT obtains a user TGT",
           "KDC maps certificate to user", "Supplied PEM pair persists"]),
         (1186, "4  Service tickets", PURPLE, WHITE,
          ["constrained_delegation", "Dedicated broker AES keytab", "S4U2Self then S4U2Proxy",
           "AD restricts target services", "No user or broker TGT export"]),
     ]
     for x, title, color, fill, lines in entries:
-        if x != 1186:
-            p.arrow([(x + 175, 470), (x + 175, 525)], color)
+        p.arrow([(x + 175, 470), (x + 175, 525)], color)
         p.node(x, 525, 350, 260, title, lines, color=color, fill=fill, title_size=25)
         p.arrow([(x + 175, 785), (x + 175, 818), (800, 818), (800, 850)], BLUE)
     p.node(200, 850, 1200, 85, "Validate credentials and atomically publish as the caller",
@@ -246,7 +242,7 @@ def acquisition(pdf):
     p = Page(pdf, "02-enrollment-sequence", 2, "Mode 1  Privileged certificate enrollment",
              (
                  'Linux orchestrates CA enrollment first, then PKINIT. Select '
-                 'mechanism=enrollment with both home PEM files absent.'
+                 'modes=enrollment to require this workflow.'
              ),
              "The setuid launcher starts the worker as the dedicated service account. A directory keytab "
              "authenticates the UPN lookup and CES Negotiate; separate mTLS may authenticate CES instead. "
@@ -258,7 +254,7 @@ def acquisition(pdf):
               (800, "Linux CRAFT worker", "dedicated craft service account", TEAL),
               (1400, "AD directory and PKI", "Global Catalog, CES, CA and KDC", BLUE)])
     p.number_badge(70, 325, 1, TEAL)
-    p.message(245, 795, 325, "Absent home pair; start service-account worker", color=TEAL, size=22)
+    p.message(245, 795, 325, "Select enrollment; start service-account worker", color=TEAL, size=22)
     p.number_badge(70, 395, 2, TEAL)
     p.message(805, 1400, 376, "GC / LDAP / GSSAPI: resolve caller UPN", color=TEAL, size=22)
     p.message(1400, 805, 415, "Unique AD user; keytab authenticates lookup", color=TEAL, dashed=True, size=21)
@@ -309,7 +305,7 @@ def credential_linking(pdf):
                  'Linux links a temporary AD public key, performs Key Trust PKINIT, and '
                  'removes the entry before publishing the TGT.'
              ),
-             "With both home PEM files absent and mechanism=key_trust, the setuid launcher starts the worker "
+             "When key_trust is reached in the configured modes list, the setuid launcher starts the worker "
              "as the dedicated service account. The service keytab authenticates a GSSAPI LDAP bind to the same "
              "writable DC used as the KDC. CRAFT resolves the user, generates an RSA-3072 key and local certificate "
              "identity, adds one Key Credential to msDS-KeyCredentialLink, and performs Key Trust PKINIT. "
@@ -319,7 +315,7 @@ def credential_linking(pdf):
               (800, "Linux CRAFT worker", "dedicated craft service account", PURPLE),
               (1400, "Same writable DC", "LDAP directory and PKINIT KDC", BLUE)])
     p.number_badge(70, 325, 1, PURPLE)
-    p.message(245, 795, 325, "Absent home pair; start service-account worker", color=PURPLE, size=22)
+    p.message(245, 795, 325, "Select key_trust; start service-account worker", color=PURPLE, size=22)
     p.number_badge(70, 395, 2, PURPLE)
     p.message(805, 1400, 376, "LDAP / GSSAPI: bind with service keytab", color=PURPLE, size=23)
     p.message(1400, 805, 415, "Resolve caller object and directory UPN", color=PURPLE, dashed=True, size=23)
@@ -358,8 +354,7 @@ def timing(pdf):
              "validity is accepted. Enrollment generates a temporary key and certificate, caps certificate "
              "validity at ten hours by default and releases its pair after PKINIT. Modes 1-3 request the same "
              "ten-hour TGT and seven-day renewal window. Renewal uses the cached ticket and session key. "
-             "Fresh authentication near day six reuses a valid home pair, "
-             "or uses the configured privileged mechanism if both files are absent. "
+             "Fresh authentication near day six follows the configured modes list until one succeeds. "
              "The renewed ticket's absolute renewal deadline remains fixed. Times are schedule illustrations.")
     for x, color, label, body in [
         (64, TEAL, "1 / ENROLLMENT", ["Temporary key and certificate.", "CA issuance records remain."]),
@@ -443,8 +438,8 @@ def maintenance(pdf):
              "The maintainer starts once for a watched job PID. A usable cache and detached loop are required "
              "before startup returns successfully. Due renewable TGTs renew at the KDC using the cached ticket "
              "and session key. Missing or expired TGTs, the rollover window, or nonextendible tickets near expiry "
-             "trigger fresh authentication through craft, using a home pair first or the configured enrollment "
-             "or credential-linking mode when absent. Service-only caches refresh through the broker before earliest expiry. Due renewal takes priority over rollover. Successful "
+             "trigger fresh authentication through craft using the configured modes list. Service-only caches "
+             "refresh before earliest expiry. Due renewal takes priority over rollover. Successful "
              "updates atomically replace the cache. Renewal retains usable service tickets; fresh authentication "
              "replaces the cache. Failure keeps existing credentials and schedules retries. Job exit stops "
              "maintenance but leaves the cache. Applications need to reload refreshed credentials.")

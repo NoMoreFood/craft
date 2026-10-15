@@ -71,21 +71,20 @@ extern "C" krb5_error_code __wrap_krb5_get_credentials(
 int main()
 {
     const std::string base = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
-                             "mechanism=constrained_delegation\nservice_principal=broker@DOMAIN.LOCAL\n";
+                             "modes=constrained_delegation\nservice_principal=broker@DOMAIN.LOCAL\n";
     const auto cfg = parse_config(base + "service_spns=cifs/files.domain.local@DOMAIN.LOCAL "
-                                        "HTTP/web.domain.local@DOMAIN.LOCAL\n", false);
-    test("service-only policy takes precedence over home certificates",
+                                        "HTTP/web.domain.local@DOMAIN.LOCAL\n");
+    test("service-only policy rejects home mode and invalid target policy",
          [&]
          {
-             const auto home = parse_config(base + "service_spns=cifs/files.domain.local@DOMAIN.LOCAL\n", true);
-             need(home.source == CertificateSource::ConstrainedDelegation && home.ces_url.empty(),
-                  "home credentials selected PKINIT");
+             rejects([&] { parse_config(base + "service_spns=cifs/files.domain.local@DOMAIN.LOCAL\n",
+                                        CertificateSource::Home); });
              for (auto spns : {"krbtgt/DOMAIN.LOCAL@DOMAIN.LOCAL", "KrBtGt/DOMAIN.LOCAL@DOMAIN.LOCAL",
                                "cifs/files.domain.local@OTHER.REALM", "cifs/*@DOMAIN.LOCAL",
                                "cifs/files.domain.local", "broker@DOMAIN.LOCAL",
                                "cifs/a@DOMAIN.LOCAL cifs/a@DOMAIN.LOCAL"})
-                 rejects([&] { parse_config(base + "service_spns=" + spns + "\n", true); });
-             rejects([&] { parse_config(base, false); });
+                 rejects([&] { parse_config(base + "service_spns=" + spns + "\n"); });
+             rejects([&] { parse_config(base); });
          });
 
     KrbContext context;

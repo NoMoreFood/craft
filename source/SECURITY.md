@@ -11,7 +11,7 @@ Review these boundaries before enabling an installation. The host's authority di
 | 3 Supplied certificate | Each user holds a reusable certificate and private key | Authorized certificate issuance, revocation and KDC mapping to the fixed caller principal |
 | 4 Constrained delegation | Broker keytab can impersonate delegable users to approved services | Protocol transition and exact `msDS-AllowedToDelegateTo` target SPNs on a dedicated broker |
 
-Mode 4 uses the broker and ignores home certificates. In modes 1-3, a complete home pair takes priority. Partial, unsafe or invalid inputs fail without privileged acquisition. All modes request `<Linux username>@<realm>` and validate the returned credentials. Mode 4 publishes only explicitly configured same-realm services after every target succeeds; no user or broker TGT, S4U2Self evidence or proxy metadata is exported. Modes 1 and 2 resolve the directory UPN; mode 3 relies on KDC mapping without LDAP. Keep Linux UID/name assignments and NSS providers under administrator control.
+The administrator's ordered `modes` list authorizes every acquisition path. Reported acquisition failures, including invalid home credentials, may fall through to the next listed mode. Only `modes=constrained_delegation` by itself guarantees service-ticket-only operation; enabling a certificate mode also permits a TGT. Invalid policy, worker interruption, unconfirmed directory cleanup and publication failures stop the request. Broker modes share one account/keytab, so review their combined authority. All modes request `<Linux username>@<realm>` and validate the returned credentials. Mode 4 publishes only explicitly configured same-realm services after every target succeeds; no user or broker TGT, S4U2Self evidence or proxy metadata is exported. Modes 1 and 2 resolve the directory UPN; mode 3 relies on KDC mapping without LDAP. Keep Linux UID/name assignments and NSS providers under administrator control.
 
 CRAFT does not check the user's AD password, perform an MFA challenge or establish completion of MFA. Software keys and Smart Card Logon EKU do not establish hardware custody or a second factor. Treat the approved recipient group and delegated object scope as permission for the host to authenticate as those accounts. Exclude privileged identities and protect the administrators, memberships and ACLs defining that scope.
 
@@ -39,7 +39,7 @@ Enrollment defaults cap certificate validity at ten hours total, including backd
 
 ## Privilege separation and file custody
 
-Only `craft` is setuid in modes 1, 2 and 4. Except in service-only mode, the launcher checks the home pair under the caller's permissions, starts the privileged worker as the dedicated `craft` account when needed, and publishes the cache as the caller. Certificate, LDAP, CES and Kerberos processing stay outside root. The worker and maintainer must remain ordinary executables.
+Only `craft` is setuid in modes 1, 2 and 4. The launcher reads mode policy through a caller-identity worker, then starts each enabled attempt as the caller for `home` or the dedicated `craft` account for a broker mode. The parent receives credential bytes only after permanently dropping to the caller. Certificate, LDAP, CES and Kerberos processing stay outside root. The worker and maintainer must remain ordinary executables.
 
 Only the service account belongs to the `craft` group. Private service files are `root:craft` mode 0640; approved callers join the separate `craft-users` launcher group. Public configuration/trust/CRL files are `root:root` mode 0644. Trusted files and parents must be root-owned, not group/world-writable and not symlinks. Protect Kerberos includes, plugins, dynamic libraries, NSS and OpenSSL configuration/providers as part of the host boundary.
 
@@ -65,7 +65,7 @@ No dedicated SELinux/AppArmor or seccomp policy, hardware-key backend, remote ap
 
 ## Immediate disable
 
-Set `enabled=no` in `/etc/craft/config` or remove launcher execute access to stop fresh acquisition through all modes. Removing only setuid stops the broker mechanisms while permitting a valid home pair in modes 1-3. Mode 4 never switches to home PKINIT. Revoke CA agent/recipient authorization or AD delegation separately when the host's authority must be withdrawn.
+Set `enabled=no` in `/etc/craft/config` or remove launcher execute access to stop fresh acquisition through all modes. Removing only setuid stops broker acquisition; a valid home pair remains usable if `home` is enabled. Remove a mode from `modes` to prevent fresh acquisition through that path. Revoke CA agent/recipient authorization or AD delegation separately when the host's authority must be withdrawn.
 
 Acquisition disable does not stop renewal from an existing cache. Inspect each job's status and send SIGTERM to its recorded `maintainer_pid` to stop active maintenance. The cache remains. Already-issued tickets and active service sessions require the domain's incident-response measures.
 

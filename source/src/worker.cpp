@@ -42,18 +42,24 @@ int main(int argc, char **argv)
     program = "craft-worker";
     uid_t requesting_uid = 0;
     const pid_t request = getppid(); // the launcher, whose own records carry this number
+    KeyCredentialGuard published;
+    bool may_continue = true, credentials_ready = false;
     try
     {
         // Reset inherited state and select the caller or dedicated-account workflow.
-        const std::string_view mode = argc == 4 ? argv[1] : "";
-        const bool home = mode == "home";
-        need(home || mode == "fallback", "worker is not a public interface; use craft");
+        const std::string_view mode = argc == 5 ? argv[1] : "";
+        const bool home = mode == "home", policy = mode == "policy";
+        const auto selected = std::ranges::find(MODE_NAMES, mode);
+        need(policy || selected != MODE_NAMES.end(), "worker is not a public interface; use craft");
+        const std::string_view attempt = argv[4];
+        need(attempt.size() == 32 && attempt.find_first_not_of("0123456789abcdef") == attempt.npos,
+             "invalid acquisition identifier");
         sysneed(clearenv() == 0 && setenv("KRB5_CONFIG", path("krb5.conf").c_str(), 1) == 0 &&
                     setenv("HOME", "/nonexistent", 1) == 0 && setenv("LANG", "C", 1) == 0,
                 "set worker environment");
         no_core();
         signal(SIGALRM, SIG_DFL);
-        alarm(90);
+        alarm(policy ? 30 : 90);
 
         // End with the launcher: its death, or its abandoning this worker, closes the pipe that is our input.
         exit_with_peer(STDIN_FILENO);
@@ -67,18 +73,23 @@ int main(int argc, char **argv)
         need(requesting_uid != 0 && simple_name(m.name), "invalid requesting account");
         const Account caller = lookup_uid(requesting_uid);
         need(caller.name == m.name, "runtime UID/name changed; administrator review required");
-        const Config cfg = config(home);
+        const Config cfg = config(policy ? std::optional<CertificateSource>{}
+                                         : static_cast<CertificateSource>(selected - MODE_NAMES.begin()));
         const bool delegated = cfg.source == CertificateSource::ConstrainedDelegation;
         UserIdentityFiles files;
-        if (home)
+        if (home || policy)
         {
-            // Report selection before returning credentials so the launcher can relinquish root.
             need(getuid() == requesting_uid && geteuid() == requesting_uid && getgid() == getegid(),
-                 "home certificate worker must run as the caller");
-            if (!delegated) files = user_identity_files(caller);
-            const unsigned char selected = files.certificate.get() >= 0;
-            write_all(STDOUT_FILENO, {&selected, 1});
-            if (!selected) return 0;
+                 "policy and home workers must run as the caller");
+            if (policy)
+            {
+                Bytes modes;
+                for (const auto item : cfg.modes) modes.push_back(static_cast<unsigned char>(item));
+                write_all(STDOUT_FILENO, modes);
+                return 0;
+            }
+            files = user_identity_files(caller);
+            need(files.certificate.get() >= 0, "home certificate pair is absent");
         }
         else
         {
@@ -98,7 +109,8 @@ int main(int argc, char **argv)
                 if (enrollment) curl_global_cleanup();
             });
         Fd lock;
-        if (!home) lock = rate_limit(runtime_directory().get(), requesting_uid, cfg.interval, time(nullptr));
+        if (!home)
+            lock = rate_limit(runtime_directory().get(), requesting_uid, cfg.interval, time(nullptr), attempt);
         if (!delegated)
         {
             require_trusted(path("kdc-trust.pem"));
@@ -113,11 +125,9 @@ int main(int argc, char **argv)
         if (delegated) result = get_service_tickets(krb, cfg, m);
         else
         {
-            // Acquire and validate the certificate identity. A Key Trust key stays published no longer than
-            // this scope lasts, however it is left.
+            // Acquire and validate the certificate identity; confirm Key Trust cleanup before release or fallback.
             UserIdentity identity;
             Cert kt_ca;
-            KeyCredentialGuard published;
             if (home) identity = load_user_identity(files);
             else if (enrollment) identity = enroll(krb, cfg, m);
             else
@@ -141,7 +151,9 @@ int main(int argc, char **argv)
             result = get_tgt(krb, cfg, m, identity.certificate.get(), identity.key.get(), kt_ca.get());
 
             // Remove the Key Trust key before any credential bytes leave this process.
+            may_continue = false;
             published.withdraw();
+            may_continue = true;
         }
         if (delegated)
             audit(LOG_NOTICE,
@@ -158,12 +170,31 @@ int main(int argc, char **argv)
                               : enrollment ? "enrollment"
                                            : "key_trust",
                               end));
+
+        // Signal readiness only after validation, directory cleanup and audit have all succeeded.
+        const unsigned char ready = 1;
+        credentials_ready = true;
+        write_all(STDOUT_FILENO, {&ready, 1});
         write_all(STDOUT_FILENO, result);
         return 0;
     }
     catch (const std::exception &e)
     {
+        try
+        {
+            published.withdraw();
+        }
+        catch (const std::exception &cleanup)
+        {
+            may_continue = false;
+            report(cleanup, std::format("cleanup request={} uid={}", request, requesting_uid));
+        }
         report(e, std::format("issuance request={} uid={}", request, requesting_uid));
+        if (!credentials_ready)
+        {
+            const unsigned char failed = may_continue ? 0 : 2;
+            (void)retry([&] { return write(STDOUT_FILENO, &failed, 1); });
+        }
         return 1;
     }
 }

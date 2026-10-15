@@ -354,11 +354,11 @@ public:
                 }
                 constexpr int trigger = 3, armed = 4; // the issuance lock, when held, stays open as 5
                 keep_only({control.reader.get(), ready.writer.get(), lock_fd});
+                bool cleanup_required = false, removed = false;
                 try
                 {
                     // Bind a separate connection; an LDAP socket inherited across fork must never be shared.
                     const auto ld = ldap_connect(cfg.kt_dc_url);
-                    bool cleanup_required = false, removed = false;
                     {
                         ScopeExit cleanup(
                             [&]() noexcept
@@ -379,7 +379,7 @@ public:
                 catch (const std::exception &error)
                 {
                     report(error, std::format("key trust {}", who));
-                    return 1;
+                    return cleanup_required && !removed ? 1 : 0;
                 }
             });
         trigger_ = std::move(control.writer);

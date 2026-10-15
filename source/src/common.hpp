@@ -72,6 +72,18 @@ inline constexpr char SERVICE_USER[] = "craft";
 inline constexpr char CACHE_NAME[] = ".krb5cc_craft";
 inline constexpr char CACHE_LOCK[] = ".krb5cc_craft.lock";
 inline constexpr size_t MAX_BLOB = 1024 * 1024;
+inline constexpr unsigned ACQUISITION_SECONDS = 400;
+
+// The policy worker sends only these bounded mode identifiers to the elevated launcher.
+enum class CertificateSource : unsigned char
+{
+    Enrollment,
+    Home,
+    KeyTrust,
+    ConstrainedDelegation
+};
+inline constexpr std::array<std::string_view, 4> MODE_NAMES{
+    "enrollment", "home", "key_trust", "constrained_delegation"};
 using Bytes = std::vector<unsigned char>;
 using ByteView = std::span<const unsigned char>;
 

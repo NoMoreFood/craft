@@ -3,7 +3,7 @@
 <#
 .SYNOPSIS
     Delegates write access to the msDS-KeyCredentialLink attribute to the CRAFT service
-    account on a single Organizational Unit or user, for the Key Trust fallback.
+    account on a single Organizational Unit or user, for Key Trust acquisition.
 
 .DESCRIPTION
     CRAFT's key_trust mechanism obtains a Kerberos TGT through AD public-key
