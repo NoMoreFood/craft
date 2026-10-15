@@ -38,7 +38,7 @@ SPN restrictions do not provide isolation between services sharing an AD account
 
 ## Use and maintain the cache
 
-Run `craft` as the intended non-root Linux user. Point applications at the returned `KRB5CCNAME`. They must request the configured SPNs exactly; aliases, canonicalization or additional services may require additional approved entries. Validate the actual application: some Kerberos clients require a TGT before attempting service authentication and cannot use a service-only cache. A cache without a TGT cannot obtain arbitrary new service tickets. One failed target prevents the entire replacement, preserving the previous cache.
+Run `craft` as the intended non-root Linux user. Point applications at the returned `KRB5CCNAME`. They must request the configured SPNs exactly, including case; aliases, canonicalization or additional services may require additional approved entries. Validate the actual application: some Kerberos clients require a TGT before attempting service authentication and cannot use a service-only cache. A cache without a TGT cannot obtain arbitrary new service tickets. One failed target prevents the entire replacement, preserving the previous cache.
 
 `service_ticket_seconds` requests the maximum lifetime, default ten hours. The KDC may shorten it, and CRAFT accepts a shorter usable AES grant. TGT lifetime/renewal settings do not control this mode. Final service tickets can carry forwardable/forwarded flags from S4U; this does not mean a TGT was exported.
 

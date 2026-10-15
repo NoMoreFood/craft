@@ -31,8 +31,8 @@ int main() {
 }" CRAFT_HAS_CXX20_LIBRARY)
 if(NOT CRAFT_HAS_CXX20_LIBRARY)
   message(FATAL_ERROR "C++20 library support for format, spans and ranges is required: GCC/libstdc++ 13.1 or "
-                      "newer. On RHEL 8 and 9 build with gcc-toolset-13 or later, for example "
-                      "`scl enable gcc-toolset-13 -- cmake ...`.")
+                      "newer. On RHEL 8 and 9 use a supported GCC Toolset, for example "
+                      "`scl enable gcc-toolset-15 -- cmake ...`.")
 endif()
 
 # Dependency floors are those of RHEL 8. The maintainer needs only Kerberos.

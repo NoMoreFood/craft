@@ -103,8 +103,8 @@ inline constexpr auto PROHIBITED_TKT_FLAGS = TKT_FLG_FORWARDABLE | TKT_FLG_FORWA
                                              TKT_FLG_PROXY | TKT_FLG_MAY_POSTDATE | TKT_FLG_POSTDATED |
                                              TKT_FLG_INVALID;
 
-// The KDC encrypts the ticket itself under the krbtgt account's key, which the client never chooses and newer
-// domain controllers may hold in the RFC 8009 AES types as well.
+// The KDC encrypts each ticket under the target account's key (krbtgt for TGTs), which the client never chooses.
+// Domain controllers may use the RFC 8009 AES types as well.
 inline constexpr std::array AES_TICKET_TYPES{ENCTYPE_AES256_CTS_HMAC_SHA1_96,
                                              ENCTYPE_AES128_CTS_HMAC_SHA1_96,
                                              ENCTYPE_AES256_CTS_HMAC_SHA384_192,

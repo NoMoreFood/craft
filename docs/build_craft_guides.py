@@ -429,7 +429,7 @@ def process_guide(images):
     paragraph(doc, (
         'Services sharing an AD account and key are not isolated by their SPN labels. Use '
         'separate target service identities where isolation matters. Applications must request '
-        'the configured service names exactly; aliases or additional services need explicit '
+        'the configured service names exactly, including case; aliases or additional services need explicit '
         'configuration and AD authorization. A service-only cache cannot acquire arbitrary tickets.'
     ))
     paragraph(doc, (
@@ -842,7 +842,8 @@ service_ticket_seconds=36000
 minimum_interval_seconds=60
 """)
     paragraph(doc, (
-        'service_spns accepts 1-32 exact same-realm service/host@REALM names separated by spaces. '
+        'service_spns accepts 1-32 same-realm service/host@REALM names separated by spaces. '
+        'Match application names including case. '
         'Wildcards, krbtgt, the broker principal and cross-realm targets are refused. Every target '
         'must also be authorized in the broker account msDS-AllowedToDelegateTo list. One denied '
         'target fails the entire acquisition and preserves the previous cache. Home certificates are ignored.'

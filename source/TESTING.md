@@ -112,31 +112,30 @@ The `constrained-delegation` CTest suite substitutes KDC responses while using r
 
 These are recorded repository observations, not acceptance results for your current build or deployment.
 
-### Service-only validation
+### Four-mode Hyper-V validation
 
-The mode 4 implementation built without warnings on the Ubuntu 24.04.5 Hyper-V client with GCC 13.3 and MIT Kerberos 1.20.1, and on Rocky Linux 9.8 with GCC Toolset 13.3.1 and MIT Kerberos 1.21.1. Each client passed all three CTest suites as an ordinary user: 106 offline checks, 10 Key Trust cleanup checks and nine constrained-delegation checks. These suites use synthetic KDC/directory responses.
+All four modes were exercised on Ubuntu 24.04.5 LTS with GCC 13.3 and MIT Kerberos 1.20.1, and Rocky Linux 9.8 with GCC Toolset 15.2.1 and MIT Kerberos 1.21.1. The lab used Windows Server 2022 AD/AD CS/CES and Server 2019/2025 member servers. Build dependencies were checked against the distribution repositories; Rocky's libcurl packages were updated to 7.76.1-40.el9_8.8. Both release builds completed without warnings.
 
-On Ubuntu, the nine delegation checks also passed with AddressSanitizer and UndefinedBehaviorSanitizer. Synthetic detached-maintainer integration passed 18 checks with pidfd watching and 18 with the `/proc` fallback, including service-only startup/status and refresh without TGT renewal. These runs used a private mount namespace for the test issuer, home, audit socket and Kerberos policy.
+Each Linux client passed 107 offline checks, 10 synthetic Key Trust cleanup checks and nine constrained-delegation checks as an ordinary user. Detached-maintainer integration passed 19 checks with pidfd watching and 19 with the `/proc` fallback on each client, including interruption of a service refresh without cache loss or incorrect ticket-kind status. Ubuntu also passed all 107 offline and nine delegation checks under AddressSanitizer and UndefinedBehaviorSanitizer. These suites use synthetic credentials and isolated test resources.
 
-Live validation used Windows Server 2022 AD and Server 2019/2025 SMB targets, a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs. Unconstrained delegation remained disabled. Isolated installed setuid launchers on both Linux clients published exactly two caller-owned service credentials. MIT cache iteration verified caller/server identities, AES256 session and ticket encryption, the requested lifetime, and absence of TGTs, broker credentials, S4U2Self evidence and proxy configuration records. Grants of 60, 120 and 36000 seconds were exercised; the private broker TGT requested at least 600 seconds for S4U processing. Mode 4 ran without CA/CRL configuration and ignored both malformed and parseable home PEM pairs.
+Each client passed 33 live acquisition, application, failure and maintenance checks. All three Windows helper suites passed on each Windows guest. The live mode coverage was:
 
-Both Linux clients read files from both Windows shares using Kerberos-only authentication. Server security events confirmed the test user's Kerberos network logons from each client. Ubuntu used Samba `smbclient` 4.19.5; Rocky used `smbprotocol` 1.16.1 with GSSAPI and encrypted SMB. Rocky's bundled `smbclient` 4.23.5 refused the service-only cache while trying to prepare TGT credentials. Application compatibility must therefore be tested explicitly; successful ticket acquisition alone does not establish that every Kerberos client supports this mode.
+| Mode | Recorded coverage |
+| --- | --- |
+| 1 Enrollment | CES EOBO and PKINIT with RSA 2048/3072/4096 on both Linux clients |
+| 2 Key Trust | PKINIT with all three RSA sizes on both clients; temporary directory keys removed |
+| 3 Windows export | Export, reuse, forced renewal and confirmed Windows-store cleanup for all three RSA sizes on Server 2019/2022/2025; all nine exported pairs used for PKINIT on each Linux client |
+| 4 Constrained delegation | Two exact CIFS targets on both clients, with 60-second and default ten-hour service grants; no TGT, broker credential or evidence in the published cache |
 
-Both clients preserved their existing cache byte-for-byte when one target was denied by AD, the user was marked nondelegable, broker protocol transition was disabled, delegation targets were withdrawn, the keytab did not match the broker, or the KDC was unreachable. An uncached target could not be obtained without a TGT. Per-user rate limits and non-setuid refusal also preserved the cache. Acquisition recovered after the original policy/keytab/KDC configuration was restored.
+Modes 1-3 produced ten-hour AES TGTs with seven-day renewal, within the configured five-second tolerance, and authenticated to LDAP and both SMB servers. Ordinary non-setuid home mode also succeeded with private broker files absent and inherited `no_new_privs`. Partial and malformed home identities failed without fallback and preserved the cache. The maintainer's renewal operation was invoked directly against real ten-hour TGTs from each mode, retaining authentication time, the absolute renewal deadline and usable service tickets; detached startup, status and watched-job exit also passed. An experimental 120-second TGT was issued but AD refused its renewal with `Ticket expired`; CRAFT retained the cache and reported the failure. Short TGT behavior must be validated against the actual KDC.
 
-Installed maintainers on both clients refreshed the complete pair of 60-second service tickets through the broker, reported `ticket_kind=service` and `renew_until=0`, retained the cache during a refresh outage, and recovered after KDC access returned. Watched jobs stayed alive through the outage; maintainers stopped when those jobs exited. Temporary AD/Linux identities, shares and broker keytab copies were removed after testing, and guests started for the run were returned to their original powered-off state. The pre-existing CRAFT installation remained separate from the test installation.
+Mode 4 used a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs, with unconstrained delegation disabled. It ignored malformed and parseable home pairs and ran without CA/CRL configuration. MIT cache inspection verified the fixed caller, exact targets, AES credentials, lifetime bounds and absence of TGTs, broker credentials, S4U2Self evidence and proxy metadata. Grants of 60, 120 and 36000 seconds were exercised. The private broker TGT requested at least 600 seconds for S4U processing.
 
-### Multi-OS validation
+Both clients read files from both Windows shares using Kerberos-only authentication; server security events confirmed network logons from each client. Ubuntu used Samba `smbclient` 4.19.5. Rocky used `smbprotocol` 1.16.1 with GSSAPI and encrypted SMB because its bundled `smbclient` 4.23.5 required TGT credentials. Case differences between cached SPNs and application requests also prevented service-only authentication. Validate the actual client and exact SPN spelling.
 
-A DISA STIG-hardened AD lab used Ubuntu 24.04.5 LTS and Rocky Linux 9.8 clients, Windows Server 2022 AD/AD CS/CES, and Server 2019/2025 member servers. RSA 2048/3072/4096-bit keys were covered in modes 1-3; all 27 checks passed.
+Both clients preserved their cache when a target was denied by AD, the user was nondelegable, protocol transition was disabled, delegation was withdrawn, the broker keytab was wrong or the KDC was unreachable. An uncached target could not be acquired without a TGT. Rate limits and non-setuid refusal preserved the cache, including when a valid home pair was present. Automatic maintenance refreshed both 60-second service tickets, retained the cache and watched job during a KDC outage, recovered when the KDC returned, and stopped when the job exited. Status reported `ticket_kind=service` and `renew_until=0`.
 
-| Mode | Recorded coverage | Passed |
-| --- | --- | --- |
-| 1 Enrollment | CES EOBO and PKINIT on both Linux clients | 6/6 |
-| 2 Key Trust | PKINIT and temporary-key cleanup on both Linux clients | 6/6 |
-| 3 Windows export | Nine exports on Server 2019/2022/2025; six Linux PKINIT runs | 15/15 |
-
-The lab confirmed ten-hour TGTs with seven-day renewal, AES256 session/ticket encryption, LDAP/GSSAPI and SMB access, scoped nonadministrative delegation, and launcher/runtime/cache permissions. The earlier Windows Server 2022/Ubuntu enrollment trial also recorded successful manual TGT renewal. These observations do not establish every CA, mapping policy or denial case.
+Temporary AD/Linux identities and test shares were removed, guest credential copies were cleared, and guests started for the run were returned to their original powered-off state. Private mount namespaces kept test binaries, configuration and runtime files separate from the existing installation.
 
 ### Linux build and MIT KDC coverage
 
