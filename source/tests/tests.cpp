@@ -1382,6 +1382,17 @@ static void maintenance_tests()
                   .length = static_cast<unsigned int>(ticket.size()),
                   .data = reinterpret_cast<char *>(ticket.data())};
 
+    test("cached TGT metadata cannot disguise a service ticket envelope",
+         [&]
+         {
+             auto encoded = ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96, "cifs", "files.domain.local");
+             auto bad = tgt;
+             bad.ticket = {.magic = 0,
+                           .length = static_cast<unsigned int>(encoded.size()),
+                           .data = reinterpret_cast<char *>(encoded.data())};
+             rejects([&] { validate_cached_tgt(ctx, bad, client.get(), server.get(), now); });
+         });
+
     test("maintenance schedules renewal and weekly enrollment from actual deadlines",
          [&]
          {

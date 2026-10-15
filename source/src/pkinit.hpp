@@ -210,7 +210,7 @@ get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *
                   ctx, &creds, principal.get(), nullptr, refuse_prompt, nullptr, 0, nullptr, opts.get()),
               "user PKINIT");
     validate_tgt(ctx, cfg, creds, principal.get(), tgs.get(), requested_at, time(nullptr));
-    const auto outer = ticket_enctype(ctx, creds.ticket);
+    const auto outer = ticket_enctype(ctx, creds.ticket, tgs.get());
     std::cerr << std::format(
         "craft-worker: TGT expires at Unix {}{}; session enctype={}; ticket enctype={}\n",
         creds.times.endtime,

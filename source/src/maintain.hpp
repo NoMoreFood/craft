@@ -201,7 +201,7 @@ inline void validate_cached_tgt(
                                                      : tgt.times.renew_till == 0),
          "cached TGT identity, flags or times are invalid");
     require_aes_key(tgt.keyblock);
-    (void)ticket_enctype(ctx, tgt.ticket);
+    (void)ticket_enctype(ctx, tgt.ticket, server);
 }
 
 inline void
