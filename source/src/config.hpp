@@ -18,7 +18,8 @@ enum class CertificateSource
 {
     Enrollment,
     Home,
-    KeyTrust
+    KeyTrust,
+    ConstrainedDelegation
 };
 
 struct Config
@@ -26,6 +27,8 @@ struct Config
     std::string domain, realm, netbios, template_oid, ces_url, service_principal;
     std::string certificate_cn = "{user}";
     std::string gc_url, gc_base_dn, kt_dc_url;
+    std::vector<std::string> service_spns{};
+    uint32_t service_ticket_seconds = 36000;
     uint32_t tgt = 36000, renew = 604800, cert_remaining = 36000, cert_total = 36000, interval = 60;
     uint32_t key_bits = 3072;
     bool ces_negotiate = false, require_full_tgt_lifetime = true;
@@ -54,11 +57,11 @@ inline bool plain_url(std::string_view url, std::string_view scheme)
            std::ranges::all_of(rest, [](unsigned char c) { return c > 32 && c < 127; });
 }
 
-// `home` says the caller supplied a certificate pair; otherwise the configuration picks the privileged
-// fallback mechanism, and only then are that mechanism's settings required.
+// The caller-side probe uses home policy unless service-only mode is configured. The broker worker
+// requires the settings for its selected mechanism.
 inline Config parse_config(std::string_view text, bool home)
 {
-    static constexpr std::array<std::string_view, 20> keys{"enabled",
+    static constexpr std::array<std::string_view, 22> keys{"enabled",
                                                            "domain",
                                                            "realm",
                                                            "netbios",
@@ -67,6 +70,8 @@ inline Config parse_config(std::string_view text, bool home)
                                                            "ces_auth",
                                                            "service_principal",
                                                            "mechanism",
+                                                           "service_spns",
+                                                           "service_ticket_seconds",
                                                            "kt_dc_url",
                                                            "certificate_cn",
                                                            "key_bits",
@@ -108,16 +113,18 @@ inline Config parse_config(std::string_view text, bool home)
         return found == values.end() ? fallback : number(found->second, maximum);
     };
     need(required("enabled") == "yes", "service disabled; review configuration and set enabled=yes");
-    auto source = CertificateSource::Home;
-    if (!home)
+    const auto mechanism = optional("mechanism", "enrollment");
+    auto source = mechanism == "constrained_delegation" ? CertificateSource::ConstrainedDelegation
+                                                       : CertificateSource::Home;
+    if (!home && source != CertificateSource::ConstrainedDelegation)
     {
-        const auto mechanism = optional("mechanism", "enrollment");
         need(mechanism == "enrollment" || mechanism == "key_trust",
-             "mechanism must be enrollment or key_trust");
+             "mechanism must be enrollment, key_trust or constrained_delegation");
         source = mechanism == "key_trust" ? CertificateSource::KeyTrust : CertificateSource::Enrollment;
     }
     const bool enrollment = source == CertificateSource::Enrollment; // CA, CES and enrollment agent
     const bool key_trust = source == CertificateSource::KeyTrust;    // msDS-KeyCredentialLink
+    const bool delegated = source == CertificateSource::ConstrainedDelegation;
     Config c;
     c.source = source;
     c.domain = required("domain");
@@ -127,7 +134,7 @@ inline Config parse_config(std::string_view text, bool home)
     c.ces_url = required("ces_url", enrollment);
     const auto ces_auth = required("ces_auth", enrollment);
     c.ces_negotiate = ces_auth == "negotiate";
-    c.service_principal = required("service_principal", enrollment || key_trust); // LDAP/GSSAPI and CES
+    c.service_principal = required("service_principal", enrollment || key_trust || delegated);
     c.kt_dc_url = required("kt_dc_url", key_trust);
     c.gc_url = optional("gc_url", "ldap://" + c.domain + ":3268");
     c.gc_base_dn = optional("gc_base_dn", domain_to_dn(c.domain));
@@ -152,6 +159,29 @@ inline Config parse_config(std::string_view text, bool home)
     need(c.domain.size() < 254 && c.realm.size() < 254, "domain value too long");
     need(std::regex_match(c.domain, domain_re), "domain must be lowercase DNS syntax");
     need(std::regex_match(c.realm, realm_re), "realm must be uppercase DNS syntax");
+    if (delegated)
+    {
+        // Exact same-realm service names keep referrals and broker evidence outside the published cache.
+        static const std::regex spn_re(R"(^[A-Za-z][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9.:-]*$)");
+        std::istringstream spns(required("service_spns"));
+        for (std::string spn; spns >> spn;)
+        {
+            const auto at = spn.find('@');
+            const auto name = spn.substr(0, at);
+            auto service = name.substr(0, name.find('/'));
+            for (auto &ch : service)
+                if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+            need(spn.size() <= 512 && at != spn.npos && spn.substr(at + 1) == c.realm &&
+                     std::regex_match(name, spn_re) && service != "krbtgt" && spn != c.service_principal &&
+                     std::ranges::find(c.service_spns, spn) == c.service_spns.end(),
+                 "service_spns needs unique service/host@REALM targets, excluding krbtgt and the broker");
+            c.service_spns.push_back(std::move(spn));
+            need(c.service_spns.size() <= 32, "service_spns permits at most 32 targets");
+        }
+        need(!c.service_spns.empty(), "service_spns requires at least one target");
+        c.service_ticket_seconds = seconds("service_ticket_seconds", c.service_ticket_seconds, 604800);
+        need(c.service_ticket_seconds >= 60, "service_ticket_seconds must be at least 60");
+    }
     if (enrollment)
     {
         need(!c.netbios.empty() && c.netbios.size() <= 15 &&

@@ -9,12 +9,19 @@ Review these boundaries before enabling an installation. The host's authority di
 | 1 Enrollment | Service keytab and enrollment-agent private key can obtain user certificates | CA restrictions on the actual signer, template and approved recipients |
 | 2 Key Trust | Service keytab can write public keys and authenticate as targets in its delegated scope | ReadProperty/WriteProperty on only `msDS-KeyCredentialLink` over reviewed ordinary users |
 | 3 Supplied certificate | Each user holds a reusable certificate and private key | Authorized certificate issuance, revocation and KDC mapping to the fixed caller principal |
+| 4 Constrained delegation | Broker keytab can impersonate delegable users to approved services | Protocol transition and exact `msDS-AllowedToDelegateTo` target SPNs on a dedicated broker |
 
-A complete home pair takes priority on every installation. Partial, unsafe or invalid inputs fail without privileged acquisition. All modes request `<Linux username>@<realm>` and validate the returned TGT. Modes 1 and 2 resolve the directory UPN; mode 3 relies on KDC mapping without LDAP. Keep Linux UID/name assignments and NSS providers under administrator control.
+Mode 4 uses the broker and ignores home certificates. In modes 1-3, a complete home pair takes priority. Partial, unsafe or invalid inputs fail without privileged acquisition. All modes request `<Linux username>@<realm>` and validate the returned credentials. Mode 4 publishes only explicitly configured same-realm services after every target succeeds; no user or broker TGT, S4U2Self evidence or proxy metadata is exported. Modes 1 and 2 resolve the directory UPN; mode 3 relies on KDC mapping without LDAP. Keep Linux UID/name assignments and NSS providers under administrator control.
 
 CRAFT does not check the user's AD password, perform an MFA challenge or establish completion of MFA. Software keys and Smart Card Logon EKU do not establish hardware custody or a second factor. Treat the approved recipient group and delegated object scope as permission for the host to authenticate as those accounts. Exclude privileged identities and protect the administrators, memberships and ACLs defining that scope.
 
 See [enrollment-agent restrictions](../docs/03-Enrollment-Agent-Restrictions.md), [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md) and the [installation recipes](README.md).
+
+## Constrained delegation authority
+
+Broker-account delegation limits target services, not recipient users. Local `craft-users` access and NSS identity control limit ordinary callers; a compromised broker can attempt impersonation of other users wherever AD permits it. Protect privileged accounts with domain delegation restrictions and prove denial. Services sharing an AD account/key are not isolated by their SPN labels; use separate target identities where that separation matters. See [broker delegation](../docs/05-Constrained-Delegation.md).
+
+Mode 4 uses an AES keytab and Kerberos S4U rather than certificates. Broker credentials stay in private memory. Service tickets may be forwardable/forwarded; the output still carries no TGT or evidence. `craft-maintain` reacquires the whole service batch before the earliest expiry, with no cache-only TGT renewal. KDC policy may shorten service lifetimes. Disable acquisition and stop maintainers before changing policy; existing tickets retain their domain-enforced validity.
 
 ## Key Trust certificate handling
 
@@ -26,13 +33,13 @@ CRAFT removes its exact directory value before releasing credentials and preserv
 
 ## Lifetime and encryption policy
 
-Defaults request a ten-hour initial TGT and seven-day renewal window. The KDC controls the grant, and certificate/key lifetime can constrain initial PKINIT validity. Strict mode rejects shortened grants; `require_full_tgt_lifetime=no` permits shorter grants with a warning. Every mode rejects excessive lifetimes, unexpected principals/flags, and non-AES session or ticket encryption.
+Modes 1-3 default to a ten-hour initial TGT and seven-day renewal window. The KDC controls the grant, and certificate/key lifetime can constrain initial PKINIT validity. Strict mode rejects shortened grants; `require_full_tgt_lifetime=no` permits shorter grants with a warning. Every mode rejects excessive lifetimes, unexpected principals/flags, and non-AES session or ticket encryption.
 
 Enrollment defaults cap certificate validity at ten hours total, including backdating. Supplied certificates may have ordinary validity periods; their expiry still affects fresh authentication. Renewal uses the cached TGT/session key independently of the certificate. Neither certificate expiry, private-key deletion, directory-key removal nor cache deletion revokes already-issued tickets.
 
 ## Privilege separation and file custody
 
-Only `craft` is setuid in modes 1 and 2. The launcher checks the home pair under the caller's permissions, starts the privileged worker as the dedicated `craft` account when needed, and publishes the cache as the caller. Certificate, LDAP, CES and Kerberos processing stay outside root. The worker and maintainer must remain ordinary executables.
+Only `craft` is setuid in modes 1, 2 and 4. Except in service-only mode, the launcher checks the home pair under the caller's permissions, starts the privileged worker as the dedicated `craft` account when needed, and publishes the cache as the caller. Certificate, LDAP, CES and Kerberos processing stay outside root. The worker and maintainer must remain ordinary executables.
 
 Only the service account belongs to the `craft` group. Private service files are `root:craft` mode 0640; approved callers join the separate `craft-users` launcher group. Public configuration/trust/CRL files are `root:root` mode 0644. Trusted files and parents must be root-owned, not group/world-writable and not symlinks. Protect Kerberos includes, plugins, dynamic libraries, NSS and OpenSSL configuration/providers as part of the host boundary.
 
@@ -44,7 +51,7 @@ Root or service-account compromise can expose service credentials and their enti
 
 ## Transport trust and logging
 
-All modes need the MIT PKINIT plugin, approved KDC anchors, current chain CRLs and administrator-configured KDC identity/EKU checks. Modes 1 and 3 also require user-certificate CA trust/CRLs; mode 1 validates the enrollment agent. CRAFT does not download trust material. Keep accepted CAs narrow; the client does not independently pin the actual issuing CA beyond its configured trust set.
+Modes 1-3 need the MIT PKINIT plugin, approved KDC anchors, current chain CRLs and administrator-configured KDC identity/EKU checks. Modes 1 and 3 also require user-certificate CA trust/CRLs; mode 1 validates the enrollment agent. CRAFT does not download trust material. Keep accepted CAs narrow; the client does not independently pin the actual issuing CA beyond its configured trust set.
 
 Directory connections require LDAP/GSSAPI integrity and encryption with minimum SASL SSF 128. CES requires verified HTTPS with TLS 1.2 or later, no redirects/proxy environment, and the chosen Negotiate or mTLS transport identity. Optional `https-crls.pem` enforces CES server-chain revocation; without it, only HTTPS chain/hostname validation is performed. No OCSP check is implemented.
 
@@ -58,8 +65,8 @@ No dedicated SELinux/AppArmor or seccomp policy, hardware-key backend, remote ap
 
 ## Immediate disable
 
-Set `enabled=no` in `/etc/craft/config` or remove launcher execute access to stop fresh acquisition through all modes. Removing only setuid stops the privileged mechanisms while permitting a valid home pair. Revoke CA agent/recipient authorization or AD delegation separately when the host's authority must be withdrawn.
+Set `enabled=no` in `/etc/craft/config` or remove launcher execute access to stop fresh acquisition through all modes. Removing only setuid stops the broker mechanisms while permitting a valid home pair in modes 1-3. Mode 4 never switches to home PKINIT. Revoke CA agent/recipient authorization or AD delegation separately when the host's authority must be withdrawn.
 
 Acquisition disable does not stop renewal from an existing cache. Inspect each job's status and send SIGTERM to its recorded `maintainer_pid` to stop active maintenance. The cache remains. Already-issued tickets and active service sessions require the domain's incident-response measures.
 
-For mode 1 compromise, withdraw the agent's effective authorization on all relevant CAs, revoke compromised agent/user certificates, publish current revocation data and rotate agent/keytab/mTLS credentials. For mode 2, revoke the delegation with `Grant-CRAFTKeyCredentialLink.ps1 -Remove`, rotate the keytab and remove only confirmed residual CRAFT values from affected objects. For mode 3, replace/revoke compromised supplied certificates and keys. Preserve AUTHPRIV, directory, CA/CES and KDC evidence, repair the cause and repeat acceptance checks before restoring service.
+For mode 1 compromise, withdraw the agent's effective authorization on all relevant CAs, revoke compromised agent/user certificates, publish current revocation data and rotate agent/keytab/mTLS credentials. For mode 2, revoke the delegation with `Grant-CRAFTKeyCredentialLink.ps1 -Remove`, rotate the keytab and remove only confirmed residual CRAFT values from affected objects. For mode 3, replace/revoke compromised supplied certificates and keys. For mode 4, remove the broker delegation/protocol-transition permission and rotate the broker keytab. Preserve AUTHPRIV, directory, CA/CES and KDC evidence, repair the cause and repeat acceptance checks before restoring service.

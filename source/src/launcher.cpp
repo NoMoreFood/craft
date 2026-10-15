@@ -105,11 +105,11 @@ int main(int argc, char **)
             return true;
         };
 
-        // Prefer home credentials entirely under the caller; only the fallback needs the service account.
+        // Apply mode policy under the caller before starting any broker acquisition.
         if (run_worker(caller, true)) return 0;
         need(geteuid() == 0,
-             "no ~/.config/craft/user.pem/user.key pair; the configured fallback (enrollment or Key Trust) "
-             "requires the setuid-root launcher");
+             "the configured broker mode requires the setuid-root launcher; "
+             "home certificates are unavailable or disabled by service-ticket-only policy");
         const Account service = service_account();
         need(uid != service.uid, "invalid calling account");
         run_worker(service, false);

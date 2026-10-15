@@ -1,8 +1,8 @@
 # /etc/craft/config - root:root 0644; protected root-owned parents.
 # Public policy is readable by callers; keep keys/keytabs separately private.
 # Home mode needs enabled/domain/realm and shared ticket policy only.
-# A caller-owned ~/.config/craft/user.pem and user.key pair takes priority.
-# The fallback settings below are required only when that pair is absent.
+# A caller-owned home PEM pair takes priority except in constrained_delegation mode.
+# Constrained delegation always uses the broker; other fallback settings require an absent pair.
 # Full-line comments only. Shipped disabled; review all placeholders.
 enabled=no
 
@@ -10,12 +10,21 @@ domain=domain.local
 realm=DOMAIN.LOCAL
 netbios=DOMAIN
 
-# FALLBACK MECHANISM used when no home pair is present: enrollment (default) or key_trust.
+# FALLBACK MECHANISM used when no home pair is present: enrollment (default), key_trust, or constrained_delegation.
 #   enrollment: enrollment-agent EOBO through the CA and CES (template/CES settings below).
 #   key_trust:  add a temporary public key to the caller's msDS-KeyCredentialLink,
 #               PKINIT with it, then remove it (no user enrollment, CES, template or agent).
-# Both fallbacks need the setuid launcher, the dedicated service account and /run/craft.
+# All broker modes need the setuid launcher, the dedicated service account and /run/craft.
 mechanism=enrollment
+
+# SERVICE TICKETS ONLY (mechanism=constrained_delegation): ignore home certificates.
+# Use a dedicated broker keytab and enable protocol transition plus constrained delegation
+# to these exact services on the broker AD account. No PKINIT, LDAP or CES is used.
+# Every target must succeed; only final service tickets are published, without any TGT/evidence.
+# service_principal=CRAFT/broker.domain.local@DOMAIN.LOCAL
+# service_spns=cifs/files.domain.local@DOMAIN.LOCAL HTTP/portal.domain.local@DOMAIN.LOCAL
+# service_ticket_seconds=36000
+# KDC-shortened service lifetimes are accepted. TGT/certificate settings do not govern this mode.
 
 # KEY TRUST (mechanism=key_trust): writable domain controller for msDS-KeyCredentialLink.
 # Use the SAME DC that serves as the KDC in krb5.conf so the written key is seen immediately.
@@ -45,7 +54,7 @@ certificate_cn={user}
 # require an unrevoked CES server chain (it must then cover every CA in that chain).
 ces_url=https://ces.domain.local/IssuingCA_CES_Kerberos/service.svc/CES
 ces_auth=negotiate
-# Directory/submission account for the LDAP/GSSAPI bind. Required by both fallbacks:
+# Directory/submission or constrained-delegation broker account; matches submitter.keytab:
 # enrollment (directory UPN lookup and CES Negotiate) and key_trust (msDS-KeyCredentialLink write).
 service_principal=svc-linux-enroll@DOMAIN.LOCAL
 

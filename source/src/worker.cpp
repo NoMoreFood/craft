@@ -1,4 +1,5 @@
-// Unprivileged certificate worker. The public entry point is launcher.cpp.
+// Unprivileged credential worker. The public entry point is launcher.cpp.
+#include "delegation.hpp"
 #include "directory.hpp"
 #include "enroll.hpp"
 #include "pkinit.hpp"
@@ -66,28 +67,27 @@ int main(int argc, char **argv)
         need(requesting_uid != 0 && simple_name(m.name), "invalid requesting account");
         const Account caller = lookup_uid(requesting_uid);
         need(caller.name == m.name, "runtime UID/name changed; administrator review required");
+        const Config cfg = config(home);
+        const bool delegated = cfg.source == CertificateSource::ConstrainedDelegation;
         UserIdentityFiles files;
         if (home)
         {
             // Report selection before returning credentials so the launcher can relinquish root.
             need(getuid() == requesting_uid && geteuid() == requesting_uid && getgid() == getegid(),
                  "home certificate worker must run as the caller");
-            files = user_identity_files(caller);
+            if (!delegated) files = user_identity_files(caller);
             const unsigned char selected = files.certificate.get() >= 0;
             write_all(STDOUT_FILENO, {&selected, 1});
             if (!selected) return 0;
         }
         else
         {
-            // Restrict the privileged fallback (enrollment or Key Trust) to the dedicated account.
+            // Restrict broker acquisition to the dedicated account.
             const Account svc = service_account();
             need(requesting_uid != svc.uid && getuid() == svc.uid && geteuid() == svc.uid &&
                      getgid() == svc.gid && getegid() == svc.gid,
                  "privileged worker must run with dedicated account credentials");
         }
-
-        // The configuration selects the fallback mechanism when no home pair is present.
-        const Config cfg = config(home);
 
         // Only CA enrollment uses libcurl; balance its initialization across normal and exceptional exits.
         const bool enrollment = cfg.source == CertificateSource::Enrollment;
@@ -99,14 +99,19 @@ int main(int argc, char **argv)
             });
         Fd lock;
         if (!home) lock = rate_limit(runtime_directory().get(), requesting_uid, cfg.interval, time(nullptr));
-        require_trusted(path("kdc-trust.pem"));
-        require_trusted(path("kdc-crls.pem"));
+        if (!delegated)
+        {
+            require_trusted(path("kdc-trust.pem"));
+            require_trusted(path("kdc-crls.pem"));
+        }
 
-        // Keep the caller principal fixed; the KDC enforces certificate-to-account mapping in every mode.
+        // Keep the caller principal fixed across PKINIT and constrained delegation.
         Kerberos krb;
         Bytes result;
         ScopeExit erase([&]() noexcept { wipe(result); });
         time_t end = 0;
+        if (delegated) result = get_service_tickets(krb, cfg, m);
+        else
         {
             // Acquire and validate the certificate identity. A Key Trust key stays published no longer than
             // this scope lasts, however it is left.
@@ -138,15 +143,21 @@ int main(int argc, char **argv)
             // Remove the Key Trust key before any credential bytes leave this process.
             published.withdraw();
         }
-        audit(LOG_NOTICE,
-              std::format("issued TGT request={} uid={} user={} certificate_source={} certificate_expiry={}",
-                          request,
-                          requesting_uid,
-                          m.name,
-                          home         ? "home"
-                          : enrollment ? "enrollment"
-                                       : "key_trust",
-                          end));
+        if (delegated)
+            audit(LOG_NOTICE,
+                  std::format("issued service tickets request={} uid={} user={} mechanism=constrained_delegation "
+                              "services={}",
+                              request, requesting_uid, m.name, cfg.service_spns.size()));
+        else
+            audit(LOG_NOTICE,
+                  std::format("issued TGT request={} uid={} user={} certificate_source={} certificate_expiry={}",
+                              request,
+                              requesting_uid,
+                              m.name,
+                              home         ? "home"
+                              : enrollment ? "enrollment"
+                                           : "key_trust",
+                              end));
         write_all(STDOUT_FILENO, result);
         return 0;
     }

@@ -14,7 +14,7 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
-CTest covers configuration, certificate/response parsing, home-file safety, ticket policy, cache serialization, audit/diagnostic behavior and synthetic Key Trust cleanup. These checks use synthetic credentials and mocked directory operations. They do not contact AD, AD CS or CES and do not prove installed setuid behavior or live PKINIT.
+CTest covers configuration, certificate/response parsing, home-file safety, ticket policy, cache serialization, audit/diagnostic behavior synthetic Key Trust cleanup and constrained-delegation cache handling. These checks use synthetic credentials and mocked directory operations. They do not contact AD, AD CS or CES and do not prove installed setuid behavior or live PKINIT.
 
 ### Windows helper checks
 
@@ -34,9 +34,9 @@ These checks do not modify AD or contact a CA. The certificate helper checks cre
 | --- | --- |
 | Identity and execution | Run as the intended non-root user without `sudo`. NSS name/home select the fixed `<Linux username>@<realm>` principal; arguments and forged environment values cannot choose another identity. |
 | Cache | Inspect the returned `FILE:` cache. It is caller-owned mode 0600 in the NSS home and unreadable by other UIDs. Acquisition/validation failure preserves its previous content. |
-| Ticket | Verify Initial/Pre-authenticated flags, no forwardable/proxiable flags, AES256/AES128 session and ticket encryption, actual validity and renewal deadline. Expect Renewable only when renewal is configured. |
-| Trust and mapping | Verify the pinned KDC, current CA/KDC CRLs, configured EKU/identity checks and the deployed strong account mapping. Wrong-account, revoked-certificate and stale/missing-required-CRL attempts fail. |
-| Lifetime | Compare actual grants with configured requests. Strict mode rejects shorter initial/renewal grants; permissive mode warns. Excessive lifetimes or non-AES grants always fail. |
+| Ticket | Modes 1-3: verify Initial/Pre-authenticated flags, no forwardable/proxiable flags, AES256/AES128 session and ticket encryption, actual validity and renewal deadline. Expect Renewable only when renewal is configured. Mode 4: verify exact service SPNs with no TGT/evidence; S4U forwardable/forwarded flags may be present. |
+| Trust and mapping | Verify the pinned KDC. Modes 1-3: verify current CA/KDC CRLs, configured EKU/identity checks and the deployed strong account mapping. Wrong-account, revoked-certificate and stale/missing-required-CRL attempts fail. |
+| Lifetime | Compare actual grants with configured requests. Mode 4 accepts shorter service grants. In modes 1-3, strict mode rejects shorter initial/renewal grants; permissive mode warns. Excessive lifetimes or non-AES grants always fail. |
 | Application access | Obtain a service ticket and authenticate to a real authorized SMB, LDAP or Kerberos-enabled web service. Application access follows the account's permissions. |
 | Failure and concurrency | Exercise KDC/network outage, interrupted acquisition, concurrent runs, unsafe/writable home paths and insufficient disk space. Only validated credentials are published. |
 | Audit | Correlate launcher, worker and maintenance AUTHPRIV records. Confirm failure when the logging service is unavailable. Verify host audit rules, retention and forwarding on the installed host. |
@@ -93,13 +93,36 @@ These checks apply to **mode 3**, including supplied certificates on a privilege
 7. Repeat Windows export/reuse/renewal and optional local-store deletion. Transfer replacements only after success and before expiry. Test Linux failure with an incomplete replacement, then restore the valid pair.
 8. If maintenance is used, test cache-only renewal, fresh authentication with the replaced pair, outages and watched-job exit. Neither CRAFT nor the maintainer renews the supplied certificate.
 
+## Constrained delegation acceptance checks
+
+These checks apply to **mode 4**. Use a dedicated lab broker and disposable ordinary users.
+
+1. Verify broker SPN/keytab identity, AES keys, protocol transition, `TrustedForDelegation=false`, and the exact AD target SPNs. Keep broker permissions separate from enrollment and Key Trust.
+2. Run with `mechanism=constrained_delegation`, at least two approved targets, and both absent and present home PEM pairs. A valid or invalid home pair must not select PKINIT. No CA/CRL files, LDAP or CES credentials are required.
+3. Inspect every FILE-cache credential with MIT Kerberos: the client must be the Linux caller and every server an exact configured target. No `krbtgt`, broker credential, S4U2Self `second_ticket`, or proxy metadata may be present. Check AES ticket/session encryption and the lifetime cap.
+4. Authenticate to a real approved service with the published cache. Attempt an uncached, unapproved SPN; it must fail because the cache contains no TGT.
+5. Configure one approved and one AD-denied target. Acquisition must fail as a batch and preserve the previous cache byte-for-byte. Repeat with a nondelegable user, disabled protocol transition, withdrawn delegation, wrong keytab and unavailable KDC.
+6. Verify ordinary non-setuid installation fails even with valid home credentials. Exercise setuid caller/runtime/cache permissions and the per-user rate limit. Audit records must identify `mechanism=constrained_delegation` and the service count without credential bytes.
+7. Use short service lifetimes to exercise actual broker refresh through `craft-maintain`. Check earliest expiry, replacement of the complete batch, no TGT renewal, status and watched-job exit. Verify outage retries preserve the cache and recover after service returns.
+8. When switching from modes 1-3, stop prior maintainers and remove the old TGT cache. Delegation removal and cache deletion do not revoke previously issued tickets.
+
+The `constrained-delegation` CTest suite substitutes KDC responses while using real MIT cache encoding/parsing. It checks batch failure, caller/target/envelope validation, AES/lifetime enforcement, evidence removal and service maintenance scheduling. Live AD results must be recorded separately.
+
 ## Recorded validation
 
 These are recorded repository observations, not acceptance results for your current build or deployment.
 
+### Service-only validation
+
+The Ubuntu 24.04.5 Hyper-V client built the mode 4 implementation with GCC 13.3 and MIT Kerberos 1.20.1. All three CTest suites passed as root and as an ordinary user: offline checks, Key Trust cleanup and nine constrained-delegation checks. The delegation suite substitutes KDC responses; it does not prove AD delegation authorization.
+
+The nine delegation checks also passed with AddressSanitizer and UndefinedBehaviorSanitizer. Detached-maintainer integration passed 18 checks with pidfd watching and 18 with the `/proc` fallback, including service-only startup/status and refresh without TGT renewal. These runs used synthetic credentials and a private mount namespace for the test issuer, home, audit socket and Kerberos policy.
+
+An isolated installed launcher/worker on that client reached the Windows AD KDC for S4U2Self, rejected an unknown user, preserved the existing cache and ignored an invalid home PEM pair. An ordinary non-setuid installation refused service-only acquisition. These are denial and process-boundary observations; successful Windows broker delegation, real service access, live broker refresh and additional guest coverage require the lab broker to be configured and tested.
+
 ### Multi-OS validation
 
-A DISA STIG-hardened AD lab used Ubuntu 24.04.5 LTS and Rocky Linux 9.8 clients, Windows Server 2022 AD/AD CS/CES, and Server 2019/2025 member servers. RSA 2048/3072/4096-bit keys were covered in all modes; all 27 checks passed.
+A DISA STIG-hardened AD lab used Ubuntu 24.04.5 LTS and Rocky Linux 9.8 clients, Windows Server 2022 AD/AD CS/CES, and Server 2019/2025 member servers. RSA 2048/3072/4096-bit keys were covered in modes 1-3; all 27 checks passed.
 
 | Mode | Recorded coverage | Passed |
 | --- | --- | --- |

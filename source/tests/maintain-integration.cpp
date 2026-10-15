@@ -286,6 +286,28 @@ void checks()
                       audited("]: maintenance stopped " + session),
                   "the maintainer's start and stop were not recorded");
          });
+    for (const bool due : {false, true})
+        test(due ? "service-only startup refreshes the batch without TGT renewal"
+                 : "healthy service-only startup retains tickets and reports service status",
+             [&]
+             {
+                 reset(due ? "services-due" : "services", "services");
+                 const auto before = read_file(cache);
+                 with_jobs(1,
+                           [&](const auto &jobs)
+                           {
+                               const auto pid = jobs.front().pid;
+                               const auto result = run(command(pid));
+                               need(result.code == 0, result.error);
+                               const auto report = status(pid);
+                               need(report.at("state") == "ready" && report.at("ticket_kind") == "service" &&
+                                        report.at("renew_until") == "0" && issued() == (due ? 1U : 0U),
+                                    "service maintenance attempted renewal or lost its service status");
+                               need(std::stoll(report.at("ticket_expires")) > time(nullptr) + 35000 &&
+                                        (due || read_file(cache) == before),
+                                    "service credentials were not retained or refreshed correctly");
+                           });
+             });
     test("startup retains lifecycle descriptors with closed stdin and stderr",
          []
          {
@@ -315,7 +337,7 @@ void checks()
                                const auto report = status(pid);
                                need(report.at("state") == "ready" && issued() == 1,
                                     "fresh credentials were not issued once");
-                               need(std::stoll(report.at("tgt_expires")) > time(nullptr) + 35000,
+                               need(std::stoll(report.at("ticket_expires")) > time(nullptr) + 35000,
                                     "fresh TGT expires too soon");
                            });
              });

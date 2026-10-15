@@ -70,7 +70,7 @@ class Page:
         self.rect(64, 40, 5, 26, TEAL)
         self.text(84, 38, "CRAFT", 22, WHITE, "semibold")
         self.text(193, 45, "CERTIFICATE REQUEST AGENT FOR TICKETS", 13, HEADER_MUTED)
-        self.text(1536, 42, f"{number:02d} / 06", 17, HEADER_MUTED, align="right")
+        self.text(1536, 42, f"{number:02d} / 07", 17, HEADER_MUTED, align="right")
         self.text(64, 84, title, 38, WHITE, "semibold", max_width=1472)
         self.text(64, 139, subtitle, 18, HEADER_MUTED, max_width=1472)
 
@@ -199,57 +199,47 @@ class Page:
 
 
 def overview(pdf):
-    p = Page(pdf, "01-system-overview", 1, "Three Linux operating modes",
-             "A supplied PEM pair takes priority. Only an absent pair selects the configured privileged mechanism.",
-             "CRAFT checks the actual Linux caller's NSS home for user.pem and user.key. A complete pair "
-             "uses mode 3's unprivileged acquisition path, including on privileged installations. Partial, "
-             "unsafe or invalid inputs fail and retain the cache. If both files are absent, a setuid installation "
-             "selects mode 1 enrollment or mode 2 credential linking from mechanism. All modes use PKINIT for "
-             "the fixed caller principal, validate the KDC and returned TGT, then publish as the caller.")
-    p.node(64, 220, 350, 125, "Invoke craft as the user",
+    p = Page(pdf, "01-system-overview", 1, "Four Linux operating modes",
+             "Service-only policy takes precedence. Certificate modes check the caller's home PEM pair first.",
+             "The configured constrained_delegation mode bypasses home certificates and obtains only approved "
+             "service tickets. Otherwise a complete home pair selects mode 3; an absent pair selects enrollment "
+             "or Key Trust. Invalid home inputs fail. Validated credentials are published as the caller.")
+    p.node(64, 220, 350, 110, "Invoke craft as the user",
            ["Real UID, NSS name and home", "No arguments; no sudo"], title_size=23)
-    p.node(480, 220, 736, 125, "Check user.pem and user.key in the NSS home",
-           ["~/.config/craft/user.pem + user.key",
-               "Complete pair takes priority on every installation"],
-               color=BLUE,
-               title_size=26)
-    p.arrow([(414, 282), (480, 282)])
-    p.arrow([(670, 345), (670, 428)], TEAL)
-    p.text(695, 375, "BOTH FILES ABSENT", 19, TEAL, "semibold")
-    p.node(190, 428, 736, 87, "Select the configured privileged mechanism",
-           ["Requires setuid launcher, craft service account and /run/craft"], color=TEAL, title_size=25)
-    p.arrow([(1080, 345), (1080, 392), (1308, 392), (1308, 560)], BLUE)
-    p.text(1102, 418, "COMPLETE PAIR", 19, BLUE, "semibold")
-    p.lines(64, 370, ["Partial, unsafe or invalid:", "fail and retain cache."], 21, MUTED, leading=30)
-    p.arrow([(370, 515), (370, 537), (291, 537), (291, 560)], TEAL)
-    p.arrow([(765, 515), (765, 537), (799, 537), (799, 560)], PURPLE)
-    p.node(64, 560, 455, 233, "1  Privileged enrollment",
-           ["mechanism=enrollment", "Service account: GC + agent + CES", "CA issues temporary user certificate",
-            "PKINIT authenticates that certificate",
-                "CA enforces recipient restrictions"],
-                color=TEAL,
-                fill=TEAL_LIGHT,
-                title_size=26)
-    p.node(572, 560, 455, 233, "2  Privileged credential linking",
-           ["mechanism=key_trust", "Service account: writable DC + keytab", "Add temporary msDS-KeyCredentialLink",
-            "Key Trust PKINIT; remove the entry", "AD enforces attribute-write scope"], color=PURPLE, title_size=23)
-    p.node(1080, 560, 455, 233, "3  Unprivileged Windows PEM",
-           ["Windows: user enrollment + export",
-               "Securely transfer certificate and key",
-               "Linux: caller validates and uses pair",
-            "PKINIT uses KDC account mapping",
-                "Supplied PEM files remain in place"],
-                color=BLUE,
-                fill=BLUE_LIGHT,
-                title_size=24)
-    for x in (291, 799, 1308):
-        p.arrow([(x, 793), (x, 816), (799, 816), (799, 843)], BLUE)
-    p.node(330, 843, 940, 95, "Validate the user TGT and publish the cache as the caller",
-           [(
-               'Fixed principal: Linux username @ realm; .krb5cc_craft mode 0600; select'
-               ' with KRB5CCNAME'
-           )], color=BLUE, title_size=27)
-    p.footer("source/README.md: Mode selection and process boundaries; mode-specific setup recipes")
+    p.node(480, 220, 1056, 110, "Read administrator-controlled mechanism policy",
+           ["constrained_delegation selects service tickets only; otherwise inspect the home PEM pair"],
+           color=BLUE, title_size=27)
+    p.arrow([(414, 275), (480, 275)])
+    p.node(64, 370, 1098, 100, "Certificate modes check user.pem and user.key",
+           ["Complete pair: mode 3. Both absent: configured mode 1 or 2. Invalid or partial pair: fail."],
+           color=BLUE, title_size=25)
+    p.arrow([(800, 330), (800, 370)], BLUE)
+    p.arrow([(1361, 330), (1361, 525)], PURPLE)
+    p.text(1361, 383, "MODE 4", 21, PURPLE, "semibold", align="center")
+    p.text(1361, 415, "Ignore home PEM", 20, MUTED, align="center")
+    entries = [
+        (64, "1  Enrollment", TEAL, TEAL_LIGHT,
+         ["mechanism=enrollment", "Service keytab + agent + CES", "CA issues a user certificate",
+          "PKINIT obtains a user TGT", "CA restricts recipients"]),
+        (438, "2  Key Trust", PURPLE, WHITE,
+         ["mechanism=key_trust", "Service keytab + writable DC", "Link a temporary public key",
+          "PKINIT obtains a user TGT", "Remove the linked key"]),
+        (812, "3  Windows PEM", BLUE, BLUE_LIGHT,
+         ["Complete home PEM pair", "Caller validates certificate", "PKINIT obtains a user TGT",
+          "KDC maps certificate to user", "Supplied PEM pair persists"]),
+        (1186, "4  Service tickets", PURPLE, WHITE,
+         ["constrained_delegation", "Dedicated broker AES keytab", "S4U2Self then S4U2Proxy",
+          "AD restricts target services", "No user or broker TGT export"]),
+    ]
+    for x, title, color, fill, lines in entries:
+        if x != 1186:
+            p.arrow([(x + 175, 470), (x + 175, 525)], color)
+        p.node(x, 525, 350, 260, title, lines, color=color, fill=fill, title_size=25)
+        p.arrow([(x + 175, 785), (x + 175, 818), (800, 818), (800, 850)], BLUE)
+    p.node(200, 850, 1200, 85, "Validate credentials and atomically publish as the caller",
+           ["Linux username @ realm; .krb5cc_craft mode 0600; select with KRB5CCNAME"],
+           color=BLUE, title_size=26)
+    p.footer("source/README.md: Mode selection and mode-specific setup; docs/05-Constrained-Delegation.md")
 
 
 def acquisition(pdf):
@@ -361,12 +351,12 @@ def credential_linking(pdf):
 def timing(pdf):
     p = Page(pdf, "05-credential-timing", 5, "Ticket clocks and certificate storage",
              (
-                 'All three modes request 10 h / 7 d by default. Certificate lifetime and '
+                 'Modes 1-3 request 10 h / 7 d by default. Certificate lifetime and '
                  'KDC policy constrain the initial grant.'
              ),
              "Home certificates and keys persist until the user replaces or removes them; ordinary certificate "
              "validity is accepted. Enrollment generates a temporary key and certificate, caps certificate "
-             "validity at ten hours by default and releases its pair after PKINIT. All three modes request the same "
+             "validity at ten hours by default and releases its pair after PKINIT. Modes 1-3 request the same "
              "ten-hour TGT and seven-day renewal window. Renewal uses the cached ticket and session key. "
              "Fresh authentication near day six reuses a valid home pair, "
              "or uses the configured privileged mechanism if both files are absent. "
@@ -437,7 +427,7 @@ def timing(pdf):
     p.arrow([(day(6), 816), (day(6), 847)], TEAL, 2, head=7)
     p.text(day(6) + 13, 820, "Refresh ~day 6", 17, TEAL, "semibold")
     p.text(64, 852, "Acquisition 2", 22, INK, "semibold")
-    p.text(64, 881, "Any of the three modes", 15, MUTED)
+    p.text(64, 881, "Modes 1-3 only", 15, MUTED)
     p.polygon([(day(6), 849), (end - 15, 849), (end, 870), (end - 15, 891), (day(6), 891)], TEAL)
     p.text(day(6) + 18, 861, "New 7-day window", 18, WHITE, "semibold")
     p.text(1536, 902, "Continues to ~day 13", 15, MUTED, align="right")
@@ -454,7 +444,7 @@ def maintenance(pdf):
              "before startup returns successfully. Due renewable TGTs renew at the KDC using the cached ticket "
              "and session key. Missing or expired TGTs, the rollover window, or nonextendible tickets near expiry "
              "trigger fresh authentication through craft, using a home pair first or the configured enrollment "
-             "or credential-linking mode when absent. Due renewal takes priority over rollover. Successful "
+             "or credential-linking mode when absent. Service-only caches refresh through the broker before earliest expiry. Due renewal takes priority over rollover. Successful "
              "updates atomically replace the cache. Renewal retains usable service tickets; fresh authentication "
              "replaces the cache. Failure keeps existing credentials and schedules retries. Job exit stops "
              "maintenance but leaves the cache. Applications need to reload refreshed credentials.")
@@ -475,8 +465,8 @@ def maintenance(pdf):
     p.line([(790, 347), (790, 642)], LINE, 1)
     p.text(824, 349, "02 / FRESH AUTHENTICATION", 15, TEAL, "semibold")
     p.text(824, 379, "Obtain fresh credentials", 28, INK, "semibold")
-    p.lines(824, 425, ["Missing or expired TGT; renewal deadline is near;",
-                      "or a ticket that cannot extend is nearing expiry."],
+    p.lines(824, 425, ["Missing/expired credentials or TGT rollover;",
+                      "mode 4: the earliest service ticket is near expiry."],
             19, INK, leading=27, max_width=710)
     p.text(824, 482, "Rollover margin: 1/7 of the renewal window, capped at 1 day.", 16, MUTED, max_width=710)
 
@@ -492,14 +482,14 @@ def maintenance(pdf):
             18, BLUE, leading=24, max_width=704)
 
     for x, w, title, detail in [(824, 178, "Run craft", "select source"),
-                               (1062, 218, "Selected mode", "1, 2 or 3"),
-                               (1340, 196, "KDC / PKINIT", "new user TGT")]:
+                               (1062, 218, "Selected mode", "1, 2, 3 or 4"),
+                               (1340, 196, "KDC", "TGT or services")]:
         p.rect(x, 522, w, 79, TEAL_LIGHT, radius=9)
         p.text(x + w / 2, 536, title, 21, INK, "semibold", align="center")
         p.text(x + w / 2, 569, detail, 17, MUTED, align="center")
     p.arrow([(1002, 561), (1062, 561)], TEAL)
     p.arrow([(1280, 561), (1340, 561)], TEAL)
-    p.lines(824, 615, ["Home PEM, enrollment or credential linking.", "New renewal window; replace cache."],
+    p.lines(824, 615, ["PKINIT or broker constrained delegation.", "Replace the complete cache after validation."],
             18, TEAL, leading=24, max_width=710)
     p.text(64, 665, "A due renewal takes priority during rollover, "
            "keeping usable credentials alive while fresh authentication is delayed.",
@@ -577,6 +567,40 @@ def home_certificate(pdf):
     p.footer("source/README.md: Mode 3 setup; scripts/Request-CRAFT-Certificate.cmd")
 
 
+def constrained_delegation(pdf):
+    p = Page(pdf, "07-constrained-delegation", 7, "Mode 4  Service tickets through constrained delegation",
+             "The broker requests approved services for the caller. No user TGT or broker credentials leave the worker.",
+             "Service-only mode ignores home certificates. A private broker TGT authorizes S4U2Self, then "
+             "S4U2Proxy for each configured same-realm SPN. All targets must succeed. Only final caller service "
+             "tickets are published; maintenance refreshes the complete batch before its earliest expiry.")
+    lanes(p, [(240, "Linux caller", "launcher and cache writer", INK),
+              (800, "CRAFT broker worker", "dedicated craft service account", PURPLE),
+              (1400, "Active Directory KDC", "protocol transition and target policy", BLUE)])
+    p.number_badge(70, 325, 1, PURPLE)
+    p.message(245, 795, 325, "Service-only policy; ignore home PEM files", color=PURPLE, size=22)
+    p.number_badge(70, 405, 2, PURPLE)
+    p.message(805, 1400, 382, "Broker AES keytab: obtain private broker TGT", color=PURPLE, size=21)
+    p.message(1400, 805, 427, "Broker TGT stays in worker memory", color=PURPLE, dashed=True, size=22)
+    p.number_badge(70, 506, 3, BLUE)
+    p.message(805, 1400, 485, "S4U2Self for Linux username @ realm", color=BLUE, size=22)
+    p.message(1400, 805, 530, "Forwardable evidence; never published", color=BLUE, dashed=True, size=22)
+    p.number_badge(70, 615, 4, BLUE)
+    p.message(805, 1400, 589, "S4U2Proxy for each configured service SPN", color=BLUE, size=22)
+    p.message(1400, 805, 636, "AD authorizes targets and returns user service tickets", color=BLUE, dashed=True, size=20)
+    p.number_badge(70, 730, 5, PURPLE)
+    p.rect(550, 685, 720, 98, WHITE, LINE, radius=9)
+    p.lines(573, 699, ["Validate exact client/target, AES encryption and lifetime.",
+                        "Strip attached evidence. Require every target to succeed.",
+                        "Exclude all TGTs, broker credentials and proxy metadata."],
+            21, leading=28, max_width=674)
+    p.number_badge(70, 840, 6, BLUE)
+    p.message(795, 245, 840, "Return only final service tickets for atomic publication", color=BLUE, dashed=True, size=21)
+    p.lines(108, 893, ["Mode-0600 user cache can access the configured services; it cannot request arbitrary tickets.",
+                       "Maintenance refreshes the whole batch through the broker before the earliest service expiry."],
+            21, INK, leading=28, max_width=1428)
+    p.footer("source/README.md: Mode 4 setup; docs/05-Constrained-Delegation.md")
+
+
 def main():
     fonts()
     SVG_DIR.mkdir(parents=True, exist_ok=True)
@@ -586,10 +610,10 @@ def main():
     pdf.setAuthor("CRAFT")
     pdf.setSubject((
         'Privileged enrollment, privileged credential linking, unprivileged '
-        'Windows PEM, renewal and maintenance'
+        'Windows PEM, constrained delegation, renewal and maintenance'
     ))
     pdf.setCreator("CRAFT vector diagram builder")
-    diagrams = (overview, acquisition, credential_linking, home_certificate, timing, maintenance)
+    diagrams = (overview, acquisition, credential_linking, home_certificate, timing, maintenance, constrained_delegation)
     for page in diagrams:
         page(pdf)
     pdf.save()

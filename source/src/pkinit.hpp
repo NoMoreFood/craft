@@ -27,7 +27,12 @@ public:
         return context_.get();
     }
 
-    // Authenticate the directory/CES transport account from its keytab into a private memory cache.
+    [[nodiscard]] krb5_ccache transport() const noexcept
+    {
+        return transport_.get();
+    }
+
+    // Authenticate the directory/CES or delegation broker from its keytab into a private memory cache.
     void acquire_transport(const Config &c)
     {
         const auto keytab = path("submitter.keytab");
@@ -42,15 +47,16 @@ public:
         krb_check(ctx(), krb5_get_init_creds_opt_alloc(ctx(), out(o)), "transport options");
         auto types = AES_TYPES;
         krb5_get_init_creds_opt_set_etype_list(o.get(), types.data(), static_cast<int>(types.size()));
-        krb5_get_init_creds_opt_set_tkt_life(o.get(), 300);
+        const bool delegated = c.source == CertificateSource::ConstrainedDelegation;
+        krb5_get_init_creds_opt_set_tkt_life(o.get(), delegated ? c.service_ticket_seconds : 300);
         krb5_get_init_creds_opt_set_renew_life(o.get(), 0);
 
-        // Only the isolated transport account requests forwardability, for CES constrained delegation.
-        krb5_get_init_creds_opt_set_forwardable(o.get(), c.ces_negotiate);
+        // Forwardability stays inside the broker cache for CES or S4U constrained delegation.
+        krb5_get_init_creds_opt_set_forwardable(o.get(), c.ces_negotiate || delegated);
         krb5_get_init_creds_opt_set_proxiable(o.get(), 0);
         krb_check(ctx(),
                   krb5_get_init_creds_keytab(ctx(), &cred, p.get(), kt.get(), 0, nullptr, o.get()),
-                  "authenticate directory/CES transport account");
+                  "authenticate broker keytab");
         require_aes_key(cred.keyblock);
         (void)ticket_enctype(ctx(), cred.ticket);
         krb_check(

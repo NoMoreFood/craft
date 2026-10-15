@@ -1007,7 +1007,9 @@ static void process_tests()
          });
 }
 
-static Bytes ticket_fixture(krb5_enctype enctype)
+static Bytes ticket_fixture(krb5_enctype enctype,
+                            std::string_view service = "krbtgt",
+                            std::string_view host = "DOMAIN.LOCAL")
 {
     auto text = [](std::string_view value)
     {
@@ -1015,7 +1017,7 @@ static Bytes ticket_fixture(krb5_enctype enctype)
     };
     const auto version = der(0xa0, der(0x02, Bytes{5}));
     const auto realm = der(0xa1, text("DOMAIN.LOCAL"));
-    const auto names = der(0x30, join(text("krbtgt"), text("DOMAIN.LOCAL")));
+    const auto names = der(0x30, join(text(service), text(host)));
     const auto principal = der(0xa2, der(0x30, join(der(0xa0, der(0x02, Bytes{2})), der(0xa1, names))));
     const auto enc = der(0xa3,
                          der(0x30,
@@ -1652,12 +1654,24 @@ static void maintenance_fixture(std::string_view mode)
     KrbContext context;
     need(krb5_init_context(out(context)) == 0, "fixture Kerberos context");
     const auto ctx = context.get();
+    const bool services = mode == "services" || mode == "services-due";
     const auto client = parse_principal(ctx, "craft-maintain-test@DOMAIN.LOCAL"),
-               server = tgs_principal(ctx, "DOMAIN.LOCAL");
+               server = services ? parse_principal(ctx, "cifs/files.domain.local@DOMAIN.LOCAL")
+                                 : tgs_principal(ctx, "DOMAIN.LOCAL");
     std::array<unsigned char, 32> key{};
     const auto now = static_cast<krb5_timestamp>(time(nullptr));
     auto tgt = make_test_creds(client.get(), server.get(), key, now);
-    if (mode == "renew" || mode == "nonrenewable")
+    if (services)
+    {
+        tgt.ticket_flags = TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PRE_AUTH;
+        tgt.times.renew_till = 0;
+        if (mode == "services-due")
+        {
+            tgt.times.authtime = tgt.times.starttime = now - 32400;
+            tgt.times.endtime = now + 3600;
+        }
+    }
+    else if (mode == "renew" || mode == "nonrenewable")
     {
         tgt.times.authtime = tgt.times.starttime = now - 32400;
         tgt.times.endtime = now + 3600;
@@ -1680,7 +1694,9 @@ static void maintenance_fixture(std::string_view mode)
         tgt.times.renew_till = tgt.times.authtime + 604800;
     }
     else need(mode == "healthy", "unknown maintenance fixture");
-    auto encoded = ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96);
+    auto encoded = ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96,
+                                   services ? "cifs" : "krbtgt",
+                                   services ? "files.domain.local" : "DOMAIN.LOCAL");
     tgt.ticket = {.magic = 0,
                   .length = static_cast<unsigned int>(encoded.size()),
                   .data = reinterpret_cast<char *>(encoded.data())};
@@ -2520,7 +2536,7 @@ int main(int argc, char **argv)
             return 1;
         }
         if (value == "delay") poll(nullptr, 0, 30000);
-        maintenance_fixture("healthy");
+        maintenance_fixture(value == "services" ? "services" : "healthy");
         return 0;
     }
     helper_tests();

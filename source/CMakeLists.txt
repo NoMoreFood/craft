@@ -38,6 +38,7 @@ endif()
 # Dependency floors are those of RHEL 8. The maintainer needs only Kerberos.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(KRB5 REQUIRED IMPORTED_TARGET krb5)
+pkg_check_modules(GSSAPI REQUIRED IMPORTED_TARGET krb5-gssapi)
 pkg_check_modules(WORKER REQUIRED IMPORTED_TARGET openssl>=1.1.1 libcurl>=7.61 libxml-2.0>=2.9 libsasl2)
 
 # Red Hat backported krb5_marshal_credentials (upstream 1.20) to 1.18.2, so test for the symbol, not a version.
@@ -80,7 +81,7 @@ add_link_options(-Wl,-z,relro,-z,now,-z,noexecstack)
 add_executable(craft src/launcher.cpp)
 add_executable(craft-worker src/worker.cpp)
 add_executable(craft-maintain src/maintain.cpp)
-target_link_libraries(craft-worker PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap)
+target_link_libraries(craft-worker PRIVATE PkgConfig::KRB5 PkgConfig::GSSAPI PkgConfig::WORKER craft-ldap)
 target_link_libraries(craft-maintain PRIVATE PkgConfig::KRB5)
 
 # The optional wrapper names the configured launcher; emit it executable whatever mode the checkout recorded.
@@ -103,6 +104,10 @@ if(BUILD_TESTING)
     -Wl,--wrap=ldap_initialize,--wrap=ldap_set_option,--wrap=ldap_sasl_interactive_bind_s
     -Wl,--wrap=ldap_modify_ext_s,--wrap=ldap_unbind_ext_s,--wrap=connect)
   add_test(NAME key-trust-cleanup COMMAND craft-key-trust-tests)
+  add_executable(craft-delegation-tests tests/delegation.cpp)
+  target_link_libraries(craft-delegation-tests PRIVATE PkgConfig::KRB5 PkgConfig::GSSAPI PkgConfig::WORKER)
+  target_link_options(craft-delegation-tests PRIVATE -Wl,--wrap=krb5_get_credentials)
+  add_test(NAME constrained-delegation COMMAND craft-delegation-tests)
 
   # Integration harness for a disposable container only; tests/run-container-tests.sh installs and runs it.
   # The second maintainer is forced onto the /proc watch that kernels without pidfd_open (RHEL 8) use.

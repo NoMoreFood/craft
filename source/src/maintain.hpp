@@ -250,9 +250,38 @@ struct Result
 {
     int64_t end = 0, renew = 0;
     uint32_t delay = 900, retry = 0;
-    bool success = false;
+    bool success = false, service_only = false;
     char principal[384]{}, error[512]{};
 };
+
+// Refresh the whole service batch before its earliest ticket expires; there is no user TGT to renew.
+inline Schedule service_schedule(krb5_context ctx, krb5_ccache cache, krb5_principal client, Result &result)
+{
+    krb5_cc_cursor cursor{};
+    krb_check(ctx, krb5_cc_start_seq_get(ctx, cache, &cursor), "iterate service cache");
+    ScopeExit finish([&]() noexcept { krb5_cc_end_seq_get(ctx, cache, &cursor); });
+    Schedule plan{Action::Idle};
+    size_t count = 0;
+    for (;;)
+    {
+        krb5_creds cred{};
+        ScopeExit free([&]() noexcept { krb5_free_cred_contents(ctx, &cred); });
+        const auto code = krb5_cc_next_cred(ctx, cache, &cursor, &cred);
+        if (code == KRB5_CC_END) break;
+        krb_check(ctx, code, "read cached service ticket");
+        need(++count <= 32, "too many service tickets in cache");
+        validate_service_credential(ctx, cred, client, cred.server, time(nullptr));
+        result.end = result.end ? std::min(result.end, int64_t{cred.times.endtime}) : cred.times.endtime;
+
+        // Even a renewable service ticket is refreshed through the broker, never through TGT renewal.
+        cred.ticket_flags &= ~TKT_FLG_RENEWABLE;
+        const auto next = schedule(&cred, time(nullptr));
+        if (next.action == Action::Enroll) plan.action = Action::Enroll;
+        plan.delay = std::min(plan.delay, next.delay);
+    }
+    result.service_only = count != 0;
+    return count ? plan : Schedule{Action::Enroll};
+}
 
 inline void set_text(std::span<char> field, std::string_view text)
 {
@@ -364,6 +393,8 @@ inline void update(const Account &caller, const std::string &expected, Result &r
     // Serialize renewals with every CRAFT publication; release that lock before invoking the issuer.
     for (int attempt = 0; attempt < 2; ++attempt)
     {
+        result.end = result.renew = 0;
+        result.service_only = false;
         Fd lock = cache_lock(home.get(), CACHE_LOCK);
         const Fd file = open_private(home.get(), CACHE_NAME, O_RDONLY, "credential cache");
         auto cache = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
@@ -401,7 +432,8 @@ inline void update(const Account &caller, const std::string &expected, Result &r
                 result.renew = tgt.times.renew_till;
             }
         }
-        const auto plan = schedule(found ? &tgt : nullptr, time(nullptr));
+        const auto plan = !found && cache ? service_schedule(ctx, cache.get(), client.get(), result)
+                                         : schedule(found ? &tgt : nullptr, time(nullptr));
         result.delay = plan.delay;
         if (plan.action == Action::Renew)
         {
@@ -414,7 +446,7 @@ inline void update(const Account &caller, const std::string &expected, Result &r
             result.success = true;
             return;
         }
-        need(attempt == 0, "fresh enrollment returned no sufficiently usable TGT");
+        need(attempt == 0, "fresh acquisition returned no sufficiently usable tickets");
         claim_enrollment(maintenance.get(), plan.delay, result);
         lock = Fd();
         enroll();
@@ -431,11 +463,13 @@ inline std::string status_name(pid_t watch)
 inline void
 write_status(const Account &caller, pid_t watch, std::string_view state, const Result &result, uint32_t delay)
 {
-    const auto text = std::format("job_pid={}\nmaintainer_pid={}\nstate={}\ntgt_expires={}\nrenew_until={}\n"
+    const auto text = std::format("job_pid={}\nmaintainer_pid={}\nstate={}\nticket_kind={}\n"
+                                  "ticket_expires={}\nrenew_until={}\n"
                                   "next_check={}\nlast_error={}\n",
                                   watch,
                                   getpid(),
                                   state,
+                                  result.service_only ? "service" : "tgt",
                                   result.end,
                                   result.renew,
                                   delay ? time(nullptr) + delay : 0,

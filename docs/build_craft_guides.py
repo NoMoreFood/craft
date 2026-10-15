@@ -25,11 +25,13 @@ SETUP = [
     "source/README.md#mode-1-setup-privileged-certificate-enrollment",
     "source/README.md#mode-2-setup-privileged-credential-linking",
     "source/README.md#mode-3-setup-unprivileged-windows-exported-certificate",
+    "source/README.md#mode-4-setup-service-tickets-through-constrained-delegation",
 ]
 FLOW = [
     "docs/diagrams/02-enrollment-sequence.svg",
     "docs/diagrams/03-credential-linking-sequence.svg",
     "docs/diagrams/04-windows-exported-certificate.svg",
+    "docs/diagrams/07-constrained-delegation.svg",
 ]
 
 
@@ -232,13 +234,9 @@ def process_guide(images):
         "CRAFT Linux Operating Modes and Tickets",
         "Certificate Request Agent for Tickets  |  Process overview")
     paragraph(doc, (
-        "CRAFT obtains a user's Kerberos ticket-granting ticket (TGT) through "
-        'PKINIT from Linux, including hosts that are not domain-joined. It '
-        'supports privileged enrollment through AD CS, privileged Key Trust '
-        'credential linking, and unprivileged authentication with a supplied '
-        'certificate exported from Windows. '
-        "All three publish the user's cache for unattended applications without "
-        "storing the user's AD password."
+        "CRAFT obtains Kerberos credentials from Linux without storing the user's AD password. "
+        "Modes 1-3 obtain a user TGT through PKINIT. Mode 4 uses broker constrained delegation "
+        "to obtain only approved service tickets. Domain membership is not required."
     ))
     doc.add_heading("Choose an operating mode", 1)
     table(doc, ["Mode", "Credential source and authority", "Setup"], [
@@ -256,34 +254,26 @@ def process_guide(images):
             'Windows enrolls and exports a certificate and matching private key. '
             "Linux uses the securely transferred PEM pair under the caller's UID."
         ), ("Mode 3 setup", SETUP[2])],
+        ["4  Service tickets only", (
+            'A dedicated broker uses S4U2Self and S4U2Proxy. AD restricts the target services; '
+            'the user receives no TGT or broker credentials.'
+        ), ("Mode 4 setup", SETUP[3])],
     ], [1.65, 4.15, 1.34])
     doc.add_heading("How CRAFT selects the mode", 1)
     paragraph(doc, (
-        "A complete pair at the real caller's NSS-home ~/.config/craft/user.pem "
-        'and user.key takes priority on every installation. Partial, unsafe, '
-        'expired, revoked or invalid inputs fail and preserve the cache. Only '
-        'when both files are absent does mechanism=enrollment select mode 1 or '
-        'mechanism=key_trust select mode 2. A failed privileged mechanism never '
-        'switches to the other one.'
+        'mechanism=constrained_delegation selects mode 4 and ignores home certificates. '
+        'Otherwise a complete NSS-home ~/.config/craft/user.pem and user.key pair selects '
+        'mode 3. Partial or invalid pairs fail. Only an absent pair selects enrollment '
+        'or Key Trust from mechanism; failures never switch mechanisms.'
     ))
     paragraph(doc, (
-        'Mode 3 uses ordinary executables. Modes 1 and 2 require the installed '
-        'setuid launcher, dedicated craft service account, craft-users caller '
-        'group and private /run/craft runtime directory. Users invoke craft '
-        'directly as themselves, without sudo. Certificate and network processing'
-        ' run outside root, and cache publication runs as the caller.'
+        'Mode 3 uses ordinary executables. Modes 1, 2 and 4 require the setuid launcher, '
+        'dedicated craft account, craft-users caller group and private /run/craft. '
+        'Users run craft directly without sudo. Network work runs outside root; '
+        'the caller publishes the cache. CRAFT does not perform an MFA challenge.'
     ))
-    links(doc,
-        [("Three-mode selection diagram",
-        "docs/diagrams/01-system-overview.svg"),
-        ("Build and install",
-        "source/README.md#build")])
-    paragraph(doc, (
-        'CRAFT supports automation alongside MFA-protected sign-in, but does not '
-        'perform an MFA challenge or establish that one was completed. The next '
-        'pages show each acquisition flow; the final pages explain identity, '
-        'storage and the shared ticket lifecycle.'
-    ))
+    links(doc, [("Mode selection diagram", "docs/diagrams/01-system-overview.svg"),
+                ("Build and install", "source/README.md#build")])
     figure_page(doc, 1, "Mode 1 privileged certificate enrollment", (
         'Linux resolves the user, enrolls a restricted certificate through CES '
         "and AD CS, then obtains the user's TGT through PKINIT. The generated "
@@ -299,12 +289,17 @@ def process_guide(images):
         "validates the supplied pair and obtains the user's TGT as the caller. "
         'The PEM pair remains and must be replaced before expiry.'
     ), images[2])
+    figure_page(doc, 4, "Mode 4 service tickets through constrained delegation", (
+        'A private broker TGT authorizes protocol transition and constrained delegation. '
+        'Only validated tickets for every configured service are published. Home PEM files '
+        'are ignored; there is no PKINIT or directory write.'
+    ), images[3])
     section = doc.add_section(WD_SECTION_START.NEW_PAGE)
     dimensions(section)
     doc.add_heading("Identity trust and credential storage", 1)
     paragraph(doc, (
         'All modes request <Linux username>@<configured realm> and verify the '
-        'returned TGT principal, flags, AES encryption and lifetimes. Linux names'
+        'returned credential principals, flags, AES encryption and lifetimes. Linux names'
         ' must match the intended AD sAMAccountName. Enrollment and credential '
         'linking resolve and check the directory UPN. The supplied-certificate '
         'path performs no LDAP lookup; the KDC must map that certificate to the '
@@ -338,11 +333,18 @@ def process_guide(images):
             "user.pem and user.key stay in the caller's home. CRAFT does not renew, "
             'overwrite or delete them. Replace them before expiry.'
         )],
+        ["4  Service tickets", (
+            'Broker AES keytab, protocol transition and explicit AD target SPNs. '
+            'No certificate authentication or directory write.'
+        ), (
+            'Broker keytab stays protected under /etc/craft. Only final user service '
+            'tickets and their session keys persist in the user cache.'
+        )],
     ], [1.1, 3.1, 2.94])
     paragraph(doc, (
         'Every mode atomically publishes a caller-owned mode-0600 .krb5cc_craft '
-        'in the NSS home. This persistent cache contains the TGT and session key,'
-        " without the user's certificate or private key. Applications use it to "
+        'in the NSS home. It contains a user TGT in modes 1-3, or only selected service tickets in mode 4,'
+        " with session keys but no certificate, private key or broker evidence. Modes 1-3 use it to "
         'request service tickets. Success replaces the cache; acquisition failure'
         ' preserves it, and expiration does not delete it automatically.'
     ))
@@ -358,10 +360,11 @@ def process_guide(images):
         [("Enrollment-agent restrictions",
         "docs/03-Enrollment-Agent-Restrictions.md"),
         ("Key Trust delegation",
-        "docs/04-Key-Credential-Link-Delegation.md")])
+        "docs/04-Key-Credential-Link-Delegation.md"),
+        ("Broker delegation", "docs/05-Constrained-Delegation.md")])
     page(doc, "Ticket lifetimes and everyday use")
     paragraph(doc, (
-        'CRAFT requests a ten-hour initial TGT and a seven-day renewal window '
+        'Modes 1-3 request a ten-hour initial TGT and a seven-day renewal window '
         'with AES256/AES128. The KDC controls the grant; certificate/key lifetime'
         ' can constrain initial validity. A renewal window is the period during '
         'which an eligible TGT can be renewed. It does not make one ticket valid '
@@ -390,23 +393,17 @@ def process_guide(images):
         ' || exit "$?"\nexport KRB5CCNAME="$cache"'
     ))
     paragraph(doc, (
-        'craft-maintain returns when credentials and detached maintenance are '
-        'ready. Renewal uses the cached ticket and session key alone. Fresh '
-        'authentication near the absolute renewal deadline invokes craft: reuse '
-        'the supplied pair, or use the configured enrollment or '
-        'credential-linking mode when both files are absent. Full '
-        'ten-hour/seven-day grants normally renew near hour eight and '
-        'authenticate afresh near day six; actual grants set the schedule.'
+        'craft-maintain returns when credentials and detached maintenance are ready. '
+        'Modes 1-3 renew from the cached TGT and authenticate afresh near the renewal deadline. '
+        'Mode 4 refreshes the complete service batch through its broker before the earliest expiry. '
+        'Fresh authentication always uses the configured mode selection.'
     ))
     paragraph(doc, (
-        'Install the maintainer without setuid/setgid on Linux with /proc and '
-        'system Kerberos configuration matching the pinned realm/KDC and AES '
-        'policy. Monitoring uses pidfds when available and /proc elsewhere. '
-        'Home refresh works under no_new_privs; modes 1 and 2 require '
-        'later setuid calls. The scheduler must retain background processes. '
-        'Watch a shell or job controller that lasts for the job; optional '
-        '--max-duration 21d adds a cutoff. Concurrent jobs for one UID share the '
-        'cache and fresh-acquisition cooldown.'
+        'Install the maintainer without setuid/setgid. Protect system Kerberos configuration, '
+        'and watch a shell or controller that lasts for the job. The scheduler must retain '
+        'background processes. Modes 1, 2 and 4 need setuid access for fresh authentication; '
+        'home refresh works under no_new_privs. --max-duration 21d adds a cutoff. '
+        'Concurrent jobs for one UID share the cache and acquisition cooldown.'
     ))
     code(doc, '/usr/local/bin/craft-maintain --status --watch-pid "$job_pid"\nklist -ef -c "$KRB5CCNAME"')
     paragraph(doc, (
@@ -421,11 +418,31 @@ def process_guide(images):
         "source/README.md#long-running-jobs"),
         ("Credential timing diagram",
         "docs/diagrams/05-credential-timing.svg")])
+    page(doc, "Operation and authorization")
+    paragraph(doc, (
+        'Mode 4 uses a dedicated broker with protocol transition and account-based constrained '
+        'delegation to an exact list of target SPNs. AD limits target services, not the users '
+        'the broker can impersonate. Protect the keytab, restrict local craft-users membership '
+        'and control Linux UID/name assignment. Exclude sensitive users through domain '
+        'delegation policy and test denial against the deployed KDC.'
+    ))
+    paragraph(doc, (
+        'Services sharing an AD account and key are not isolated by their SPN labels. Use '
+        'separate target service identities where isolation matters. Applications must request '
+        'the configured service names exactly; aliases or additional services need explicit '
+        'configuration and AD authorization. A service-only cache cannot acquire arbitrary tickets.'
+    ))
     paragraph(doc, (
         'All modes require a working host logging socket at /dev/log. Administrators '
         'maintain CRLs, review authorization scope and protect persistent credentials. '
         'Setting enabled=no stops fresh acquisition; stop active maintainers separately '
         'to end renewal. Issued tickets and service sessions remain subject to domain policy.'
+    ))
+    paragraph(doc, (
+        'Mode 4 refreshes all service tickets through the broker before the earliest expiry. '
+        'It has no cache-only renewal and needs the broker and KDC for each refresh. '
+        'Status identifies ticket_kind and ticket_expires. Removing broker delegation blocks fresh '
+        'acquisition but does not revoke already-issued tickets.'
     ))
     links(doc, [("Audit and troubleshooting", "source/README.md#audit-records-and-diagnostics"),
                 ("Operational disable", "source/SECURITY.md#immediate-disable")])
@@ -440,10 +457,10 @@ def configuration_guide():
         'Certificate Request Agent for Tickets  |  Administrator reference'
     ))
     paragraph(doc, (
-        'Configure one of three Linux operating modes: privileged certificate '
+        'Configure one of four Linux operating modes: privileged certificate '
         'enrollment through CES and AD CS, privileged credential linking through '
         'msDS-KeyCredentialLink, or unprivileged PKINIT with a certificate '
-        'exported from Windows. This guide compares their requirements and gives '
+        'exported from Windows, or service-only constrained delegation with a broker keytab. This guide gives '
         'mode-specific configuration and acceptance checks. The linked installation '
         'guide contains complete Linux commands and the configuration reference.'
     ))
@@ -471,11 +488,16 @@ def configuration_guide():
             ("Mode 3 instructions",
             SETUP[2])],
     ], [1.72, 1.8, 1.8, 1.82])
-    doc.add_heading("Shared Linux preparation", 1)
+    paragraph(doc, (
+        'Mode 4 uses the same privileged Linux installation as modes 1 and 2, plus a dedicated '
+        'broker AES keytab with protocol transition and approved target SPNs. It requires no '
+        'certificates, CRLs, PKINIT, LDAP or CES. See the mode 4 setup page.'
+    ))
+    page(doc, "Shared Linux preparation")
     paragraph(doc, (
         'Build as an ordinary user from the repository root with GCC/libstdc++ 13.1 '
         'or equivalent C++20 support, CMake 3.16 or newer, OpenSSL 1.1.1 or newer, MIT Kerberos, libcurl, '
-        'libxml2, OpenLDAP and SASL. At runtime, install MIT PKINIT and, for modes '
+        'libxml2, OpenLDAP, SASL and MIT GSSAPI. Install MIT PKINIT for modes 1-3 and, for modes '
         '1 and 2, the SASL GSSAPI plugin. CES Negotiate needs libcurl SPNEGO. '
         'Use supported patched packages meeting '
         "the installation guide's requirements. A working /dev/log socket is required."
@@ -489,13 +511,13 @@ def configuration_guide():
         'there is no CMake installation target. Keep '
         '/etc/craft/config and krb5.conf root-owned mode 0644 with protected '
         'parents. Pin the realm, KDC and expected KDC hostname; provide populated'
-        ' kdc-trust.pem and current kdc-crls.pem. Modes 1 and 3 also require '
+        ' kdc-trust.pem and current kdc-crls.pem for modes 1-3. Modes 1 and 3 also require '
         'ca-trust.pem and ca-crls.pem for the user certificate; enrollment also '
         'validates the agent. Empty placeholders are invalid. Refresh CRLs '
         'independently.'
     ))
     paragraph(doc, (
-        'Modes 1 and 2 add craft:craft, craft-users and /run/craft owned '
+        'Modes 1, 2 and 4 add craft:craft, craft-users and /run/craft owned '
         'craft:craft mode 0700. Private service credentials are root:craft mode '
         '0640. Only the service account belongs to craft; ordinary users join '
         'craft-users. Keep enabled=no and the launcher non-setuid until the '
@@ -633,7 +655,7 @@ minimum_interval_seconds=60
     doc.add_heading("Shared ticket policy", 2)
     paragraph(doc, (
         'tgt_seconds=36000 and renew_seconds=604800 request ten-hour initial '
-        'validity and seven-day renewal in every mode. Set renew_seconds to 0 to '
+        'validity and seven-day renewal in modes 1-3. Set renew_seconds to 0 to '
         'disable renewal; otherwise it must exceed tgt_seconds. The KDC decides the actual'
         ' grant, including certificate/key-lifetime constraints. Strict '
         'require_full_tgt_lifetime=yes rejects shortened grants and preserves the'
@@ -800,6 +822,55 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'certificate. Neither the helper nor CRAFT schedules or transfers '
         'replacements automatically.'
     ))
+    page(doc, "Mode 4 service tickets through constrained delegation setup")
+    links(doc, [("Complete mode 4 setup", SETUP[3]), ("Broker AD policy", "docs/05-Constrained-Delegation.md"),
+                ("Delegation flow", FLOW[3])])
+    paragraph(doc, (
+        'Use a dedicated ordinary broker account, unique SPN and AES keytab. Enable protocol '
+        'transition and account-based constrained delegation to only the required services. '
+        'TrustedForDelegation must remain false. Install submitter.keytab as root:craft mode 0640, '
+        'and pin the realm/KDC and AES policy in root-controlled krb5.conf. No CA or LDAP setup is needed.'
+    ))
+    code(doc, """
+enabled=no
+domain=domain.local
+realm=DOMAIN.LOCAL
+mechanism=constrained_delegation
+service_principal=CRAFT/broker.domain.local@DOMAIN.LOCAL
+service_spns=cifs/files.domain.local@DOMAIN.LOCAL HTTP/portal.domain.local@DOMAIN.LOCAL
+service_ticket_seconds=36000
+minimum_interval_seconds=60
+""")
+    paragraph(doc, (
+        'service_spns accepts 1-32 exact same-realm service/host@REALM names separated by spaces. '
+        'Wildcards, krbtgt, the broker principal and cross-realm targets are refused. Every target '
+        'must also be authorized in the broker account msDS-AllowedToDelegateTo list. One denied '
+        'target fails the entire acquisition and preserves the previous cache. Home certificates are ignored.'
+    ))
+    paragraph(doc, (
+        'service_ticket_seconds defaults to 36000 and accepts 60-604800 seconds. The KDC may '
+        'shorten grants; CRAFT accepts shorter valid AES tickets. TGT lifetime and renewal settings '
+        'do not apply. Final tickets may be forwardable/forwarded, but no TGT, broker credential, '
+        'S4U2Self evidence or proxy metadata is published.'
+    ))
+    paragraph(doc, (
+        'The AD policy limits services, not recipient users. Restrict local callers through craft-users '
+        'and protect Linux name assignment. Protect sensitive AD users against delegation. Services '
+        'sharing one AD account/key are not isolated by different SPN labels. Use separate target '
+        'identities where service isolation matters.'
+    ))
+    paragraph(doc, (
+        'Stop existing maintainers and remove the old TGT cache before switching to mode 4. '
+        'After enabling acquisition, verify every cache record, real service authentication, '
+        'unapproved-target and nondelegable-user denial, home-pair precedence and cache preservation. '
+        'Existing credentials are not revoked by configuration changes.'
+    ))
+    paragraph(doc, (
+        'craft-maintain refreshes the complete service batch before its earliest expiry, through the '
+        'broker rather than TGT renewal. Keep the acquisition interval below the actual refresh interval. '
+        'Status reports ticket_kind=service, earliest ticket_expires and renew_until=0. Test refresh, '
+        'outages and watched-job exit with short service lifetimes.'
+    ))
     page(doc, "Acceptance checks and ongoing operation")
     paragraph(doc, (
         'Run the offline checks, then validate the chosen installed mode against '
@@ -812,11 +883,11 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         ["Every mode", (
             'Run as the intended non-root user without sudo. Confirm Linux-name '
             'principal, caller-owned mode-0600 cache, '
-            'nonforwardable/nonproxiable flags, configured renewal, AES session/ticket '
+            'mode-appropriate flags and lifetimes, AES session/ticket '
             'encryption and actual lifetimes. Test a real Kerberos-enabled service.'
         )],
         ["Selection and failure", (
-            'The complete home pair takes priority. Partial/unsafe/invalid files must'
+            'Mode 4 ignores home certificates. In modes 1-3, a complete home pair takes priority. Invalid files must'
             ' preserve the cache without either privileged mechanism. With both '
             'absent, use only the configured mechanism. Test wrong mapping, stale '
             'required CRLs, key mismatch, KDC outage, RC4 and shortened strict-mode '
@@ -853,7 +924,7 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'matching the pinned realm/KDC and AES policy. It monitors the job through '
         'a pidfd when available, or /proc on older kernels such as RHEL 8. The '
         'scheduler must retain detached processes. Renewal uses the cache alone; '
-        'fresh authentication applies the same three-mode selection. Keep CRLs, '
+        'fresh authentication applies the same configured mode selection. Keep CRLs, '
         'service credentials and supplied certificates current. Status/log '
         'failures preserve the cache and retry; later failures do not terminate '
         'the job.'
@@ -900,7 +971,7 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         )],
         ["Stop fresh acquisition", (
             'Set enabled=no or remove launcher execute access. Removing only setuid stops '
-            'modes 1 and 2 while still permitting a valid supplied pair.'
+            'modes 1, 2 and 4; a supplied pair remains usable only in certificate modes.'
         )],
         ["Stop ticket renewal", (
             'Inspect job status and send SIGTERM to each recorded maintainer_pid. '
@@ -916,6 +987,12 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'Assign owners for credential/CRL lifecycle, recipient/delegation review and logs. '
         'Repeat acceptance after policy or credential changes. Certificate/key removal, '
         'cache deletion and maintenance stop do not revoke already-issued tickets.'
+    ))
+    paragraph(doc, (
+        'Mode 4 refreshes all service tickets through the broker before the earliest expiry. '
+        'It has no cache-only renewal and needs the broker and KDC for each refresh. '
+        'Status identifies ticket_kind and ticket_expires. Removing broker delegation blocks fresh '
+        'acquisition but does not revoke already-issued tickets.'
     ))
     links(doc, [("Audit and troubleshooting", "source/README.md#audit-records-and-diagnostics"),
                 ("Host audit rules", "source/config/craft.audit.rules"),
@@ -936,5 +1013,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     images = convert_from_path(str(ROOT / "docs/CRAFT-Diagrams.pdf"), dpi=100,
                                first_page=2, last_page=4, poppler_path=args.poppler_path)
+    images += convert_from_path(str(ROOT / "docs/CRAFT-Diagrams.pdf"), dpi=100,
+                                first_page=7, last_page=7, poppler_path=args.poppler_path)
     process_guide(images)
     configuration_guide()

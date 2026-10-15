@@ -122,13 +122,16 @@ inline void require_aes_key(const krb5_keyblock &key)
          "KDC session key is not a valid AES128/AES256 key");
 }
 
-inline krb5_enctype ticket_enctype(krb5_context ctx, const krb5_data &encoded)
+inline krb5_enctype
+ticket_enctype(krb5_context ctx, const krb5_data &encoded, krb5_principal server = nullptr)
 {
     auto ticket = krb_owner<krb5_ticket, krb5_free_ticket>(ctx);
     const auto code = krb5_decode_ticket(&encoded, out(ticket));
-    need(code == 0 && ticket, "decode returned TGT envelope");
+    need(code == 0 && ticket, "decode returned ticket envelope");
+    need(!server || krb5_principal_compare(ctx, ticket->server, server),
+         "ticket envelope does not match the requested service");
     need(std::ranges::find(AES_TICKET_TYPES, ticket->enc_part.enctype) != AES_TICKET_TYPES.end(),
-         "KDC encrypted the TGT with a non-AES key; review krbtgt keys/policy");
+         "KDC encrypted the ticket with a non-AES key; review account keys/policy");
     return ticket->enc_part.enctype;
 }
 
@@ -136,6 +139,29 @@ inline krb5_enctype ticket_enctype(krb5_context ctx, const krb5_data &encoded)
 inline int64_t start_time(const krb5_ticket_times &times) noexcept
 {
     return times.starttime ? times.starttime : times.authtime;
+}
+
+// Service-only caches carry ordinary usable tickets, without broker evidence or proxy configuration.
+inline void validate_service_credential(krb5_context ctx,
+                                        const krb5_creds &cred,
+                                        krb5_principal client,
+                                        krb5_principal server,
+                                        time_t now)
+{
+    const auto first = krb5_princ_component(ctx, cred.server, 0);
+    const int64_t start = start_time(cred.times);
+    need(krb5_principal_compare(ctx, cred.client, client) &&
+             krb5_principal_compare(ctx, cred.server, server) &&
+             krb5_princ_size(ctx, server) >= 2 && first &&
+             std::string_view(first->data, first->length) != "krbtgt" &&
+             !krb5_is_config_principal(ctx, server) && !cred.is_skey && cred.second_ticket.length == 0 &&
+             !(cred.ticket_flags & (TKT_FLG_INITIAL | TKT_FLG_INVALID | TKT_FLG_POSTDATED |
+                                   TKT_FLG_MAY_POSTDATE | TKT_FLG_PROXIABLE | TKT_FLG_PROXY)) &&
+             cred.times.authtime > 0 && start >= cred.times.authtime && start <= int64_t{now} + 300 &&
+             cred.times.endtime > start,
+         "service ticket identity, flags, evidence or times are invalid");
+    require_aes_key(cred.keyblock);
+    (void)ticket_enctype(ctx, cred.ticket, server);
 }
 
 inline void u32(Bytes &b, uint32_t n)
@@ -160,8 +186,8 @@ inline void append_cache_credential(krb5_context ctx, Bytes &b, krb5_creds &cred
             if (marshaled->data) ::explicit_bzero(marshaled->data, marshaled->length);
             krb5_free_data(ctx, marshaled);
         });
-    need(krb5_marshal_credentials(ctx, &cred, &marshaled) == 0, "serialize TGT failed");
-    need(b.size() + marshaled->length <= MAX_BLOB, "TGT cache exceeds size limit");
+    need(krb5_marshal_credentials(ctx, &cred, &marshaled) == 0, "serialize credential failed");
+    need(b.size() + marshaled->length <= MAX_BLOB, "ticket cache exceeds size limit");
     b.insert(b.end(), marshaled->data, marshaled->data + marshaled->length);
 }
 
