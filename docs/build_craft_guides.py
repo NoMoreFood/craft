@@ -861,7 +861,8 @@ minimum_interval_seconds=60
     ))
     paragraph(doc, (
         'Stop existing maintainers and remove the old TGT cache before switching to mode 4. '
-        'After enabling acquisition, verify every cache record, real service authentication, '
+        'After enabling acquisition, verify every cache record, service authentication with a client '
+        'that accepts a service-only cache, '
         'unapproved-target and nondelegable-user denial, home-pair precedence and cache preservation. '
         'Existing credentials are not revoked by configuration changes.'
     ))

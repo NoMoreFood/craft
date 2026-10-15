@@ -2,7 +2,7 @@
 
 Validate the installed system with disposable, nonprivileged identities before production use. A successful build or offline check does not establish the deployed CA policy, KDC mapping, directory delegation or scheduler behavior. Record the source revision, OS/packages, configuration, commands and results for your deployment.
 
-Use the [mode 1 setup](README.md#mode-1-setup-privileged-certificate-enrollment), [mode 2 setup](README.md#mode-2-setup-privileged-credential-linking) or [mode 3 setup](README.md#mode-3-setup-unprivileged-windows-exported-certificate), then complete the common checks and that mode's checklist below.
+Use the [mode 1 setup](README.md#mode-1-setup-privileged-certificate-enrollment), [mode 2 setup](README.md#mode-2-setup-privileged-credential-linking), [mode 3 setup](README.md#mode-3-setup-unprivileged-windows-exported-certificate) or [mode 4 setup](README.md#mode-4-setup-service-tickets-through-constrained-delegation), then complete the common checks and that mode's checklist below.
 
 ## Offline checks
 
@@ -14,7 +14,7 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
-CTest covers configuration, certificate/response parsing, home-file safety, ticket policy, cache serialization, audit/diagnostic behavior synthetic Key Trust cleanup and constrained-delegation cache handling. These checks use synthetic credentials and mocked directory operations. They do not contact AD, AD CS or CES and do not prove installed setuid behavior or live PKINIT.
+CTest covers configuration, certificate/response parsing, home-file safety, ticket policy, cache serialization, audit/diagnostic behavior, synthetic Key Trust cleanup and constrained-delegation cache handling. These checks use synthetic credentials and mocked directory operations. They do not contact AD, AD CS or CES and do not prove installed setuid behavior or live PKINIT.
 
 ### Windows helper checks
 
@@ -114,11 +114,17 @@ These are recorded repository observations, not acceptance results for your curr
 
 ### Service-only validation
 
-The Ubuntu 24.04.5 Hyper-V client built the mode 4 implementation with GCC 13.3 and MIT Kerberos 1.20.1. All three CTest suites passed as root and as an ordinary user: offline checks, Key Trust cleanup and nine constrained-delegation checks. The delegation suite substitutes KDC responses; it does not prove AD delegation authorization.
+The mode 4 implementation built without warnings on the Ubuntu 24.04.5 Hyper-V client with GCC 13.3 and MIT Kerberos 1.20.1, and on Rocky Linux 9.8 with GCC Toolset 13.3.1 and MIT Kerberos 1.21.1. Each client passed all three CTest suites as an ordinary user: 106 offline checks, 10 Key Trust cleanup checks and nine constrained-delegation checks. These suites use synthetic KDC/directory responses.
 
-The nine delegation checks also passed with AddressSanitizer and UndefinedBehaviorSanitizer. Detached-maintainer integration passed 18 checks with pidfd watching and 18 with the `/proc` fallback, including service-only startup/status and refresh without TGT renewal. These runs used synthetic credentials and a private mount namespace for the test issuer, home, audit socket and Kerberos policy.
+On Ubuntu, the nine delegation checks also passed with AddressSanitizer and UndefinedBehaviorSanitizer. Synthetic detached-maintainer integration passed 18 checks with pidfd watching and 18 with the `/proc` fallback, including service-only startup/status and refresh without TGT renewal. These runs used a private mount namespace for the test issuer, home, audit socket and Kerberos policy.
 
-An isolated installed launcher/worker on that client reached the Windows AD KDC for S4U2Self, rejected an unknown user, preserved the existing cache and ignored an invalid home PEM pair. An ordinary non-setuid installation refused service-only acquisition. These are denial and process-boundary observations; successful Windows broker delegation, real service access, live broker refresh and additional guest coverage require the lab broker to be configured and tested.
+Live validation used Windows Server 2022 AD and Server 2019/2025 SMB targets, a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs. Unconstrained delegation remained disabled. Isolated installed setuid launchers on both Linux clients published exactly two caller-owned service credentials. MIT cache iteration verified caller/server identities, AES256 session and ticket encryption, the requested lifetime, and absence of TGTs, broker credentials, S4U2Self evidence and proxy configuration records. Grants of 60, 120 and 36000 seconds were exercised; the private broker TGT requested at least 600 seconds for S4U processing. Mode 4 ran without CA/CRL configuration and ignored both malformed and parseable home PEM pairs.
+
+Both Linux clients read files from both Windows shares using Kerberos-only authentication. Server security events confirmed the test user's Kerberos network logons from each client. Ubuntu used Samba `smbclient` 4.19.5; Rocky used `smbprotocol` 1.16.1 with GSSAPI and encrypted SMB. Rocky's bundled `smbclient` 4.23.5 refused the service-only cache while trying to prepare TGT credentials. Application compatibility must therefore be tested explicitly; successful ticket acquisition alone does not establish that every Kerberos client supports this mode.
+
+Both clients preserved their existing cache byte-for-byte when one target was denied by AD, the user was marked nondelegable, broker protocol transition was disabled, delegation targets were withdrawn, the keytab did not match the broker, or the KDC was unreachable. An uncached target could not be obtained without a TGT. Per-user rate limits and non-setuid refusal also preserved the cache. Acquisition recovered after the original policy/keytab/KDC configuration was restored.
+
+Installed maintainers on both clients refreshed the complete pair of 60-second service tickets through the broker, reported `ticket_kind=service` and `renew_until=0`, retained the cache during a refresh outage, and recovered after KDC access returned. Watched jobs stayed alive through the outage; maintainers stopped when those jobs exited. Temporary AD/Linux identities, shares and broker keytab copies were removed after testing, and guests started for the run were returned to their original powered-off state. The pre-existing CRAFT installation remained separate from the test installation.
 
 ### Multi-OS validation
 
