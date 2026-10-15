@@ -308,6 +308,35 @@ void checks()
                                     "service credentials were not retained or refreshed correctly");
                            });
              });
+    test("a crashed service refresh preserves cache and service status",
+         []
+         {
+             reset("services-soon", "delay");
+             const auto before = read_file(cache);
+             with_jobs(1,
+                       [&](const auto &jobs)
+                       {
+                           const auto pid = jobs.front().pid;
+                           const auto result = run(command(pid, "20s"));
+                           need(result.code == 0, result.error);
+                           const auto daemon = status(pid).at("maintainer_pid");
+                           const auto children = "/proc/" + daemon + "/task/" + daemon + "/children";
+                           const auto deadline = Clock::now() + std::chrono::seconds(8);
+                           pid_t operation = 0;
+                           while (!operation && Clock::now() < deadline)
+                           {
+                               std::istringstream(text_of_file(children)) >> operation;
+                               if (!operation) poll(nullptr, 0, 20);
+                           }
+                           need(operation > 0 && kill(operation, SIGKILL) == 0,
+                                "could not interrupt the service refresh operation");
+                           const auto report = wait_status(pid, {"retrying", "expired"});
+                           need(report.at("ticket_kind") == "service" && report.at("renew_until") == "0" &&
+                                    report.at("last_error").find("no complete result") != std::string::npos,
+                                "refresh crash lost the service status or diagnostic");
+                           need(read_file(cache) == before, "refresh crash changed the existing cache");
+                       });
+         });
     test("startup retains lifecycle descriptors with closed stdin and stderr",
          []
          {

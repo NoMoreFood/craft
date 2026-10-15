@@ -1654,7 +1654,7 @@ static void maintenance_fixture(std::string_view mode)
     KrbContext context;
     need(krb5_init_context(out(context)) == 0, "fixture Kerberos context");
     const auto ctx = context.get();
-    const bool services = mode == "services" || mode == "services-due";
+    const bool services = mode == "services" || mode == "services-due" || mode == "services-soon";
     const auto client = parse_principal(ctx, "craft-maintain-test@DOMAIN.LOCAL"),
                server = services ? parse_principal(ctx, "cifs/files.domain.local@DOMAIN.LOCAL")
                                  : tgs_principal(ctx, "DOMAIN.LOCAL");
@@ -1669,6 +1669,11 @@ static void maintenance_fixture(std::string_view mode)
         {
             tgt.times.authtime = tgt.times.starttime = now - 32400;
             tgt.times.endtime = now + 3600;
+        }
+        else if (mode == "services-soon")
+        {
+            tgt.times.authtime = tgt.times.starttime = now - 25;
+            tgt.times.endtime = now + 10;
         }
     }
     else if (mode == "renew" || mode == "nonrenewable")

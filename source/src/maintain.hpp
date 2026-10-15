@@ -595,6 +595,7 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
             {
                 result.end = last.end;
                 result.renew = last.renew;
+                result.service_only = last.service_only;
                 set_text(result.principal, expected);
                 record_failure(error, caller.uid, result);
             }
