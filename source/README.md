@@ -15,7 +15,7 @@ Run `/usr/local/bin/craft` with no arguments as the intended non-root user, with
 
 The administrator's `modes` list controls which modes may run and their order. A policy worker reads it as the caller; each acquisition worker independently verifies its selected mode. Certificate, LDAP, CES and Kerberos processing remain outside the elevated launcher. Only after a worker has validated its complete result, removed any temporary directory key and recorded issuance does the launcher drop to the caller and receive the cache.
 
-All modes request `<Linux username>@<configured realm>`. The KDC enforces certificate mapping or broker delegation; CRAFT validates the returned principals, flags, encryption and ticket times. Mode 4 requires every configured service to succeed before publishing a cache, excluding broker credentials and S4U2Self evidence. Certificate, LDAP, CES and Kerberos work run as the caller or service account. The cache writer runs as the caller. See the [process overview](../docs/01-CRAFT-Process-Overview.pdf) for the acquisition diagrams.
+All modes request `<Linux username>@<configured realm>`. The KDC enforces certificate mapping or broker delegation; CRAFT validates the returned principals, flags, encryption and ticket times. Mode 4 requires every configured service to succeed before publishing a cache, excluding broker credentials and S4U2Self evidence. See the [process overview](../docs/01-CRAFT-Process-Overview.pdf) for the acquisition diagrams.
 
 ## Configure mode selection
 
@@ -390,7 +390,7 @@ Read AUTHPRIV records with administrator access:
 sudo journalctl -t craft -t craft-worker -t craft-maintain
 ```
 
-On other logging systems, inspect the configured AUTHPRIV destination. `craft` records request start, failure and completed cache publication; `craft-worker` records TGT issuance with `certificate_source=home|enrollment|key_trust`, mode 4 issuance with `mechanism=constrained_delegation` and the service count, and Key Trust add/remove/cleanup failures; `craft-maintain` records startup, stop, renewal and fresh acquisition. The worker's `request=` matches the launcher's PID, and `worker=` identifies the directory-operation process. Records contain no key, ticket or certificate bytes.
+On other logging systems, inspect the configured AUTHPRIV destination. `craft` records request start, per-mode failures (`mode failed uid=... mode=...`) and completed cache publication; `craft-worker` records TGT issuance with `certificate_source=home|enrollment|key_trust`, mode 4 issuance with `mechanism=constrained_delegation` and the service count, and Key Trust add/remove/cleanup failures; `craft-maintain` records startup, stop, renewal and fresh acquisition. The worker's `request=` matches the launcher's PID, and `worker=` identifies the directory-operation process. Records contain no key, ticket or certificate bytes.
 
 Logging failure blocks startup, credential release and renewal publication. A launcher failure to log its completed publication can occur after the cache was replaced; inspect the cache and logs when diagnosing such a failure. The `/dev/log` check confirms local submission, not durable retention or forwarding.
 
