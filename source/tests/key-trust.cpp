@@ -211,16 +211,22 @@ int main()
     test("a stalled logging service cannot block removal of an unrecorded key",
          [&]
          {
-             const Fd sender(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
              const auto address = testing::unix_address(log_path);
-             sysneed(sender.get() >= 0 && connect(sender.get(),
-                                                  reinterpret_cast<const sockaddr *>(&address),
-                                                  sizeof(address)) == 0,
-                     "connect audit queue fixture");
-             while (send(sender.get(), "x", 1, MSG_NOSIGNAL) == 1)
+             std::vector<Fd> senders;
+             for (;;)
              {
+                 Fd sender(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+                 sysneed(sender.get() >= 0 && connect(sender.get(),
+                                                      reinterpret_cast<const sockaddr *>(&address),
+                                                      sizeof(address)) == 0,
+                         "connect audit queue fixture");
+                 size_t sent = 0;
+                 while (send(sender.get(), "x", 1, MSG_NOSIGNAL) == 1)
+                     ++sent;
+                 senders.push_back(std::move(sender));
+                 if (sent == 0) break;
              }
-             need(errno == EAGAIN || errno == EWOULDBLOCK, "audit queue did not fill");
+             need(senders.size() > 1, "audit queue did not fill");
 
              // Bound the worker independently: its cleanup process deliberately blocks ordinary signals, and
              // each of its three refused records waits one second for the queue.
