@@ -159,13 +159,12 @@ int main(int argc, char **argv)
         }
         if (delegated)
             audit(LOG_NOTICE,
-                  std::format(
-                      "issued service tickets request={} uid={} user={} mechanism=constrained_delegation "
-                      "services={}",
-                      request,
-                      requesting_uid,
-                      m.name,
-                      cfg.service_spns.size()));
+                  std::format("issued service tickets request={} uid={} user={} mechanism={} services={}",
+                              request,
+                              requesting_uid,
+                              m.name,
+                              mode,
+                              cfg.service_spns.size()));
         else
             audit(LOG_NOTICE,
                   std::format(
@@ -173,9 +172,7 @@ int main(int argc, char **argv)
                       request,
                       requesting_uid,
                       m.name,
-                      home         ? "home"
-                      : enrollment ? "enrollment"
-                                   : "key_trust",
+                      mode,
                       end));
 
         // Signal readiness only after validation, directory cleanup and audit have all succeeded.

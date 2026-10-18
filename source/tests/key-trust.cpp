@@ -222,12 +222,13 @@ int main()
              }
              need(errno == EAGAIN || errno == EWOULDBLOCK, "audit queue did not fill");
 
-             // Bound the worker independently: its cleanup process deliberately blocks ordinary signals.
+             // Bound the worker independently: its cleanup process deliberately blocks ordinary signals, and
+             // each of its three refused records waits one second for the queue.
              Child worker(fork_child(
                  [&]
                  {
                      signal(SIGALRM, SIG_DFL);
-                     alarm(2);
+                     alarm(10);
                      KeyCredentialGuard published;
                      testing::rejects([&] { published.publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
                      testing::rejects([&] { published.withdraw(); });

@@ -54,8 +54,9 @@ public:
                                              delegated ? std::max(c.service_ticket_seconds, 600U) : 300);
         krb5_get_init_creds_opt_set_renew_life(o.get(), 0);
 
-        // Forwardability stays inside the broker cache for CES or S4U constrained delegation.
-        krb5_get_init_creds_opt_set_forwardable(o.get(), c.ces_negotiate || delegated);
+        // Forwardability stays inside the broker cache, and only CES Negotiate or S4U delegation needs it.
+        krb5_get_init_creds_opt_set_forwardable(
+            o.get(), delegated || (c.source == CertificateSource::Enrollment && c.ces_negotiate));
         krb5_get_init_creds_opt_set_proxiable(o.get(), 0);
         krb_check(ctx(),
                   krb5_get_init_creds_keytab(ctx(), &cred, p.get(), kt.get(), 0, nullptr, o.get()),
@@ -176,8 +177,10 @@ get_tgt(Kerberos &k, const Config &cfg, const Mapping &m, X509 *cert, EVP_PKEY *
     {
         const Bio issuer(BIO_new(BIO_s_mem()));
         sslneed(issuer && PEM_write_bio_X509(issuer.get(), ca) == 1, "serialize CA anchor");
-        const Bytes configured = read_all(root_open(path("kdc-trust.pem")).get(), 8 * MAX_BLOB);
-        anchorfd = memory_file("craft-anchors", join(configured, bioview(issuer.get())));
+        // OpenSSL needs each PEM block to start a line, and the configured bundle may lack a final newline.
+        Bytes configured = read_all(root_open(path("kdc-trust.pem")).get(), 8 * MAX_BLOB);
+        configured.push_back('\n');
+        anchorfd = memory_file("craft-anchors", join(std::move(configured), bioview(issuer.get())));
         anchors = std::format("FILE:/proc/self/fd/{}", anchorfd.get());
     }
     const auto identity = std::format("FILE:/proc/self/fd/{},/proc/self/fd/{}", certfd.get(), keyfd.get());

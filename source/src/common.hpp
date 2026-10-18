@@ -292,9 +292,12 @@ inline void audit(int priority, std::string_view message)
                                     getpid(),
                                     sanitize_ascii(message, 900));
 
-    // A stalled logger must not hold up directory cleanup, whose guardian blocks ordinary signals.
-    const Fd log(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+    // Wait out a brief logger backlog for at most a second: a stalled logger must not hold up directory
+    // cleanup, whose guardian blocks ordinary signals.
+    const Fd log(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+    const timeval patience{1, 0};
     sysneed(log.get() >= 0 &&
+                setsockopt(log.get(), SOL_SOCKET, SO_SNDTIMEO, &patience, sizeof(patience)) == 0 &&
                 connect(log.get(), reinterpret_cast<const sockaddr *>(&service), sizeof(service)) == 0 &&
                 retry([&] { return send(log.get(), record.data(), record.size(), MSG_NOSIGNAL); }) ==
                     static_cast<ssize_t>(record.size()),

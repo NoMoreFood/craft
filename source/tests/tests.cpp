@@ -570,7 +570,7 @@ static void process_tests()
              need(sanitize_ascii(std::string(600, 'x')).size() == 500, "diagnostic not bounded");
          });
 
-    test("audit records are bounded printable text, and submission fails without the logging service",
+    test("audit records are bounded printable text, wait out a brief backlog and need the logging service",
          [&]
          {
              testing::AuditCollector log(std::string(directory) + "/log");
@@ -582,6 +582,28 @@ static void process_tests()
                       record.size() < 1024 &&
                       std::ranges::none_of(record, [](unsigned char c) { return c < 32 || c > 126; }),
                   "audit record was not framed, bounded and reduced to printable text");
+
+             // A brief backlog in the logging service delays a record instead of losing it.
+             const Fd sender(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+             const auto address = testing::unix_address(std::string(directory) + "/log");
+             sysneed(sender.get() >= 0 && connect(sender.get(),
+                                                  reinterpret_cast<const sockaddr *>(&address),
+                                                  sizeof(address)) == 0,
+                     "connect audit backlog fixture");
+             size_t queued = 0;
+             while (send(sender.get(), "x", 1, MSG_NOSIGNAL) == 1)
+                 ++queued;
+             need(queued && (errno == EAGAIN || errno == EWOULDBLOCK), "audit queue did not fill");
+             std::jthread drain(
+                 [&]
+                 {
+                     poll(nullptr, 0, 200);
+                     for (size_t i = 0; i < queued; ++i)
+                         (void)log.next(true);
+                 });
+             audit(LOG_NOTICE, "delayed by a backlog");
+             drain.join();
+             need(log.next(true).ends_with("delayed by a backlog"), "a briefly delayed record was lost");
              testing::audit_socket = std::string(directory) + "/gone";
              rejects([] { audit(LOG_NOTICE, "unrecorded"); });
              need(!try_audit(LOG_NOTICE, "unrecorded"), "a lost audit record was reported as submitted");
