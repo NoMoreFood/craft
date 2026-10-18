@@ -213,8 +213,9 @@ int main()
          {
              const Fd sender(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
              const auto address = testing::unix_address(log_path);
-             sysneed(sender.get() >= 0 &&
-                         connect(sender.get(), reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0,
+             sysneed(sender.get() >= 0 && connect(sender.get(),
+                                                  reinterpret_cast<const sockaddr *>(&address),
+                                                  sizeof(address)) == 0,
                      "connect audit queue fixture");
              while (send(sender.get(), "x", 1, MSG_NOSIGNAL) == 1)
              {

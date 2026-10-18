@@ -35,11 +35,14 @@ inline Bytes delegate_services(krb5_context ctx,
         request.second_ticket = evidence.ticket;
         request.times.endtime = static_cast<krb5_timestamp>(requested_at + cfg.service_ticket_seconds);
         auto ticket = krb_owner<krb5_creds, krb5_free_creds>(ctx);
-        krb_check(ctx,
-                  krb5_get_credentials(ctx,
-                                       KRB5_GC_CONSTRAINED_DELEGATION | KRB5_GC_CANONICALIZE | KRB5_GC_NO_STORE,
-                                       transport, &request, out(ticket)),
-                  "S4U2Proxy target " + spn);
+        krb_check(
+            ctx,
+            krb5_get_credentials(ctx,
+                                 KRB5_GC_CONSTRAINED_DELEGATION | KRB5_GC_CANONICALIZE | KRB5_GC_NO_STORE,
+                                 transport,
+                                 &request,
+                                 out(ticket)),
+            "S4U2Proxy target " + spn);
 
         // MIT may attach the evidence as second_ticket; export only the final service ticket and its key.
         krb5_free_data_contents(ctx, &ticket->second_ticket);
@@ -50,8 +53,8 @@ inline Bytes delegate_services(krb5_context ctx,
                  ticket->times.endtime <= int64_t{requested_at} + cfg.service_ticket_seconds + 5 &&
                  ticket->times.endtime - start_time(ticket->times) <= cfg.service_ticket_seconds + 5,
              "KDC returned an excessive or expired service ticket lifetime");
-        earliest_end = earliest_end ? std::min(earliest_end, time_t{ticket->times.endtime})
-                                    : ticket->times.endtime;
+        earliest_end =
+            earliest_end ? std::min(earliest_end, time_t{ticket->times.endtime}) : ticket->times.endtime;
         if (result.empty()) result = file_cache(ctx, *ticket);
         else append_cache_credential(ctx, result, *ticket);
     }
@@ -90,8 +93,15 @@ inline Bytes get_service_tickets(Kerberos &krb, const Config &cfg, const Mapping
     gss_buffer_desc buffer{username.size(), const_cast<char *>(username.data())};
     major = gss_import_name(&minor, &buffer, GSS_KRB5_NT_PRINCIPAL_NAME, &name);
     gss_check(ctx, major, minor, "import caller principal");
-    major = gss_acquire_cred_impersonate_name(&minor, broker_cred, name, cfg.service_ticket_seconds,
-                                             GSS_C_NO_OID_SET, GSS_C_INITIATE, &proxy, nullptr, nullptr);
+    major = gss_acquire_cred_impersonate_name(&minor,
+                                              broker_cred,
+                                              name,
+                                              cfg.service_ticket_seconds,
+                                              GSS_C_NO_OID_SET,
+                                              GSS_C_INITIATE,
+                                              &proxy,
+                                              nullptr,
+                                              nullptr);
     gss_check(ctx, major, minor, "S4U2Self protocol transition");
 
     // The copied proxy cache is private: it contains the broker TGT and must never be published.
@@ -104,7 +114,8 @@ inline Bytes get_service_tickets(Kerberos &krb, const Config &cfg, const Mapping
     ScopeExit free_evidence([&]() noexcept { krb5_free_cred_contents(ctx, &evidence); });
     match.client = client.get();
     match.server = broker.get();
-    krb_check(ctx, krb5_cc_retrieve_cred(ctx, evidence_cache.get(), 0, &match, &evidence),
+    krb_check(ctx,
+              krb5_cc_retrieve_cred(ctx, evidence_cache.get(), 0, &match, &evidence),
               "read S4U2Self evidence ticket");
     need((evidence.ticket_flags & TKT_FLG_FORWARDABLE) != 0,
          "S4U2Self requires protocol transition on the broker and a delegable user");

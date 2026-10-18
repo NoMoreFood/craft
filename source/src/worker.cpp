@@ -84,7 +84,8 @@ int main(int argc, char **argv)
             if (policy)
             {
                 Bytes modes;
-                for (const auto item : cfg.modes) modes.push_back(static_cast<unsigned char>(item));
+                for (const auto item : cfg.modes)
+                    modes.push_back(static_cast<unsigned char>(item));
                 write_all(STDOUT_FILENO, modes);
                 return 0;
             }
@@ -110,7 +111,8 @@ int main(int argc, char **argv)
             });
         Fd lock;
         if (!home)
-            lock = rate_limit(runtime_directory().get(), requesting_uid, cfg.interval, time(nullptr), attempt);
+            lock =
+                rate_limit(runtime_directory().get(), requesting_uid, cfg.interval, time(nullptr), attempt);
         if (!delegated)
         {
             require_trusted(path("kdc-trust.pem"));
@@ -157,19 +159,24 @@ int main(int argc, char **argv)
         }
         if (delegated)
             audit(LOG_NOTICE,
-                  std::format("issued service tickets request={} uid={} user={} mechanism=constrained_delegation "
-                              "services={}",
-                              request, requesting_uid, m.name, cfg.service_spns.size()));
+                  std::format(
+                      "issued service tickets request={} uid={} user={} mechanism=constrained_delegation "
+                      "services={}",
+                      request,
+                      requesting_uid,
+                      m.name,
+                      cfg.service_spns.size()));
         else
             audit(LOG_NOTICE,
-                  std::format("issued TGT request={} uid={} user={} certificate_source={} certificate_expiry={}",
-                              request,
-                              requesting_uid,
-                              m.name,
-                              home         ? "home"
-                              : enrollment ? "enrollment"
-                                           : "key_trust",
-                              end));
+                  std::format(
+                      "issued TGT request={} uid={} user={} certificate_source={} certificate_expiry={}",
+                      request,
+                      requesting_uid,
+                      m.name,
+                      home         ? "home"
+                      : enrollment ? "enrollment"
+                                   : "key_trust",
+                      end));
 
         // Signal readiness only after validation, directory cleanup and audit have all succeeded.
         const unsigned char ready = 1;

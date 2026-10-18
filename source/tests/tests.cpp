@@ -340,21 +340,23 @@ static void helper_tests()
                       cfg.renew == 604800 && cfg.source == CertificateSource::Home,
                   "home configuration policy");
              rejects([&] { parse_config(text, CertificateSource::Enrollment); });
-             rejects([] { parse_config("enabled=no\nmodes=home\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"); });
+             rejects([]
+                     { parse_config("enabled=no\nmodes=home\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"); });
          });
 
     test("enabled modes preserve order, reject disabled selection and validate every enabled mode",
          [&]
          {
              auto text = valid;
-             text.replace(text.find("modes=enrollment"), std::strlen("modes=enrollment"),
+             text.replace(text.find("modes=enrollment"),
+                          std::strlen("modes=enrollment"),
                           "modes=home key_trust enrollment constrained_delegation");
              text += "kt_dc_url=ldap://dc.domain.local\nservice_spns=cifs/files.domain.local@DOMAIN.LOCAL\n";
              const auto cfg = parse_config(text);
              need(cfg.modes == std::vector{CertificateSource::Home,
-                                          CertificateSource::KeyTrust,
-                                          CertificateSource::Enrollment,
-                                          CertificateSource::ConstrainedDelegation},
+                                           CertificateSource::KeyTrust,
+                                           CertificateSource::Enrollment,
+                                           CertificateSource::ConstrainedDelegation},
                   "configured mode order changed");
              for (const auto mode : cfg.modes)
                  need(parse_config(text, mode).source == mode, "enabled mode could not be selected");
@@ -363,7 +365,8 @@ static void helper_tests()
              for (const auto mode : {"home home", "home unknown", "home,enrollment", ""})
              {
                  auto bad = valid;
-                 bad.replace(bad.find("modes=enrollment"), std::strlen("modes=enrollment"),
+                 bad.replace(bad.find("modes=enrollment"),
+                             std::strlen("modes=enrollment"),
                              std::string("modes=") + mode);
                  rejects([&] { parse_config(bad); });
              }
@@ -1761,8 +1764,8 @@ static void maintenance_fixture(std::string_view mode)
     }
     else need(mode == "healthy", "unknown maintenance fixture");
     auto encoded = ticket_fixture(ENCTYPE_AES256_CTS_HMAC_SHA1_96,
-                                   services ? "cifs" : "krbtgt",
-                                   services ? "files.domain.local" : "DOMAIN.LOCAL");
+                                  services ? "cifs" : "krbtgt",
+                                  services ? "files.domain.local" : "DOMAIN.LOCAL");
     tgt.ticket = {.magic = 0,
                   .length = static_cast<unsigned int>(encoded.size()),
                   .data = reinterpret_cast<char *>(encoded.data())};

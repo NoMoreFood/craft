@@ -437,7 +437,7 @@ inline void update(const Account &caller, const std::string &expected, Result &r
             }
         }
         const auto plan = !found && cache ? service_schedule(ctx, cache.get(), client.get(), result)
-                                         : schedule(found ? &tgt : nullptr, time(nullptr));
+                                          : schedule(found ? &tgt : nullptr, time(nullptr));
         result.delay = plan.delay;
         if (plan.action == Action::Renew)
         {

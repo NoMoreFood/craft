@@ -142,21 +142,17 @@ inline int64_t start_time(const krb5_ticket_times &times) noexcept
 }
 
 // Service-only caches carry ordinary usable tickets, without broker evidence or proxy configuration.
-inline void validate_service_credential(krb5_context ctx,
-                                        const krb5_creds &cred,
-                                        krb5_principal client,
-                                        krb5_principal server,
-                                        time_t now)
+inline void validate_service_credential(
+    krb5_context ctx, const krb5_creds &cred, krb5_principal client, krb5_principal server, time_t now)
 {
     const auto first = krb5_princ_component(ctx, cred.server, 0);
     const int64_t start = start_time(cred.times);
     need(krb5_principal_compare(ctx, cred.client, client) &&
-             krb5_principal_compare(ctx, cred.server, server) &&
-             krb5_princ_size(ctx, server) >= 2 && first &&
+             krb5_principal_compare(ctx, cred.server, server) && krb5_princ_size(ctx, server) >= 2 && first &&
              std::string_view(first->data, first->length) != "krbtgt" &&
              !krb5_is_config_principal(ctx, server) && !cred.is_skey && cred.second_ticket.length == 0 &&
              !(cred.ticket_flags & (TKT_FLG_INITIAL | TKT_FLG_INVALID | TKT_FLG_POSTDATED |
-                                   TKT_FLG_MAY_POSTDATE | TKT_FLG_PROXIABLE | TKT_FLG_PROXY)) &&
+                                    TKT_FLG_MAY_POSTDATE | TKT_FLG_PROXIABLE | TKT_FLG_PROXY)) &&
              cred.times.authtime > 0 && start >= cred.times.authtime && start <= int64_t{now} + 300 &&
              cred.times.endtime > start,
          "service ticket identity, flags, evidence or times are invalid");

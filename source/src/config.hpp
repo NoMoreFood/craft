@@ -111,7 +111,8 @@ inline Config parse_config(std::string_view text, std::optional<CertificateSourc
     for (std::string name; modes >> name;)
     {
         const auto found = std::ranges::find(MODE_NAMES, name);
-        need(found != MODE_NAMES.end(), "modes must list home, enrollment, key_trust or constrained_delegation");
+        need(found != MODE_NAMES.end(),
+             "modes must list home, enrollment, key_trust or constrained_delegation");
         const auto mode = static_cast<CertificateSource>(found - MODE_NAMES.begin());
         need(std::ranges::find(c.modes, mode) == c.modes.end(), "duplicate operating mode");
         c.modes.push_back(mode);

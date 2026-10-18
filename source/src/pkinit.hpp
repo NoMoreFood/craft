@@ -50,7 +50,8 @@ public:
         const bool delegated = c.source == CertificateSource::ConstrainedDelegation;
 
         // AD needs usable broker lifetime for S4U even when the exported service grants are very short.
-        krb5_get_init_creds_opt_set_tkt_life(o.get(), delegated ? std::max(c.service_ticket_seconds, 600U) : 300);
+        krb5_get_init_creds_opt_set_tkt_life(o.get(),
+                                             delegated ? std::max(c.service_ticket_seconds, 600U) : 300);
         krb5_get_init_creds_opt_set_renew_life(o.get(), 0);
 
         // Forwardability stays inside the broker cache for CES or S4U constrained delegation.

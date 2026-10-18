@@ -3,8 +3,8 @@
 #include "../src/maintain.hpp"
 #include "harness.hpp"
 using namespace craft;
-using testing::test;
 using testing::rejects;
+using testing::test;
 
 static krb5_principal expected_client, expected_broker;
 static unsigned requests = 0;
@@ -32,13 +32,16 @@ static Bytes envelope(krb5_principal server, krb5_enctype enctype)
         const auto part = text(server->data[i]);
         names.insert(names.end(), part.begin(), part.end());
     }
-    const auto principal = der(0xa2, der(0x30, join(der(0xa0, der(0x02, Bytes{2})),
-                                                    der(0xa1, der(0x30, names)))));
-    const auto encrypted = der(0xa3, der(0x30, join(
-        der(0xa0, der(0x02, Bytes{static_cast<unsigned char>(enctype)})),
-        der(0xa2, der(0x04, byte_view("SYNTHETIC SERVICE TICKET"))))));
-    return der(0x61, der(0x30, join(join(der(0xa0, der(0x02, Bytes{5})),
-                                          der(0xa1, text(server->realm))), join(principal, encrypted))));
+    const auto principal =
+        der(0xa2, der(0x30, join(der(0xa0, der(0x02, Bytes{2})), der(0xa1, der(0x30, names)))));
+    const auto encrypted = der(0xa3,
+                               der(0x30,
+                                   join(der(0xa0, der(0x02, Bytes{static_cast<unsigned char>(enctype)})),
+                                        der(0xa2, der(0x04, byte_view("SYNTHETIC SERVICE TICKET"))))));
+    return der(0x61,
+               der(0x30,
+                   join(join(der(0xa0, der(0x02, Bytes{5})), der(0xa1, text(server->realm))),
+                        join(principal, encrypted))));
 }
 
 extern "C" krb5_error_code __wrap_krb5_get_credentials(
@@ -59,8 +62,10 @@ extern "C" krb5_error_code __wrap_krb5_get_credentials(
     const auto tgt = tgs_principal(ctx, "DOMAIN.LOCAL");
     grant.client = scenario == "broker" ? expected_broker : expected_client;
     grant.server = scenario == "tgt" ? tgt.get() : request->server;
-    grant.keyblock = {.magic = 0, .enctype = ENCTYPE_AES256_CTS_HMAC_SHA1_96,
-                     .length = static_cast<unsigned>(key.size()), .contents = key.data()};
+    grant.keyblock = {.magic = 0,
+                      .enctype = ENCTYPE_AES256_CTS_HMAC_SHA1_96,
+                      .length = static_cast<unsigned>(key.size()),
+                      .contents = key.data()};
     grant.times = {.authtime = now, .starttime = now, .endtime = now + 600, .renew_till = 0};
     grant.ticket_flags = TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PRE_AUTH;
     if (scenario == "excess") grant.times.endtime = request->times.endtime + 60;
@@ -74,8 +79,9 @@ extern "C" krb5_error_code __wrap_krb5_get_credentials(
     }
     auto encoded = envelope(scenario == "envelope" ? tgt.get() : grant.server,
                             scenario == "rc4" ? ENCTYPE_ARCFOUR_HMAC : grant.keyblock.enctype);
-    grant.ticket = {.magic = 0, .length = static_cast<unsigned>(encoded.size()),
-                   .data = reinterpret_cast<char *>(encoded.data())};
+    grant.ticket = {.magic = 0,
+                    .length = static_cast<unsigned>(encoded.size()),
+                    .data = reinterpret_cast<char *>(encoded.data())};
     grant.second_ticket = request->second_ticket;
     return krb5_copy_creds(ctx, &grant, output);
 }
@@ -85,15 +91,21 @@ int main()
     const std::string base = "enabled=yes\ndomain=domain.local\nrealm=DOMAIN.LOCAL\n"
                              "modes=constrained_delegation\nservice_principal=broker@DOMAIN.LOCAL\n";
     const auto cfg = parse_config(base + "service_spns=cifs/files.domain.local@DOMAIN.LOCAL "
-                                        "HTTP/web.domain.local@DOMAIN.LOCAL\n");
+                                         "HTTP/web.domain.local@DOMAIN.LOCAL\n");
     test("service-only policy rejects home mode and invalid target policy",
          [&]
          {
-             rejects([&] { parse_config(base + "service_spns=cifs/files.domain.local@DOMAIN.LOCAL\n",
-                                        CertificateSource::Home); });
-             for (auto spns : {"krbtgt/DOMAIN.LOCAL@DOMAIN.LOCAL", "KrBtGt/DOMAIN.LOCAL@DOMAIN.LOCAL",
-                               "cifs/files.domain.local@OTHER.REALM", "cifs/*@DOMAIN.LOCAL",
-                               "cifs/files.domain.local", "broker@DOMAIN.LOCAL",
+             rejects(
+                 [&] {
+                     parse_config(base + "service_spns=cifs/files.domain.local@DOMAIN.LOCAL\n",
+                                  CertificateSource::Home);
+                 });
+             for (auto spns : {"krbtgt/DOMAIN.LOCAL@DOMAIN.LOCAL",
+                               "KrBtGt/DOMAIN.LOCAL@DOMAIN.LOCAL",
+                               "cifs/files.domain.local@OTHER.REALM",
+                               "cifs/*@DOMAIN.LOCAL",
+                               "cifs/files.domain.local",
+                               "broker@DOMAIN.LOCAL",
                                "cifs/a@DOMAIN.LOCAL cifs/a@DOMAIN.LOCAL"})
                  rejects([&] { parse_config(base + "service_spns=" + spns + "\n"); });
              rejects([&] { parse_config(base); });
@@ -119,7 +131,8 @@ int main()
     {
         const auto file = memory_file("delegation-test", bytes);
         auto cache = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
-        krb_check(ctx, krb5_cc_resolve(ctx, std::format("FILE:/proc/self/fd/{}", file.get()).c_str(), out(cache)),
+        krb_check(ctx,
+                  krb5_cc_resolve(ctx, std::format("FILE:/proc/self/fd/{}", file.get()).c_str(), out(cache)),
                   "parse delegated FILE cache");
         KrbPrincipal principal(nullptr, {ctx});
         krb_check(ctx, krb5_cc_get_principal(ctx, cache.get(), out(principal)), "cache principal");
@@ -178,9 +191,10 @@ int main()
              ScopeExit erase([&]() noexcept { wipe(bytes); });
              const auto file = memory_file("service-cache-fixture", bytes);
              auto cache = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
-             krb_check(ctx,
-                       krb5_cc_resolve(ctx, std::format("FILE:/proc/self/fd/{}", file.get()).c_str(), out(cache)),
-                       "parse service cache");
+             krb_check(
+                 ctx,
+                 krb5_cc_resolve(ctx, std::format("FILE:/proc/self/fd/{}", file.get()).c_str(), out(cache)),
+                 "parse service cache");
              KrbCache damaged(nullptr, {ctx});
              krb_check(ctx, krb5_cc_new_unique(ctx, "MEMORY", nullptr, out(damaged)), "damaged cache");
              krb_check(ctx, krb5_cc_initialize(ctx, damaged.get(), client.get()), "damaged cache principal");
