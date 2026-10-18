@@ -262,6 +262,7 @@ inline Schedule service_schedule(krb5_context ctx, krb5_ccache cache, krb5_princ
     ScopeExit finish([&]() noexcept { krb5_cc_end_seq_get(ctx, cache, &cursor); });
     Schedule plan{Action::Idle};
     size_t count = 0;
+    int64_t end = 0;
     for (;;)
     {
         krb5_creds cred{};
@@ -271,7 +272,7 @@ inline Schedule service_schedule(krb5_context ctx, krb5_ccache cache, krb5_princ
         krb_check(ctx, code, "read cached service ticket");
         need(++count <= 32, "too many service tickets in cache");
         validate_service_credential(ctx, cred, client, cred.server, time(nullptr));
-        result.end = result.end ? std::min(result.end, int64_t{cred.times.endtime}) : cred.times.endtime;
+        end = end ? std::min(end, int64_t{cred.times.endtime}) : cred.times.endtime;
 
         // Even a renewable service ticket is refreshed through the broker, never through TGT renewal.
         cred.ticket_flags &= ~TKT_FLG_RENEWABLE;
@@ -279,6 +280,9 @@ inline Schedule service_schedule(krb5_context ctx, krb5_ccache cache, krb5_princ
         if (next.action == Action::Enroll) plan.action = Action::Enroll;
         plan.delay = std::min(plan.delay, next.delay);
     }
+
+    // A failed validation must not leave a partial expiry that startup would treat as a usable cache.
+    result.end = end;
     result.service_only = count != 0;
     return count ? plan : Schedule{Action::Enroll};
 }

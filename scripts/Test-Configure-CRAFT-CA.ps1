@@ -107,6 +107,7 @@ foreach ($case in @(
     @{ TargetUser = "bad(user)" }, @{ EnrollmentAgentName = 'bad"name' },
     @{ CesUrl = "http://ces.example.com/" }, @{ CesUrl = "/relative" },
     @{ CesUrl = "https://user@ces.example.com/" }, @{ CesUrl = "https://ces.example.com/#fragment" },
+    @{ CesUrl = "https://ces.example.com/service.svc/CES?query=unsupported" },
     @{ AllowedTargetGroup = "" }, @{ ExportPassword = [System.Security.SecureString]::new() }
 ))
 {
@@ -149,9 +150,10 @@ Write-Host "PASS: provisioning parameter validation"
                 $krb5 -match '(?m)^\s*kdc = dc\.example\.com\s*$' -and
                 $krb5 -match '(?m)^\s*default_realm = EXAMPLE\.COM\s*$') `
                 "Generated client configuration lost its domain, template, endpoint or KDC."
-            Assert ($config.enabled -eq 'no' -and $config.require_full_tgt_lifetime -eq 'yes' -and
+            Assert ($config.enabled -eq 'no' -and $config.modes -ceq 'enrollment' -and
+                $config.require_full_tgt_lifetime -eq 'yes' -and
                 $config.renew_seconds -eq '604800' -and $krb5 -match '(?m)^\s*renew_lifetime\s*=\s*7d\s*$') `
-                "Generated client configuration lost its strict lifetime or renewal policy."
+                "Generated client configuration lost its enrollment mode, strict lifetime or renewal policy."
         }
     }
     finally

@@ -208,6 +208,40 @@ int main()
                   "an unrecorded key credential stayed in the directory");
          });
 
+    test("a stalled logging service cannot block removal of an unrecorded key",
+         [&]
+         {
+             const Fd sender(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+             const auto address = testing::unix_address(log_path);
+             sysneed(sender.get() >= 0 &&
+                         connect(sender.get(), reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0,
+                     "connect audit queue fixture");
+             while (send(sender.get(), "x", 1, MSG_NOSIGNAL) == 1)
+             {
+             }
+             need(errno == EAGAIN || errno == EWOULDBLOCK, "audit queue did not fill");
+
+             // Bound the worker independently: its cleanup process deliberately blocks ordinary signals.
+             Child worker(fork_child(
+                 [&]
+                 {
+                     signal(SIGALRM, SIG_DFL);
+                     alarm(2);
+                     KeyCredentialGuard published;
+                     testing::rejects([&] { published.publish(cfg, OBJECT_REF, KEY_VALUE, -1); });
+                     testing::rejects([&] { published.withdraw(); });
+                     return 0;
+                 }));
+             const bool completed = worker.wait();
+             if (!completed && directory_fixture->guardian > 0)
+             {
+                 kill(directory_fixture->guardian, SIGKILL);
+                 (void)waitpid_retry(directory_fixture->guardian);
+             }
+             need(completed && !directory_fixture->attached && directory_fixture->removals == 1,
+                  "logging congestion blocked directory cleanup");
+         });
+
     for (int result : {LDAP_UNAVAILABLE, LDAP_NO_SUCH_OBJECT})
     {
         test(result == LDAP_UNAVAILABLE ? "directory cleanup failure refuses credential release"

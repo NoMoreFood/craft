@@ -25,6 +25,7 @@ inline Bytes delegate_services(krb5_context ctx,
     Bytes result;
     ScopeExit erase([&]() noexcept { wipe(result); });
     const auto requested_at = time(nullptr);
+    time_t earliest_end = 0;
     for (const auto &spn : cfg.service_spns)
     {
         const auto target = parse_principal(ctx, spn);
@@ -49,10 +50,15 @@ inline Bytes delegate_services(krb5_context ctx,
                  ticket->times.endtime <= int64_t{requested_at} + cfg.service_ticket_seconds + 5 &&
                  ticket->times.endtime - start_time(ticket->times) <= cfg.service_ticket_seconds + 5,
              "KDC returned an excessive or expired service ticket lifetime");
+        earliest_end = earliest_end ? std::min(earliest_end, time_t{ticket->times.endtime})
+                                    : ticket->times.endtime;
         if (result.empty()) result = file_cache(ctx, *ticket);
         else append_cache_credential(ctx, result, *ticket);
     }
     need(!result.empty(), "no delegated service tickets");
+
+    // Later exchanges can outlast an earlier grant; the complete batch must still be usable at release.
+    need(earliest_end > time(nullptr), "service ticket expired before the batch completed");
     erase.release();
     return result;
 }

@@ -106,7 +106,7 @@ if(BUILD_TESTING)
   add_test(NAME key-trust-cleanup COMMAND craft-key-trust-tests)
   add_executable(craft-delegation-tests tests/delegation.cpp)
   target_link_libraries(craft-delegation-tests PRIVATE PkgConfig::KRB5 PkgConfig::GSSAPI PkgConfig::WORKER)
-  target_link_options(craft-delegation-tests PRIVATE -Wl,--wrap=krb5_get_credentials)
+  target_link_options(craft-delegation-tests PRIVATE -Wl,--wrap=krb5_get_credentials,--wrap=time)
   add_test(NAME constrained-delegation COMMAND craft-delegation-tests)
 
   # Integration harness for a disposable container only; tests/run-container-tests.sh installs and runs it.

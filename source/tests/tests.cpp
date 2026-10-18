@@ -822,6 +822,15 @@ static void process_tests()
          {
              Child good(fork_child([] { return 0; })), bad(fork_child([] { return 7; }));
              need(good.wait() && !bad.wait(), "child exit status lost");
+             Child refused(fork_child([] { return 1; })), unexpected(fork_child([] { return 7; }));
+             Child interrupted(fork_child(
+                 []
+                 {
+                     raise(SIGKILL);
+                     return 1;
+                 }));
+             need(refused.wait(1) && !unexpected.wait(1) && !interrupted.wait(1),
+                  "an interrupted or unexpected exit was accepted as a reported acquisition failure");
              Child thrown(fork_child(
                  []() -> int
                  {

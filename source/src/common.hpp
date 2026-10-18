@@ -291,7 +291,9 @@ inline void audit(int priority, std::string_view message)
                                     program,
                                     getpid(),
                                     sanitize_ascii(message, 900));
-    const Fd log(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+
+    // A stalled logger must not hold up directory cleanup, whose guardian blocks ordinary signals.
+    const Fd log(socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
     sysneed(log.get() >= 0 &&
                 connect(log.get(), reinterpret_cast<const sockaddr *>(&service), sizeof(service)) == 0 &&
                 retry([&] { return send(log.get(), record.data(), record.size(), MSG_NOSIGNAL); }) ==
@@ -572,13 +574,13 @@ public:
         return pid_;
     }
 
-    // Collect the exit status once; true only for a clean zero exit.
-    [[nodiscard]] bool wait()
+    // Collect the exit status once; signals never match an expected normal exit.
+    [[nodiscard]] bool wait(int expected = 0)
     {
         int status{};
         const pid_t pid = std::exchange(pid_, -1);
         sysneed(waitpid_retry(pid, &status) == pid, "waitpid");
-        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        return WIFEXITED(status) && WEXITSTATUS(status) == expected;
     }
 };
 

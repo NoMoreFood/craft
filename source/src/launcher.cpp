@@ -91,7 +91,7 @@ int main(int argc, char **)
             need(length == 1 && ready <= 2, "worker interrupted; existing cache was not replaced");
             if (ready != 1)
             {
-                need(!worker.wait(), "worker returned an inconsistent acquisition result");
+                need(worker.wait(1), "worker interrupted or returned an inconsistent acquisition result");
                 need(ready == 0, "credential cleanup failed; existing cache was not replaced");
                 may_continue = true;
                 return false;

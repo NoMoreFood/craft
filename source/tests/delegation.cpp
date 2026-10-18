@@ -9,6 +9,16 @@ using testing::rejects;
 static krb5_principal expected_client, expected_broker;
 static unsigned requests = 0;
 static std::string scenario;
+static time_t time_offset = 0;
+
+// Advance the acquisition clock to model a slow batch without delaying the test process.
+extern "C" time_t __real_time(time_t *);
+extern "C" time_t __wrap_time(time_t *output)
+{
+    const auto now = __real_time(nullptr) + time_offset;
+    if (output) *output = now;
+    return now;
+}
 
 static Bytes envelope(krb5_principal server, krb5_enctype enctype)
 {
@@ -40,6 +50,7 @@ extern "C" krb5_error_code __wrap_krb5_get_credentials(
         std::string_view(request->second_ticket.data, request->second_ticket.length) != "PRIVATE EVIDENCE")
         return KRB5KDC_ERR_BADOPTION;
     if (scenario == "denied" && requests == 2) return KRB5KDC_ERR_BADOPTION;
+    if (scenario == "expired batch" && requests == 2) time_offset = 60;
 
     // Include the library's evidence attachment so the test proves it is removed from exported credentials.
     const auto now = static_cast<krb5_timestamp>(time(nullptr));
@@ -53,6 +64,7 @@ extern "C" krb5_error_code __wrap_krb5_get_credentials(
     grant.times = {.authtime = now, .starttime = now, .endtime = now + 600, .renew_till = 0};
     grant.ticket_flags = TKT_FLG_FORWARDABLE | TKT_FLG_FORWARDED | TKT_FLG_PRE_AUTH;
     if (scenario == "excess") grant.times.endtime = request->times.endtime + 60;
+    if (scenario == "expired batch") grant.times.endtime = now + 60;
     if (scenario == "expiry")
     {
         grant.times.authtime = grant.times.starttime = now - 110;
@@ -100,6 +112,7 @@ int main()
     const auto acquire = [&]
     {
         requests = 0;
+        ScopeExit restore_clock([]() noexcept { time_offset = 0; });
         return delegate_services(ctx, cfg, client.get(), broker.get(), nullptr, evidence);
     };
     const auto inspect = [&](ByteView bytes, bool due)
@@ -142,7 +155,7 @@ int main()
              need(requests == 2, "incorrect request count");
              inspect(bytes, false);
          });
-    for (const auto failure : {"denied", "broker", "tgt", "envelope", "excess", "rc4"})
+    for (const auto failure : {"denied", "broker", "tgt", "envelope", "excess", "rc4", "expired batch"})
         test(std::string("delegation rejects ") + failure,
              [&]
              {
@@ -156,6 +169,35 @@ int main()
              auto bytes = acquire();
              ScopeExit erase([&]() noexcept { wipe(bytes); });
              inspect(bytes, true);
+         });
+    test("maintenance does not report a partially validated service cache as usable",
+         [&]
+         {
+             scenario.clear();
+             auto bytes = acquire();
+             ScopeExit erase([&]() noexcept { wipe(bytes); });
+             const auto file = memory_file("service-cache-fixture", bytes);
+             auto cache = krb_owner<std::remove_pointer_t<krb5_ccache>, krb5_cc_close>(ctx);
+             krb_check(ctx,
+                       krb5_cc_resolve(ctx, std::format("FILE:/proc/self/fd/{}", file.get()).c_str(), out(cache)),
+                       "parse service cache");
+             KrbCache damaged(nullptr, {ctx});
+             krb_check(ctx, krb5_cc_new_unique(ctx, "MEMORY", nullptr, out(damaged)), "damaged cache");
+             krb_check(ctx, krb5_cc_initialize(ctx, damaged.get(), client.get()), "damaged cache principal");
+             for (const auto &spn : cfg.service_spns)
+             {
+                 const auto target = parse_principal(ctx, spn);
+                 krb5_creds match{}, cred{};
+                 ScopeExit free([&]() noexcept { krb5_free_cred_contents(ctx, &cred); });
+                 match.client = client.get();
+                 match.server = target.get();
+                 krb_check(ctx, krb5_cc_retrieve_cred(ctx, cache.get(), 0, &match, &cred), "fixture ticket");
+                 if (spn == cfg.service_spns.back()) cred.ticket_flags |= TKT_FLG_INVALID;
+                 krb_check(ctx, krb5_cc_store_cred(ctx, damaged.get(), &cred), "store damaged ticket");
+             }
+             maintain::Result result;
+             rejects([&] { (void)maintain::service_schedule(ctx, damaged.get(), client.get(), result); });
+             need(result.end == 0 && !result.success, "partial validation reported usable credentials");
          });
     return testing::finish("Synthetic KDC responses; real cache serialization and maintenance inspection.");
 }

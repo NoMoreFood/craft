@@ -99,7 +99,8 @@ param(
     [string]$CAName = "",
     [string]$KdcHost = "",
     [Parameter(Mandatory)]
-    [ValidateScript({ $_.IsAbsoluteUri -and $_.Scheme -eq "https" -and -not $_.UserInfo -and -not $_.Fragment })]
+    [ValidateScript({ $_.IsAbsoluteUri -and $_.Scheme -eq "https" -and
+        -not $_.UserInfo -and -not $_.Query -and -not $_.Fragment })]
     [uri]$CesUrl,
     [string]$ExportPath = "C:\Setup\Export",
     [Parameter(Mandatory)]
@@ -506,6 +507,7 @@ function Export-ClientConfiguration([string]$Directory, $Domain, [string]$Templa
     $tgtHours = [Math]::Min($Hours, 10)
     @"
 enabled=no
+modes=enrollment
 domain=$($Domain.DNSRoot)
 realm=$realm
 netbios=$($Domain.NetBIOSName)
