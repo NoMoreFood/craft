@@ -1,0 +1,32 @@
+#!/bin/sh
+# Run an application against a configured proxy for already-issued CRAFT tickets. Never install setuid.
+set -eu
+if [ "${1:-}" = --help ]; then
+    printf '%s\n' 'Usage: with-craft-gssproxy SOCKET command [argument ...]'
+    exit 0
+fi
+if [ "$#" -lt 2 ]; then
+    printf '%s\n' 'Usage: with-craft-gssproxy SOCKET command [argument ...]' >&2
+    exit 2
+fi
+socket=$1
+shift
+case "$socket" in
+    /*) ;;
+    *) printf '%s\n' 'GSS-Proxy socket must be an absolute path.' >&2; exit 2 ;;
+esac
+if [ ! -S "$socket" ]; then
+    printf '%s\n' 'GSS-Proxy socket is unavailable.' >&2
+    exit 1
+fi
+
+# Keep opaque proxy credentials separate from CRAFT's source cache and disable local keytab acquisition.
+# REMOTE_FIRST is supported by the interposer; file permissions and confinement prevent direct access.
+GSS_USE_PROXY=yes
+GSSPROXY_BEHAVIOR=REMOTE_FIRST
+GSSPROXY_SOCKET=$socket
+KRB5CCNAME=MEMORY:craft-gssproxy
+KRB5_CLIENT_KTNAME=FILE:/dev/null
+KRB5_KTNAME=FILE:/dev/null
+export GSS_USE_PROXY GSSPROXY_BEHAVIOR GSSPROXY_SOCKET KRB5CCNAME KRB5_CLIENT_KTNAME KRB5_KTNAME
+exec "$@"

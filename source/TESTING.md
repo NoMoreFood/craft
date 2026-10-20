@@ -2,7 +2,7 @@
 
 Validate the installed system with disposable, nonprivileged identities before production use. A successful build or offline check does not establish the deployed CA policy, KDC mapping, directory delegation or scheduler behavior. Record the source revision, OS/packages, configuration, commands and results for your deployment.
 
-Use the [mode 1 setup](README.md#mode-1-setup-privileged-certificate-enrollment), [mode 2 setup](README.md#mode-2-setup-privileged-credential-linking), [mode 3 setup](README.md#mode-3-setup-unprivileged-windows-exported-certificate) or [mode 4 setup](README.md#mode-4-setup-service-tickets-through-constrained-delegation), then complete the common checks and that mode's checklist below.
+Use the [Enrollment Agent setup](README.md#enrollment-agent-setup), [Key Trust setup](README.md#key-trust-setup), [BYOC setup](README.md#byoc-setup) or [Constrained Delegation setup](README.md#constrained-delegation-setup), then complete the common checks and that mode's checklist below.
 
 ## Offline checks
 
@@ -28,15 +28,31 @@ From the repository root in Windows PowerShell:
 
 These checks do not modify AD or contact a CA. The certificate helper checks create and remove synthetic current-user certificates, private keys and export files. They cover export/reuse, renewal, ACLs, interrupted publication/recovery, shared-key preservation, queued store deletion and pending/denied requests. Delegation checks verify the rule's exact rights and scope. Provisioning checks cover parameters, commands and certificate selection. Use a disposable Windows test profile.
 
+## Optional GSS-Proxy checks
+
+The [application integration guide](../docs/06-GSS-Proxy-and-SELinux.md) includes the host setup and deployment acceptance checks. In a **fresh disposable Ubuntu container only**, install the normal build dependencies plus `gssproxy`, `krb5-kdc`, `krb5-admin-server`, `krb5-user` and `python3-gssapi`, then build and run:
+
+```sh
+cmake -S source -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j2
+CRAFT_DISPOSABLE_CONTAINER=yes python3 source/tests/gssproxy-integration.py build
+```
+
+Run the integration script as root only inside that disposable container. It creates synthetic issuer/consumer accounts, a private home and MIT KDC under fixed test paths, starts a dedicated proxy, and temporarily removes the packaged interposer configuration for a denial check. It requires the Ubuntu package path `/etc/gss/mech.d/proxymech.conf`. Discard the container after the run.
+
+The checks exercise actual Kerberos and SPNEGO authentication with encrypted messages, consumer denial of direct cache reads, UID restrictions, inherited environment replacement, atomic source-cache replacement, exact service-only targets, uncached-target denial, missing credentials/interposer/socket and daemon failure. The fixtures model CRAFT's published cache; they do not perform AD acquisition or S4U exchanges. The existing mode-specific suites and live acceptance checks cover those acquisition paths.
+
+For SELinux, compile `source/selinux/craft_gssproxy.te` against the deployment distribution's `selinux-policy-devel` package, then run the guide's acceptance checks on an enforcing host. A successful module build in a container does not establish application confinement, label inheritance or access decisions on the deployed kernel.
+
 ## Common installed-system checks
 
 | Check | Required observation |
 | --- | --- |
 | Identity and execution | Run as the intended non-root user without `sudo`. NSS name/home select the fixed `<Linux username>@<realm>` principal; arguments and forged environment values cannot choose another identity. |
 | Cache | Inspect the returned `FILE:` cache. It is caller-owned mode 0600 in the NSS home and unreadable by other UIDs. Acquisition/validation failure preserves its previous content. |
-| Ticket | Modes 1-3: verify Initial/Pre-authenticated flags, no forwardable/proxiable flags, AES256/AES128 session and ticket encryption, actual validity and renewal deadline. Expect Renewable only when renewal is configured. Mode 4: verify exact service SPNs with no TGT/evidence; S4U forwardable/forwarded flags may be present. |
-| Trust and mapping | Verify the pinned KDC. Modes 1-3: verify current CA/KDC CRLs, configured EKU/identity checks and the deployed strong account mapping. Wrong-account, revoked-certificate and stale/missing-required-CRL attempts fail. |
-| Lifetime | Compare actual grants with configured requests. Mode 4 accepts shorter service grants. In modes 1-3, strict mode rejects shorter initial/renewal grants; permissive mode warns. Excessive lifetimes or non-AES grants always fail. |
+| Ticket | Certificate modes: verify Initial/Pre-authenticated flags, no forwardable/proxiable flags, AES256/AES128 session and ticket encryption, actual validity and renewal deadline. Expect Renewable only when renewal is configured. Constrained Delegation: verify exact service SPNs with no TGT/evidence; S4U forwardable/forwarded flags may be present. |
+| Trust and mapping | Verify the pinned KDC. Certificate modes: verify current CA/KDC CRLs, configured EKU/identity checks and the deployed strong account mapping. Wrong-account, revoked-certificate and stale/missing-required-CRL attempts fail. |
+| Lifetime | Compare actual grants with configured requests. Constrained Delegation accepts shorter service grants. In certificate modes, strict mode rejects shorter initial/renewal grants; permissive mode warns. Excessive lifetimes or non-AES grants always fail. |
 | Application access | Obtain a service ticket and authenticate to a real authorized SMB, LDAP or Kerberos-enabled web service. Application access follows the account's permissions. |
 | Failure and concurrency | Exercise KDC/network outage, interrupted acquisition, concurrent runs, unsafe/writable home paths and insufficient disk space. Only validated credentials are published. |
 | Audit | Correlate launcher, worker and maintenance AUTHPRIV records. Confirm failure when the logging service is unavailable. Verify host audit rules, retention and forwarding on the installed host. |
@@ -65,7 +81,7 @@ Validate each mode alone before combining them. Then test the exact ordered list
 
 ## Live acceptance checklist
 
-These checks apply to **mode 1 enrollment**. Set `modes=enrollment` so other modes cannot hide incomplete enrollment setup.
+These checks apply to **Enrollment Agent**. Set `modes=enrollment` so other modes cannot hide incomplete enrollment setup.
 
 1. Verify the launcher is `root:craft-users` mode 4750, the worker/maintainer are ordinary executables, private credentials are `root:craft` mode 0640 and `/run/craft` is `craft:craft` mode 0700. Callers must not belong to the service group or invoke its credentials directly.
 2. Verify the service principal/AES keytab, GC DNS/SPN/search base and SASL GSSAPI plugin. Resolve exactly one intended account, including an alternate UPN suffix where used; unknown/ambiguous users fail. Both CES authentication modes require the directory keytab.
@@ -78,7 +94,7 @@ These checks apply to **mode 1 enrollment**. Set `modes=enrollment` so other mod
 
 ## Key Trust acceptance checks
 
-These checks apply to **mode 2**. Use disposable ordinary accounts and `modes=key_trust`.
+These checks apply to **Key Trust**. Use disposable ordinary accounts and `modes=key_trust`.
 
 1. Pin the same writable DC for `kt_dc_url` and Kerberos. Verify Key Trust capability, KDC certificate/CRLs, MIT PKINIT freshness interoperability, service AES keytab and LDAP/GSSAPI encryption at SSF 128 or higher.
 2. Inspect the delegation: exactly ReadProperty/WriteProperty on `msDS-KeyCredentialLink` for a reviewed OU or single user. Keep privileged identities outside the scope and protect its membership/ACL administrators.
@@ -92,7 +108,7 @@ Follow [Key Trust delegation](../docs/04-Key-Credential-Link-Delegation.md) for 
 
 ## Home workflow acceptance checks
 
-These checks apply to **mode 3**, including supplied certificates on a privileged installation.
+These checks apply to **BYOC**, including supplied certificates on a privileged installation.
 
 1. Run the Windows helper as the intended ordinary domain user with an authorized template. Validate eligible-CA selection, exportable software-key policy, pending/denied outcomes and the exported pair's Linux/KDC mapping.
 2. Verify ordinary mode-0755 executables, readable root-controlled public configuration/trust/CRLs, and successful acquisition without a service account, private service credentials or `/run/craft`. Test inherited `no_new_privs`.
@@ -105,7 +121,7 @@ These checks apply to **mode 3**, including supplied certificates on a privilege
 
 ## Constrained delegation acceptance checks
 
-These checks apply to **mode 4**. Use a dedicated lab broker and disposable ordinary users.
+These checks apply to **Constrained Delegation**. Use a dedicated lab broker and disposable ordinary users.
 
 1. Verify broker SPN/keytab identity, AES keys, protocol transition, `TrustedForDelegation=false`, and the exact AD target SPNs. Keep broker permissions separate from enrollment and Key Trust.
 2. Run with `modes=constrained_delegation`, at least two approved targets, and both absent and present home PEM pairs. A valid or invalid home pair must not select PKINIT. No CA/CRL files, LDAP or CES credentials are required.
@@ -114,13 +130,25 @@ These checks apply to **mode 4**. Use a dedicated lab broker and disposable ordi
 5. Configure one approved and one AD-denied target. Acquisition must fail as a batch and preserve the previous cache byte-for-byte. Repeat with a nondelegable user, disabled protocol transition, withdrawn delegation, wrong keytab and unavailable KDC.
 6. Verify ordinary non-setuid installation fails even with valid home credentials. Exercise setuid caller/runtime/cache permissions and the per-user rate limit. Audit records must identify `mechanism=constrained_delegation` and the service count without credential bytes.
 7. Use short service lifetimes to exercise actual broker refresh through `craft-maintain`. Check earliest expiry, replacement of the complete batch, no TGT renewal, status and watched-job exit. Verify outage retries preserve the cache and recover after service returns.
-8. When switching from modes 1-3, stop prior maintainers and remove the old TGT cache. Delegation removal and cache deletion do not revoke previously issued tickets.
+8. When switching from certificate modes, stop prior maintainers and remove the old TGT cache. Delegation removal and cache deletion do not revoke previously issued tickets.
 
 The `constrained-delegation` CTest suite substitutes KDC responses while using real MIT cache encoding/parsing. It checks batch failure, caller/target/envelope validation, AES/lifetime enforcement, evidence removal and service maintenance scheduling. Live AD results must be recorded separately.
 
 ## Recorded validation
 
 These are recorded repository observations, not acceptance results for your current build or deployment.
+
+### Rocky GSS-Proxy and SELinux validation
+
+The optional integration was exercised on Rocky Linux 9.8 with GSS-Proxy 0.8.4-7.el9, MIT Kerberos 1.21.1-10.el9_8 and targeted SELinux policy 38.1.75-2.el9_8.1. SELinux remained enforcing throughout; neither `gssproxy_t` nor the test application domain was permissive. The supplied `craft_gssproxy` module was loaded, the dedicated proxy ran in `gssproxy_t`, and systemd launched the consumer in a separate confined test domain with socket access and no access to `craft_credential_t`. GCC Toolset 15.2.1 built the release targets without warnings and all three CTest suites passed.
+
+A disposable local MIT KDC/CA supplied PKINIT with a certificate and CRL. Actual CRAFT BYOC acquisition produced a 120-second AES256 TGT with a 600-second renewal window in the issuer's mode-0600 cache. The dedicated issuer home, including temporary files, used `craft_credential_t`. System Kerberos configuration was overridden only inside private mount namespaces; the ordinary host realm and packaged proxy instance were preserved. The test configuration disabled short-hostname suffix qualification and allowed one second of clock skew so the expiry check could not succeed merely through the usual grace period.
+
+All 21 enforcing checks passed. They covered Kerberos and SPNEGO mutual authentication with encrypted messages; direct-cache denial for the consumer UID; SELinux denial even when the confined application used the cache owner's UID; unauthorized proxy peers; and replacement of inherited credential selections. Real `craft-maintain` renewal atomically replaced the source inode while retaining issuer ownership, mode 0600, the private SELinux label, the absolute renewal deadline and an issuer-cached service ticket. Fresh consumers authenticated after renewal and after the original ticket expired. Three further CRAFT acquisitions replaced the cache without relabeling, and proxy restart loaded the current credentials. A service-only fixture authenticated to its exact cached target and refused an uncached target. Missing source, interposer and socket checks failed, as did a stopped dedicated daemon with a stale socket, without local credential fallback.
+
+Audit review confirmed enforcing `craft_proxy_test_t` denials on the private issuer directory. It also found `gssproxy_t` denials for `dac_override`: a syscall trace showed successful read-only cache opens and a denied attempt to append a service ticket with `O_RDWR`. Authentication still completed, and the source retained its original TGT without that appended ticket. No capability allowance, permissive domain or generated `audit2allow` policy was added. Service-ticket preservation during renewal was tested with a ticket cached by the issuer.
+
+This validates CRAFT-issued user-cache consumption and real BYOC maintenance against the disposable MIT KDC. The service-only fixture does not exercise AD S4U acquisition or batch refresh. Each authentication uses a fresh consumer process; long-lived opaque credential handles, production application reload behavior and reboot persistence require their own acceptance checks. The [integration guide](../docs/06-GSS-Proxy-and-SELinux.md#deployment-acceptance) describes those deployment checks.
 
 ### Four-mode Hyper-V validation
 
@@ -132,14 +160,14 @@ Each client passed 55 live acquisition, application, failure and maintenance che
 
 | Mode | Recorded coverage |
 | --- | --- |
-| 1 Enrollment | CES EOBO and PKINIT with RSA 2048/3072/4096 on both Linux clients |
-| 2 Key Trust | PKINIT with all three RSA sizes on both clients; temporary directory keys removed |
-| 3 Windows export | Export, reuse, forced renewal and confirmed Windows-store cleanup for all three RSA sizes on Server 2019/2022/2025; all nine exported pairs used for PKINIT on each Linux client |
-| 4 Constrained delegation | Two exact CIFS targets on both clients, with 60-second and default ten-hour service grants; no TGT, broker credential or evidence in the published cache |
+| Enrollment Agent | CES EOBO and PKINIT with RSA 2048/3072/4096 on both Linux clients |
+| Key Trust | PKINIT with all three RSA sizes on both clients; temporary directory keys removed |
+| BYOC | Export, reuse, forced renewal and confirmed Windows-store cleanup for all three RSA sizes on Server 2019/2022/2025; all nine exported pairs used for PKINIT on each Linux client |
+| Constrained Delegation | Two exact CIFS targets on both clients, with 60-second and default ten-hour service grants; no TGT, broker credential or evidence in the published cache |
 
-Modes 1-3 produced ten-hour AES TGTs with seven-day renewal, within the configured five-second tolerance, and authenticated to LDAP and both SMB servers. Ordinary non-setuid home mode also succeeded with private broker files absent and inherited `no_new_privs`. With `modes=home`, partial and malformed identities failed and preserved the cache. The maintainer's renewal operation was invoked directly against real ten-hour TGTs from each mode, retaining authentication time, the absolute renewal deadline and usable service tickets; detached startup, status and watched-job exit also passed. A separate short-ticket experiment issued a 120-second TGT but AD refused its renewal with `Ticket expired`; CRAFT retained the cache and reported the failure. Short TGT behavior must be validated against the actual KDC.
+Certificate modes produced ten-hour AES TGTs with seven-day renewal, within the configured five-second tolerance, and authenticated to LDAP and both SMB servers. Ordinary non-setuid home mode also succeeded with private broker files absent and inherited `no_new_privs`. With `modes=home`, partial and malformed identities failed and preserved the cache. The maintainer's renewal operation was invoked directly against real ten-hour TGTs from each mode, retaining authentication time, the absolute renewal deadline and usable service tickets; detached startup, status and watched-job exit also passed. A separate short-ticket experiment issued a 120-second TGT but AD refused its renewal with `Ticket expired`; CRAFT retained the cache and reported the failure. Short TGT behavior must be validated against the actual KDC.
 
-Mode 4 used a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs, with unconstrained delegation disabled. It ignored malformed and parseable home pairs and ran without CA/CRL configuration. MIT cache inspection verified the fixed caller, exact targets, AES credentials, lifetime bounds and absence of TGTs, broker credentials, S4U2Self evidence and proxy metadata. The ordered-mode run exercised 60- and 36000-second grants; a separate service-only run also exercised 120-second grants. The private broker TGT requested at least 600 seconds for S4U processing.
+Constrained Delegation used a dedicated ordinary broker, protocol transition and exactly two allowed CIFS SPNs, with unconstrained delegation disabled. It ignored malformed and parseable home pairs and ran without CA/CRL configuration. MIT cache inspection verified the fixed caller, exact targets, AES credentials, lifetime bounds and absence of TGTs, broker credentials, S4U2Self evidence and proxy metadata. The ordered-mode run exercised 60- and 36000-second grants; a separate service-only run also exercised 120-second grants. The private broker TGT requested at least 600 seconds for S4U processing.
 
 Both clients read files from both Windows shares using Kerberos-only authentication; server security events confirmed network logons from each client. Ubuntu used Samba `smbclient` 4.19.5. Rocky used `smbprotocol` 1.16.1 with GSSAPI and encrypted SMB because its bundled `smbclient` 4.23.5 required TGT credentials. Case differences between cached SPNs and application requests also prevented service-only authentication. Validate the actual client and exact SPN spelling.
 

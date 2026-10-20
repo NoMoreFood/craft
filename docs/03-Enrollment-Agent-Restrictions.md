@@ -1,8 +1,8 @@
 # CRAFT enrollment agent restrictions
 
-For **mode 1 privileged enrollment**, restrict the actual enrollment-agent identity to a dedicated user template and a small approved recipient group on every CA that can accept it. An agent private key permits enrollment for other users; its Certificate Request Agent EKU does not encode a recipient allowlist. Strong KDC mapping can authenticate a correctly issued privileged certificate, so prohibited issuance must be refused by the CA.
+For **Enrollment Agent**, restrict the actual enrollment-agent identity to a dedicated user template and a small approved recipient group on every CA that can accept it. An agent private key permits enrollment for other users; its Certificate Request Agent EKU does not encode a recipient allowlist. Strong KDC mapping can authenticate a correctly issued privileged certificate, so prohibited issuance must be refused by the CA.
 
-Mode 2 uses [Key Trust delegation](04-Key-Credential-Link-Delegation.md). Mode 3 uses an existing certificate and KDC mapping without the agent. The administrator's `modes` list selects and orders the enabled workflows; these recipient rules do not authorize or revoke credentials obtained through another path. Use `modes=enrollment` to test this authorization independently. See [mode selection and setup](../source/README.md#configure-mode-selection).
+Key Trust uses [Key Trust delegation](04-Key-Credential-Link-Delegation.md). BYOC uses an existing certificate and KDC mapping without the agent. The administrator's `modes` list selects and orders the enabled workflows; these recipient rules do not authorize or revoke credentials obtained through another path. Use `modes=enrollment` to test this authorization independently. See [mode selection and setup](../source/README.md#configure-mode-selection).
 
 ## Identify the authorization roles
 
@@ -126,4 +126,4 @@ Agent revocation does not revoke certificates it previously authorized. Certific
 
 ## Deployment acceptance criteria
 
-Enable mode 1 only with an explicit, tested signer/template/recipient boundary on every relevant CA, a reviewed nonprivileged recipient set, protected policy administrators and successful permitted/denied requests. Keep privileged accounts in a separate reviewed workflow. Record ownership for credential rotation, CRL refresh, recipient review and incident response.
+Enable Enrollment Agent only with an explicit, tested signer/template/recipient boundary on every relevant CA, a reviewed nonprivileged recipient set, protected policy administrators and successful permitted/denied requests. Keep privileged accounts in a separate reviewed workflow. Record ownership for credential rotation, CRL refresh, recipient review and incident response.

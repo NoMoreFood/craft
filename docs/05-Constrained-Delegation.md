@@ -1,6 +1,6 @@
 # Service tickets through broker constrained delegation
 
-Mode 4 uses a dedicated AD broker account to obtain selected service tickets for the calling Linux user. S4U2Self performs protocol transition; S4U2Proxy requests each approved service. The published cache contains only those final tickets and session keys. The broker TGT, S4U2Self evidence and proxy metadata remain private to the worker. There is no user TGT and no certificate enrollment, PKINIT or directory write.
+Constrained Delegation uses a dedicated AD broker account to obtain selected service tickets for the calling Linux user. S4U2Self performs protocol transition; S4U2Proxy requests each approved service. The published cache contains only those final tickets and session keys. The broker TGT, S4U2Self evidence and proxy metadata remain private to the worker. There is no user TGT and no certificate enrollment, PKINIT or directory write.
 
 Set `modes=constrained_delegation` to require this workflow exclusively. Adding certificate modes to the ordered list explicitly authorizes a TGT if one of them succeeds. Use only the service mode when a TGT would violate the deployment's policy; otherwise choose the order that fits application needs and the environment's capabilities.
 
@@ -28,7 +28,7 @@ ktpass.exe /out C:\SecureExport\submitter.keytab /princ CRAFT/broker.domain.loca
     /mapuser DOMAIN\svc-craft-broker /mapop set /ptype KRB5_NT_PRINCIPAL /crypto AES256-SHA1 /pass *
 ```
 
-`ktpass` changes account credentials and mappings. Coordinate rotation and replace every deployed copy; do not apply it to a shared service identity. Protect the export directory and transfer the keytab securely. On Linux, install it as `/etc/craft/submitter.keytab`, `root:craft` mode 0640. Use the exact keytab principal as `service_principal`. Follow the [mode 4 installation recipe](../source/README.md#mode-4-setup-service-tickets-through-constrained-delegation) for Linux configuration, caller permissions and enablement.
+`ktpass` changes account credentials and mappings. Coordinate rotation and replace every deployed copy; do not apply it to a shared service identity. Protect the export directory and transfer the keytab securely. On Linux, install it as `/etc/craft/submitter.keytab`, `root:craft` mode 0640. Use the exact keytab principal as `service_principal`. Follow the [Constrained Delegation installation recipe](../source/README.md#constrained-delegation-setup) for Linux configuration, caller permissions and enablement.
 
 ## Understand the authorization boundary
 
@@ -46,7 +46,7 @@ Run `craft` as the intended non-root Linux user. Point applications at the retur
 
 `craft-maintain` refreshes the whole batch through the broker before its earliest service ticket expires. It never performs TGT renewal for a service-only cache. Keep the broker keytab/KDC available and the acquisition interval shorter than the refresh interval permitted by actual ticket grants. Status reports `ticket_kind=service`, the earliest `ticket_expires`, and `renew_until=0`. Applications must reload replaced caches when authenticating again.
 
-When switching from a TGT mode, stop existing maintainers and remove the old CRAFT cache before starting mode 4. Configuration changes do not revoke existing credentials, and an existing TGT maintainer can still renew its cached TGT. On compromise, disable acquisition, stop maintainers, remove the broker's delegation and rotate its keytab. Already-issued tickets and established sessions remain subject to domain incident-response procedures.
+When switching from a TGT mode, stop existing maintainers and remove the old CRAFT cache before starting Constrained Delegation. Configuration changes do not revoke existing credentials, and an existing TGT maintainer can still renew its cached TGT. On compromise, disable acquisition, stop maintainers, remove the broker's delegation and rotate its keytab. Already-issued tickets and established sessions remain subject to domain incident-response procedures.
 
 ## Verify the deployment
 

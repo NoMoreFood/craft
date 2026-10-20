@@ -1,7 +1,7 @@
 # /etc/craft/config - root:root 0644; protected root-owned parents.
 # Public policy is readable by callers; keep keys/keytabs separately private.
 # Select and order the modes that fit this installation; only listed modes may run.
-# Home mode needs enabled/modes/domain/realm and shared ticket policy only.
+# BYOC (home) needs enabled/modes/domain/realm and shared ticket policy only.
 # Full-line comments only. Shipped disabled; review all placeholders.
 enabled=no
 
@@ -9,6 +9,8 @@ domain=domain.local
 realm=DOMAIN.LOCAL
 netbios=DOMAIN
 
+# BYOC (Bring Your Own Cert) = home; Enrollment Agent = enrollment; Key Trust = key_trust.
+# Constrained Delegation = constrained_delegation.
 # ORDERED MODES: home, enrollment, key_trust, constrained_delegation. No implicit default or duplicates.
 # Try the next enabled mode after a reported acquisition failure; stop at the first success.
 # Invalid policy, worker interruption, unconfirmed key cleanup and cache publication errors stop the request.
@@ -16,7 +18,7 @@ netbios=DOMAIN
 # All broker modes need the setuid launcher, the dedicated service account and /run/craft.
 modes=home enrollment
 
-# SERVICE TICKETS ONLY (modes=constrained_delegation): no certificate-mode fallback.
+# CONSTRAINED DELEGATION (modes=constrained_delegation): no certificate-mode fallback.
 # Adding another mode explicitly allows that mode to obtain a TGT after a service acquisition failure.
 # Use a dedicated broker keytab and enable protocol transition plus constrained delegation
 # to these exact services on the broker AD account. No PKINIT, LDAP or CES is used.
@@ -33,7 +35,7 @@ modes=home enrollment
 # Active Directory refuses that layer inside TLS (ldaps://).
 # kt_dc_url=ldap://dc01.domain.local
 
-# ENROLLMENT (modes=enrollment): use the actual template msPKI-Cert-Template-OID,
+# ENROLLMENT AGENT (modes=enrollment): use the actual template msPKI-Cert-Template-OID,
 # not its display name.
 template_oid=1.3.6.1.4.1.311.21.8.999.1
 

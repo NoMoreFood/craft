@@ -1,8 +1,8 @@
 # CRAFT Key Trust delegation
 
-For **mode 2 privileged credential linking**, delegate only ReadProperty/WriteProperty on `msDS-KeyCredentialLink` over a reviewed set of ordinary users. This write permits authentication as those accounts, so its scope is the authorization boundary. It requires no user-certificate CA enrollment, CES, agent or user template; KDC certificate trust and current CRLs remain required.
+For **Key Trust**, delegate only ReadProperty/WriteProperty on `msDS-KeyCredentialLink` over a reviewed set of ordinary users. This write permits authentication as those accounts, so its scope is the authorization boundary. It requires no user-certificate CA enrollment, CES, agent or user template; KDC certificate trust and current CRLs remain required.
 
-Complete [mode 2 setup](../source/README.md#mode-2-setup-privileged-credential-linking). Use `modes=key_trust` to validate this workflow independently. Add and order other modes only when their fallback authority is intended; for example, `modes=home key_trust` tries a supplied certificate before directory linking, including when that certificate is absent or invalid.
+Complete [Key Trust setup](../source/README.md#key-trust-setup). Use `modes=key_trust` to validate this workflow independently. Add and order other modes only when their fallback authority is intended; for example, `modes=home key_trust` tries a supplied certificate before directory linking, including when that certificate is absent or invalid.
 
 ## Prepare the service identity and DC
 
@@ -85,4 +85,4 @@ On suspected compromise, disable fresh acquisition, stop active maintainers, rev
 
 ## Deployment acceptance criteria
 
-Enable mode 2 only with a specific reviewed nonprivileged scope, protected keytab and delegation administrators, same-DC LDAP/PKINIT, proven write denial outside scope and clean removal after success/failure. Assign owners for residual-key response, directory auditing, permission review and credential rotation.
+Enable Key Trust only with a specific reviewed nonprivileged scope, protected keytab and delegation administrators, same-DC LDAP/PKINIT, proven write denial outside scope and clean removal after success/failure. Assign owners for residual-key response, directory auditing, permission review and credential rotation.

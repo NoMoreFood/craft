@@ -211,20 +211,20 @@ def overview(pdf):
            color=BLUE, title_size=27)
     p.arrow([(414, 275), (480, 275)])
     p.node(64, 370, 1472, 100, "Try the next enabled mode; stop at the first success",
-           ["A reported acquisition failure advances through the list. Mode numbers identify workflows, not priority."],
+           ["A reported acquisition failure advances through the list. The configured list defines priority."],
            color=BLUE, title_size=25)
     p.arrow([(800, 330), (800, 370)], BLUE)
     entries = [
-        (64, "1  Enrollment", TEAL, TEAL_LIGHT,
+        (64, "Enrollment Agent", TEAL, TEAL_LIGHT,
          ["enrollment", "Service keytab + agent + CES", "CA issues a user certificate",
           "PKINIT obtains a user TGT", "CA restricts recipients"]),
-        (438, "2  Key Trust", PURPLE, WHITE,
+        (438, "Key Trust", PURPLE, WHITE,
          ["key_trust", "Service keytab + writable DC", "Link a temporary public key",
           "PKINIT obtains a user TGT", "Remove the linked key"]),
-        (812, "3  Windows PEM", BLUE, BLUE_LIGHT,
+        (812, "BYOC", BLUE, BLUE_LIGHT,
          ["home", "Caller validates home PEM pair", "PKINIT obtains a user TGT",
           "KDC maps certificate to user", "Supplied PEM pair persists"]),
-        (1186, "4  Service tickets", PURPLE, WHITE,
+        (1186, "Constrained Delegation", PURPLE, WHITE,
          ["constrained_delegation", "Dedicated broker AES keytab", "S4U2Self then S4U2Proxy",
           "AD restricts target services", "No user or broker TGT export"]),
     ]
@@ -239,7 +239,7 @@ def overview(pdf):
 
 
 def acquisition(pdf):
-    p = Page(pdf, "02-enrollment-sequence", 2, "Mode 1  Privileged certificate enrollment",
+    p = Page(pdf, "02-enrollment-sequence", 2, "Enrollment Agent",
              (
                  'Linux orchestrates CA enrollment first, then PKINIT. Select '
                  'modes=enrollment to require this workflow.'
@@ -288,7 +288,7 @@ def acquisition(pdf):
         'Caller publishes .krb5cc_craft mode 0600. Temporary user key and '
         'certificate are released.'
     ), 23, INK, max_width=1428)
-    p.footer("source/README.md: Mode 1 setup; docs/03-Enrollment-Agent-Restrictions.md")
+    p.footer("source/README.md: Enrollment Agent setup; docs/03-Enrollment-Agent-Restrictions.md")
 
 
 def lanes(p, actors):
@@ -300,7 +300,7 @@ def lanes(p, actors):
 
 
 def credential_linking(pdf):
-    p = Page(pdf, "03-credential-linking-sequence", 3, "Mode 2  Privileged credential linking",
+    p = Page(pdf, "03-credential-linking-sequence", 3, "Key Trust",
              (
                  'Linux links a temporary AD public key, performs Key Trust PKINIT, and '
                  'removes the entry before publishing the TGT.'
@@ -341,31 +341,31 @@ def credential_linking(pdf):
     p.lines(108, 901, ["Caller publishes .krb5cc_craft mode 0600. Cleanup also runs after acquisition failure.",
                        "Failed cleanup blocks publication and reports a residual key for administrator removal."],
             21, INK, leading=28, max_width=1428)
-    p.footer("source/README.md: Mode 2 setup; docs/04-Key-Credential-Link-Delegation.md")
+    p.footer("source/README.md: Key Trust setup; docs/04-Key-Credential-Link-Delegation.md")
 
 
 def timing(pdf):
     p = Page(pdf, "05-credential-timing", 5, "Ticket clocks and certificate storage",
              (
-                 'Modes 1-3 request 10 h / 7 d by default. Certificate lifetime and '
+                 'Certificate modes request 10 h / 7 d by default. Certificate lifetime and '
                  'KDC policy constrain the initial grant.'
              ),
              "Home certificates and keys persist until the user replaces or removes them; ordinary certificate "
              "validity is accepted. Enrollment generates a temporary key and certificate, caps certificate "
-             "validity at ten hours by default and releases its pair after PKINIT. Modes 1-3 request the same "
+             "validity at ten hours by default and releases its pair after PKINIT. Certificate modes request the same "
              "ten-hour TGT and seven-day renewal window. Renewal uses the cached ticket and session key. "
              "Fresh authentication near day six follows the configured modes list until one succeeds. "
              "The renewed ticket's absolute renewal deadline remains fixed. Times are schedule illustrations.")
     for x, color, label, body in [
-        (64, TEAL, "1 / ENROLLMENT", ["Temporary key and certificate.", "CA issuance records remain."]),
+        (64, TEAL, "ENROLLMENT AGENT", ["Temporary key and certificate.", "CA issuance records remain."]),
         (564,
             PURPLE,
-            "2 / CREDENTIAL LINKING",
+            "KEY TRUST",
             ["Temporary key and local identity.",
             "Remove directory entry after PKINIT."]),
         (1064,
             BLUE,
-            "3 / WINDOWS-EXPORTED PEM",
+            "BYOC  BRING YOUR OWN CERT",
             ["Persistent supplied certificate and key.",
             "Replace the pair before expiry."]),
     ]:
@@ -422,7 +422,7 @@ def timing(pdf):
     p.arrow([(day(6), 816), (day(6), 847)], TEAL, 2, head=7)
     p.text(day(6) + 13, 820, "Refresh ~day 6", 17, TEAL, "semibold")
     p.text(64, 852, "Acquisition 2", 22, INK, "semibold")
-    p.text(64, 881, "Modes 1-3 only", 15, MUTED)
+    p.text(64, 881, "Certificate modes only", 15, MUTED)
     p.polygon([(day(6), 849), (end - 15, 849), (end, 870), (end - 15, 891), (day(6), 891)], TEAL)
     p.text(day(6) + 18, 861, "New 7-day window", 18, WHITE, "semibold")
     p.text(1536, 902, "Continues to ~day 13", 15, MUTED, align="right")
@@ -461,7 +461,7 @@ def maintenance(pdf):
     p.text(824, 349, "02 / FRESH AUTHENTICATION", 15, TEAL, "semibold")
     p.text(824, 379, "Obtain fresh credentials", 28, INK, "semibold")
     p.lines(824, 425, ["Missing/expired credentials or TGT rollover;",
-                      "mode 4: the earliest service ticket is near expiry."],
+                      "Service-only cache: the earliest ticket is near expiry."],
             19, INK, leading=27, max_width=710)
     p.text(824, 482, "Rollover margin: 1/7 of the renewal window, capped at 1 day.", 16, MUTED, max_width=710)
 
@@ -477,7 +477,7 @@ def maintenance(pdf):
             18, BLUE, leading=24, max_width=704)
 
     for x, w, title, detail in [(824, 178, "Run craft", "select source"),
-                               (1062, 218, "Selected mode", "1, 2, 3 or 4"),
+                               (1062, 218, "Selected mode", "configured order"),
                                (1340, 196, "KDC", "TGT or services")]:
         p.rect(x, 522, w, 79, TEAL_LIGHT, radius=9)
         p.text(x + w / 2, 536, title, 21, INK, "semibold", align="center")
@@ -512,7 +512,7 @@ def maintenance(pdf):
 
 
 def home_certificate(pdf):
-    p = Page(pdf, "04-windows-exported-certificate", 4, "Mode 3  Unprivileged Windows-exported certificate",
+    p = Page(pdf, "04-windows-exported-certificate", 4, "BYOC  Bring Your Own Cert",
              "Windows enrolls and exports the certificate. Linux uses the transferred PEM pair entirely as the caller.",
              "The domain user runs the Windows certificate helper without elevation to enroll a certificate "
              "with an exportable software key. It exports user.pem and unencrypted user.key. Both files are "
@@ -559,11 +559,11 @@ def home_certificate(pdf):
         'No Linux setuid bit, service account, directory keytab, LDAP lookup, CES'
         ' or /run/craft.'
     ), 22, INK, max_width=1428)
-    p.footer("source/README.md: Mode 3 setup; scripts/Request-CRAFT-Certificate.cmd")
+    p.footer("source/README.md: BYOC setup; scripts/Request-CRAFT-Certificate.cmd")
 
 
 def constrained_delegation(pdf):
-    p = Page(pdf, "07-constrained-delegation", 7, "Mode 4  Service tickets through constrained delegation",
+    p = Page(pdf, "07-constrained-delegation", 7, "Constrained Delegation",
              "The broker requests approved services for the caller. No user TGT or broker credentials leave the worker.",
              "Service-only mode ignores home certificates. A private broker TGT authorizes S4U2Self, then "
              "S4U2Proxy for each configured same-realm SPN. All targets must succeed. Only final caller service "
@@ -593,7 +593,7 @@ def constrained_delegation(pdf):
     p.lines(108, 893, ["Mode-0600 user cache can access the configured services; it cannot request arbitrary tickets.",
                        "Maintenance refreshes the whole batch through the broker before the earliest service expiry."],
             21, INK, leading=28, max_width=1428)
-    p.footer("source/README.md: Mode 4 setup; docs/05-Constrained-Delegation.md")
+    p.footer("source/README.md: Constrained Delegation setup; docs/05-Constrained-Delegation.md")
 
 
 def main():

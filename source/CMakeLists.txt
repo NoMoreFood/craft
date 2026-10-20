@@ -89,6 +89,12 @@ configure_file(scripts/with-craft.in "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/wit
 file(COPY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}"
      FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
+# Applications can opt into a separately configured GSS-Proxy service without running the issuer.
+configure_file(scripts/with-craft-gssproxy.in "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft-gssproxy"
+               @ONLY NEWLINE_STYLE UNIX)
+file(COPY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft-gssproxy" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}"
+     FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
 include(CTest)
 if(BUILD_TESTING)
   # One test runs a multi-threaded job; glibc before 2.34 (RHEL 8) keeps threads in a separate library.

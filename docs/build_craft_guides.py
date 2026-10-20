@@ -22,10 +22,10 @@ from pdf2image import convert_from_path
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "https://github.com/NoMoreFood/craft/blob/main/"
 SETUP = [
-    "source/README.md#mode-1-setup-privileged-certificate-enrollment",
-    "source/README.md#mode-2-setup-privileged-credential-linking",
-    "source/README.md#mode-3-setup-unprivileged-windows-exported-certificate",
-    "source/README.md#mode-4-setup-service-tickets-through-constrained-delegation",
+    "source/README.md#enrollment-agent-setup",
+    "source/README.md#key-trust-setup",
+    "source/README.md#byoc-setup",
+    "source/README.md#constrained-delegation-setup",
 ]
 FLOW = [
     "docs/diagrams/02-enrollment-sequence.svg",
@@ -236,61 +236,63 @@ def process_guide(images):
     paragraph(doc, (
         "Administrators select and order CRAFT modes to fit their environment's capabilities and needs. "
         "CRAFT obtains Kerberos credentials from Linux without storing the user's AD password. "
-        "Modes 1-3 obtain a user TGT through PKINIT. Mode 4 uses broker constrained delegation "
+        "Enrollment Agent, Key Trust and BYOC obtain a user TGT through PKINIT. Constrained Delegation uses a broker "
         "to obtain only approved service tickets. Domain membership is not required."
     ))
     doc.add_heading("Choose operating modes", 1)
     table(doc, ["Mode", "Credential source and authority", "Setup"], [
-        ["1  Privileged enrollment", (
+        ["Enrollment Agent", (
             'Linux generates a user key and enrolls a certificate through CES and AD '
             'CS with an enrollment-agent signature. The CA restricts the agent, '
             'template and recipients.'
-        ), ("Mode 1 setup", SETUP[0])],
-        ["2  Privileged credential linking", (
+        ), ("Setup", SETUP[0])],
+        ["Key Trust", (
             "Linux adds a temporary public key to the user's msDS-KeyCredentialLink "
             'and uses Key Trust PKINIT. AD attribute delegation defines the target '
             'scope.'
-        ), ("Mode 2 setup", SETUP[1])],
-        ["3  Unprivileged Windows export", (
-            'Windows enrolls and exports a certificate and matching private key. '
+        ), ("Setup", SETUP[1])],
+        ["BYOC", (
+            'Bring Your Own Cert. Windows enrolls and exports a certificate and matching private key. '
             "Linux uses the securely transferred PEM pair under the caller's UID."
-        ), ("Mode 3 setup", SETUP[2])],
-        ["4  Service tickets only", (
+        ), ("Setup", SETUP[2])],
+        ["Constrained Delegation", (
             'A dedicated broker uses S4U2Self and S4U2Proxy. AD restricts the target services; '
             'the user receives no TGT or broker credentials.'
-        ), ("Mode 4 setup", SETUP[3])],
+        ), ("Setup", SETUP[3])],
     ], [1.65, 4.15, 1.34])
     doc.add_heading("How CRAFT selects the mode", 1)
     paragraph(doc, (
-        'The ordered modes list enables one or more workflows. For example, modes=home enrollment '
+        'Configure Enrollment Agent as enrollment, Key Trust as key_trust, BYOC as home, and '
+        'Constrained Delegation as constrained_delegation. The ordered modes list enables the workflows. '
+        'For example, modes=home enrollment '
         'tries the caller PEM pair, then enrollment after acquisition failure. The first success supplies '
         'the cache. Invalid policy, worker interruption, failed key cleanup and publication errors stop '
         'the request. Use modes=constrained_delegation alone to require service tickets without a TGT.'
     ))
     paragraph(doc, (
-        'Mode 3 uses ordinary executables. Modes 1, 2 and 4 require the setuid launcher, '
+        'BYOC uses ordinary executables. The other three modes use a broker and require the setuid launcher, '
         'dedicated craft account, craft-users caller group and private /run/craft. '
         'Users run craft directly without sudo. Network work runs outside root; '
         'the caller publishes the cache. CRAFT does not perform an MFA challenge.'
     ))
     links(doc, [("Mode selection diagram", "docs/diagrams/01-system-overview.svg"),
                 ("Build and install", "source/README.md#build")])
-    figure_page(doc, 1, "Mode 1 privileged certificate enrollment", (
+    figure_page(doc, 1, "Enrollment Agent", (
         'Linux resolves the user, enrolls a restricted certificate through CES '
         "and AD CS, then obtains the user's TGT through PKINIT. The generated "
         'user pair is temporary; CA records remain.'
     ), images[0])
-    figure_page(doc, 2, "Mode 2 privileged credential linking", (
+    figure_page(doc, 2, "Key Trust", (
         'Linux uses a delegated directory write and Key Trust PKINIT against the '
         'same writable DC. Cleanup must succeed before cache publication. A '
         'residual key after an outage needs administrator removal.'
     ), images[1])
-    figure_page(doc, 3, "Mode 3 unprivileged Windows exported certificate", (
+    figure_page(doc, 3, "BYOC Bring Your Own Cert", (
         'Windows enrollment and export precede secure PEM transfer. Linux '
         "validates the supplied pair and obtains the user's TGT as the caller. "
         'The PEM pair remains and must be replaced before expiry.'
     ), images[2])
-    figure_page(doc, 4, "Mode 4 service tickets through constrained delegation", (
+    figure_page(doc, 4, "Constrained Delegation", (
         'A private broker TGT authorizes protocol transition and constrained delegation. '
         'Only validated tickets for every configured service are published. Home PEM files '
         'are ignored; there is no PKINIT or directory write.'
@@ -308,7 +310,7 @@ def process_guide(images):
         'account.'
     ))
     table(doc, ["Mode", "Client credential and authorization", "What persists"], [
-        ["1  Enrollment", (
+        ["Enrollment Agent", (
             'CA-issued user certificate; matching key, UPN, template, three client '
             'EKUs, short validity, CA chain and CRLs. CA recipient restrictions '
             'authorize issuance.'
@@ -317,7 +319,7 @@ def process_guide(images):
             'issuance and audit records remain. Generated user key and certificate '
             'are released.'
         )],
-        ["2  Credential linking", (
+        ["Key Trust", (
             'Locally issued certificate carrying a fresh RSA public key (default '
             '3072 bits). The KDC'
             ' matches the linked key; a trusted user-certificate CA chain is '
@@ -327,14 +329,14 @@ def process_guide(images):
             'directory entry and releases the generated identity. Failed cleanup can '
             'leave a standing credential.'
         )],
-        ["3  Supplied certificate", (
+        ["BYOC", (
             'Windows-exported PEM pair; matching key, logon usage, UPN SAN, validity,'
             ' CA trust and CRLs. KDC account mapping authorizes authentication.'
         ), (
             "user.pem and user.key stay in the caller's home. CRAFT does not renew, "
             'overwrite or delete them. Replace them before expiry.'
         )],
-        ["4  Service tickets", (
+        ["Constrained Delegation", (
             'Broker AES keytab, protocol transition and explicit AD target SPNs. '
             'No certificate authentication or directory write.'
         ), (
@@ -344,8 +346,9 @@ def process_guide(images):
     ], [1.1, 3.1, 2.94])
     paragraph(doc, (
         'Every mode atomically publishes a caller-owned mode-0600 .krb5cc_craft '
-        'in the NSS home. It contains a user TGT in modes 1-3, or only selected service tickets in mode 4,'
-        " with session keys but no certificate, private key or broker evidence. Modes 1-3 use it to "
+        'in the NSS home. It contains a user TGT in certificate modes, '
+        'or only selected service tickets in Constrained Delegation,'
+        " with session keys but no certificate, private key or broker evidence. Certificate modes use it to "
         'request service tickets. Success replaces the cache; acquisition failure'
         ' preserves it, and expiration does not delete it automatically.'
     ))
@@ -365,7 +368,7 @@ def process_guide(images):
         ("Broker delegation", "docs/05-Constrained-Delegation.md")])
     page(doc, "Ticket lifetimes and everyday use")
     paragraph(doc, (
-        'Modes 1-3 request a ten-hour initial TGT and a seven-day renewal window '
+        'Certificate modes request a ten-hour initial TGT and a seven-day renewal window '
         'with AES256/AES128. The KDC controls the grant; certificate/key lifetime'
         ' can constrain initial validity. A renewal window is the period during '
         'which an eligible TGT can be renewed. It does not make one ticket valid '
@@ -376,8 +379,8 @@ def process_guide(images):
         'grants without replacing the cache. Administrators can set no to accept '
         'shorter grants with a warning. Returned ticket times are never '
         'rewritten. Enrollment certificate caps default to ten hours total, '
-        "including backdating; they do not cap mode 3's supplied certificate or "
-        "mode 2's local identity."
+        "including backdating; they do not cap BYOC's supplied certificate or "
+        "Key Trust's local identity."
     ))
     doc.add_heading("Select the user cache", 2)
     code(doc, 'cache=$(/usr/local/bin/craft) || exit "$?"\nexport KRB5CCNAME="$cache"\nklist -ef -c "$KRB5CCNAME"')
@@ -395,14 +398,14 @@ def process_guide(images):
     ))
     paragraph(doc, (
         'craft-maintain returns when credentials and detached maintenance are ready. '
-        'Modes 1-3 renew from the cached TGT and authenticate afresh near the renewal deadline. '
-        'Mode 4 refreshes the complete service batch through its broker before the earliest expiry. '
+        'Certificate modes renew from the cached TGT and authenticate afresh near the renewal deadline. '
+        'Constrained Delegation refreshes the complete service batch through its broker before the earliest expiry. '
         'Fresh authentication always uses the configured mode selection.'
     ))
     paragraph(doc, (
         'Install the maintainer without setuid/setgid. Protect system Kerberos configuration, '
         'and watch a shell or controller that lasts for the job. The scheduler must retain '
-        'background processes. Modes 1, 2 and 4 need setuid access for fresh authentication; '
+        'background processes. Broker modes need setuid access for fresh authentication; '
         'home refresh works under no_new_privs. --max-duration 21d adds a cutoff. '
         'Concurrent jobs for one UID share the cache and acquisition cooldown.'
     ))
@@ -421,7 +424,7 @@ def process_guide(images):
         "docs/diagrams/05-credential-timing.svg")])
     page(doc, "Operation and authorization")
     paragraph(doc, (
-        'Mode 4 uses a dedicated broker with protocol transition and account-based constrained '
+        'Constrained Delegation uses a dedicated broker with protocol transition and account-based constrained '
         'delegation to an exact list of target SPNs. AD limits target services, not the users '
         'the broker can impersonate. Protect the keytab, restrict local craft-users membership '
         'and control Linux UID/name assignment. Exclude sensitive users through domain '
@@ -440,7 +443,7 @@ def process_guide(images):
         'to end renewal. Issued tickets and service sessions remain subject to domain policy.'
     ))
     paragraph(doc, (
-        'Mode 4 refreshes all service tickets through the broker before the earliest expiry. '
+        'Constrained Delegation refreshes all service tickets through the broker before the earliest expiry. '
         'It has no cache-only renewal and needs the broker and KDC for each refresh. '
         'Status identifies ticket_kind and ticket_expires. Removing broker delegation blocks fresh '
         'acquisition but does not revoke already-issued tickets.'
@@ -461,11 +464,12 @@ def configuration_guide():
         'Select and order one or more Linux operating modes to fit the environment: certificate '
         'enrollment through CES and AD CS, privileged credential linking through '
         'msDS-KeyCredentialLink, or unprivileged PKINIT with a certificate '
-        'exported from Windows, or service-only constrained delegation with a broker keytab. This guide gives '
+        'exported from Windows (BYOC, Bring Your Own Cert), or Constrained Delegation with a broker keytab. '
+        'This guide gives '
         'mode-specific configuration and acceptance checks. The linked installation '
         'guide contains complete Linux commands and the configuration reference.'
     ))
-    table(doc, ["Requirement", "1  Enrollment", "2  Credential linking", "3  Windows export"], [
+    table(doc, ["Requirement", "Enrollment Agent", "Key Trust", "BYOC"], [
         ["Linux acquisition",
             "Setuid launcher; craft service account",
             "Setuid launcher; craft service account",
@@ -482,17 +486,18 @@ def configuration_guide():
             "User enrollment and KDC certificate mapping"],
         ["KDC certificate trust / CRLs", "Required", "Required", "Required"],
         ["Setup",
-            ("Mode 1 instructions",
+            ("Enrollment Agent instructions",
             SETUP[0]),
-            ("Mode 2 instructions",
+            ("Key Trust instructions",
             SETUP[1]),
-            ("Mode 3 instructions",
+            ("BYOC instructions",
             SETUP[2])],
     ], [1.72, 1.8, 1.8, 1.82])
     paragraph(doc, (
-        'Mode 4 uses the same privileged Linux installation as modes 1 and 2, plus a dedicated '
+        'Constrained Delegation uses the same privileged Linux installation as Enrollment Agent and Key Trust, '
+        'plus a dedicated '
         'broker AES keytab with protocol transition and approved target SPNs. It requires no '
-        'certificates, CRLs, PKINIT, LDAP or CES. See the mode 4 setup page.'
+        'certificates, CRLs, PKINIT, LDAP or CES. See the Constrained Delegation setup page.'
     ))
     paragraph(doc, (
         'Set modes to an ordered list, such as home enrollment or key_trust enrollment. '
@@ -504,8 +509,8 @@ def configuration_guide():
     paragraph(doc, (
         'Build as an ordinary user from the repository root with GCC/libstdc++ 13.1 '
         'or equivalent C++20 support, CMake 3.16 or newer, OpenSSL 1.1.1 or newer, MIT Kerberos, libcurl, '
-        'libxml2, OpenLDAP, SASL and MIT GSSAPI. Install MIT PKINIT for modes 1-3 and, for modes '
-        '1 and 2, the SASL GSSAPI plugin. CES Negotiate needs libcurl SPNEGO. '
+        'libxml2, OpenLDAP, SASL and MIT GSSAPI. Install MIT PKINIT for certificate modes and, for '
+        'Enrollment Agent and Key Trust, the SASL GSSAPI plugin. CES Negotiate needs libcurl SPNEGO. '
         'Use supported patched packages meeting '
         "the installation guide's requirements. A working /dev/log socket is required."
     ))
@@ -518,13 +523,13 @@ def configuration_guide():
         'there is no CMake installation target. Keep '
         '/etc/craft/config and krb5.conf root-owned mode 0644 with protected '
         'parents. Pin the realm, KDC and expected KDC hostname; provide populated'
-        ' kdc-trust.pem and current kdc-crls.pem for modes 1-3. Modes 1 and 3 also require '
+        ' kdc-trust.pem and current kdc-crls.pem for certificate modes. Enrollment Agent and BYOC also require '
         'ca-trust.pem and ca-crls.pem for the user certificate; enrollment also '
         'validates the agent. Empty placeholders are invalid. Refresh CRLs '
         'independently.'
     ))
     paragraph(doc, (
-        'Modes 1, 2 and 4 add craft:craft, craft-users and /run/craft owned '
+        'Broker modes add craft:craft, craft-users and /run/craft owned '
         'craft:craft mode 0700. Private service credentials are root:craft mode '
         '0640. Only the service account belongs to craft; ordinary users join '
         'craft-users. Keep enabled=no and the launcher non-setuid until the '
@@ -538,9 +543,9 @@ def configuration_guide():
         "source/README.md#shared-privileged-installation"),
         ("Configuration reference",
         "source/README.md#configuration-reference")])
-    page(doc, "Mode 1 privileged certificate enrollment setup")
+    page(doc, "Enrollment Agent setup")
     links(doc,
-        [("Complete mode 1 setup",
+        [("Complete Enrollment Agent setup",
         SETUP[0]),
         ("Enrollment flow diagram",
         FLOW[0]),
@@ -613,12 +618,12 @@ minimum_interval_seconds=60
         'so another acquisition path does not hide the enrollment '
         'setup.'
     ))
-    page(doc, "Mode 1 certificate and ticket policy")
+    page(doc, "Enrollment Agent certificate and ticket policy")
     paragraph(doc, (
         'The CA controls the issued certificate. CSR extensions are requests, and'
         ' client-side validation cannot replace CA authorization. This profile '
-        'applies to CRAFT enrollment; mode 3 accepts its separate '
-        'supplied-certificate profile and mode 2 is authorized by its directory '
+        'applies to CRAFT enrollment; BYOC accepts its separate '
+        'supplied-certificate profile and Key Trust is authorized by its directory '
         'key.'
     ))
     table(doc, ["Property", "Required enrollment profile"], [
@@ -662,7 +667,7 @@ minimum_interval_seconds=60
     doc.add_heading("Shared ticket policy", 2)
     paragraph(doc, (
         'tgt_seconds=36000 and renew_seconds=604800 request ten-hour initial '
-        'validity and seven-day renewal in modes 1-3. Set renew_seconds to 0 to '
+        'validity and seven-day renewal in certificate modes. Set renew_seconds to 0 to '
         'disable renewal; otherwise it must exceed tgt_seconds. The KDC decides the actual'
         ' grant, including certificate/key-lifetime constraints. Strict '
         'require_full_tgt_lifetime=yes rejects shortened grants and preserves the'
@@ -672,10 +677,10 @@ minimum_interval_seconds=60
     ))
     doc.add_heading("Generated common name", 2)
     paragraph(doc, (
-        'certificate_cn={user} controls the mode 1 CSR CN and mode 2 '
+        'certificate_cn={user} controls the Enrollment Agent CSR CN and Key Trust '
         'local-certificate CN. Tokens are {user}, directory-resolved {upn} and '
         '{domain}; the result must be 1-64 printable ASCII characters. A CA-built'
-        " subject can override the CSR. The setting does not alter mode 3's "
+        " subject can override the CSR. The setting does not alter BYOC's "
         'supplied certificate or the requested principal. Preserve UPN/SID '
         'binding and recipient restrictions when configuring CA subject policy.'
     ))
@@ -684,9 +689,9 @@ minimum_interval_seconds=60
         "source/README.md#assumptions-and-windows-preparation"),
         ("Configuration example",
         "source/config/config.example")])
-    page(doc, "Mode 2 privileged credential linking setup")
+    page(doc, "Key Trust setup")
     links(doc,
-        [("Complete mode 2 setup",
+        [("Complete Key Trust setup",
         SETUP[1]),
         ("Credential-linking diagram",
         FLOW[1]),
@@ -760,9 +765,9 @@ minimum_interval_seconds=60
         'delegation.'
     ))
     links(doc, [("Temporary issuer trust", "source/SECURITY.md#key-trust-certificate-handling")])
-    page(doc, "Mode 3 unprivileged Windows exported certificate setup")
+    page(doc, "BYOC setup")
     links(doc,
-        [("Complete mode 3 setup",
+        [("Complete BYOC setup",
         SETUP[2]),
         ("Windows export flow diagram",
         FLOW[2]),
@@ -828,8 +833,9 @@ install -m 0600 /path/to/transferred/user.key ~/.config/craft/user.key
         'certificate. Neither the helper nor CRAFT schedules or transfers '
         'replacements automatically.'
     ))
-    page(doc, "Mode 4 service tickets through constrained delegation setup")
-    links(doc, [("Complete mode 4 setup", SETUP[3]), ("Broker AD policy", "docs/05-Constrained-Delegation.md"),
+    page(doc, "Constrained Delegation setup")
+    links(doc, [("Complete Constrained Delegation setup", SETUP[3]),
+                ("Broker AD policy", "docs/05-Constrained-Delegation.md"),
                 ("Delegation flow", FLOW[3])])
     paragraph(doc, (
         'Use a dedicated ordinary broker account, unique SPN and AES keytab. Enable protocol '
@@ -867,7 +873,7 @@ minimum_interval_seconds=60
         'identities where service isolation matters.'
     ))
     paragraph(doc, (
-        'Stop existing maintainers and remove the old TGT cache before switching to mode 4. '
+        'Stop existing maintainers and remove the old TGT cache before switching to Constrained Delegation. '
         'After enabling acquisition, verify every cache record, service authentication with a client '
         'that accepts a service-only cache, '
         'unapproved-target and nondelegable-user denial, disabled home mode and cache preservation. '
@@ -901,20 +907,20 @@ minimum_interval_seconds=60
             'required CRLs, key mismatch, KDC outage, RC4 and shortened strict-mode '
             'grants.'
         )],
-        ["1  Enrollment", (
+        ["Enrollment Agent", (
             'Inspect UPN, CA SID mapping, template, three EKUs, matching key, CN '
             'behavior, chain/CRLs and total validity. Prove CA denial for '
             'unauthorized agents/templates/recipients and correlate CA/CES audit '
             'identity.'
         )],
-        ["2  Credential linking", (
+        ["Key Trust", (
             'Prove scoped attribute rights and denial outside the scope. Inspect the '
             'added/removed value and existing keys before and after success, failed '
             'PKINIT and interruption. Force cleanup failure, verify refusal to '
             'publish and remove the residual key. Test revocation of delegation and '
             'KDC freshness interoperability.'
         )],
-        ["3  Windows export", (
+        ["BYOC", (
             'Verify ordinary Linux execution without service credentials or runtime '
             'directory, safe Windows PEM export/transfer, KDC mapping, certificate '
             'replacement and inherited no_new_privs. Wrong-account and unsafe/partial'
@@ -979,7 +985,7 @@ minimum_interval_seconds=60
         )],
         ["Stop fresh acquisition", (
             'Set enabled=no or remove launcher execute access. Removing only setuid stops '
-            'modes 1, 2 and 4; a supplied pair remains usable only if home is enabled.'
+            'broker modes; a supplied pair remains usable only if home is enabled.'
         )],
         ["Stop ticket renewal", (
             'Inspect job status and send SIGTERM to each recorded maintainer_pid. '
@@ -997,7 +1003,7 @@ minimum_interval_seconds=60
         'cache deletion and maintenance stop do not revoke already-issued tickets.'
     ))
     paragraph(doc, (
-        'Mode 4 refreshes all service tickets through the broker before the earliest expiry. '
+        'Constrained Delegation refreshes all service tickets through the broker before the earliest expiry. '
         'It has no cache-only renewal and needs the broker and KDC for each refresh. '
         'Status identifies ticket_kind and ticket_expires. Removing broker delegation blocks fresh '
         'acquisition but does not revoke already-issued tickets.'

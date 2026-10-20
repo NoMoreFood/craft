@@ -24,14 +24,14 @@
   <rect x="64" y="370" width="1472" height="100" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="84" y="391" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
   <text x="100" y="410.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Try the next enabled mode; stop at the first success</text>
-  <text x="86" y="441.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">A reported acquisition failure advances through the list. Mode numbers identify workflows, not priority.</text>
+  <text x="86" y="441.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">A reported acquisition failure advances through the list. The configured list defines priority.</text>
   <polyline points="800,330 800,370" fill="none" stroke="#315DC0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   <polygon points="800,370 804.4,362.0 795.6,362.0" fill="#315DC0" />
   <polyline points="239,470 239,525" fill="none" stroke="#007F7C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   <polygon points="239,525 243.4,517.0 234.6,517.0" fill="#007F7C" />
   <rect x="64" y="525" width="350" height="260" rx="12" fill="#E2F2EF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="84" y="546" width="4" height="23" rx="0" fill="#007F7C" stroke="none" stroke-width="1" />
-  <text x="100" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">1  Enrollment</text>
+  <text x="100" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Enrollment Agent</text>
   <text x="86" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">enrollment</text>
   <text x="86" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Service keytab + agent + CES</text>
   <text x="86" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">CA issues a user certificate</text>
@@ -43,7 +43,7 @@
   <polygon points="613,525 617.4,517.0 608.6,517.0" fill="#7752A3" />
   <rect x="438" y="525" width="350" height="260" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="458" y="546" width="4" height="23" rx="0" fill="#7752A3" stroke="none" stroke-width="1" />
-  <text x="474" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">2  Key Trust</text>
+  <text x="474" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Key Trust</text>
   <text x="460" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">key_trust</text>
   <text x="460" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Service keytab + writable DC</text>
   <text x="460" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Link a temporary public key</text>
@@ -55,7 +55,7 @@
   <polygon points="987,525 991.4,517.0 982.6,517.0" fill="#315DC0" />
   <rect x="812" y="525" width="350" height="260" rx="12" fill="#E3EBFA" stroke="#D5E0E7" stroke-width="1" />
   <rect x="832" y="546" width="4" height="23" rx="0" fill="#315DC0" stroke="none" stroke-width="1" />
-  <text x="848" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">3  Windows PEM</text>
+  <text x="848" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">BYOC</text>
   <text x="834" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">home</text>
   <text x="834" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Caller validates home PEM pair</text>
   <text x="834" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">PKINIT obtains a user TGT</text>
@@ -67,7 +67,7 @@
   <polygon points="1361,525 1365.4,517.0 1356.6,517.0" fill="#7752A3" />
   <rect x="1186" y="525" width="350" height="260" rx="12" fill="#FFFFFF" stroke="#D5E0E7" stroke-width="1" />
   <rect x="1206" y="546" width="4" height="23" rx="0" fill="#7752A3" stroke="none" stroke-width="1" />
-  <text x="1222" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">4  Service tickets</text>
+  <text x="1222" y="565.25" font-size="25" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Constrained Delegation</text>
   <text x="1208" y="596.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">constrained_delegation</text>
   <text x="1208" y="621.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Dedicated broker AES keytab</text>
   <text x="1208" y="646.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">S4U2Self then S4U2Proxy</text>

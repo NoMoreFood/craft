@@ -8,7 +8,7 @@
     <HOST_IP></HOST_IP>
     <HOST_MAC></HOST_MAC>
     <HOST_FQDN></HOST_FQDN>
-    <TARGET_COMMENT>CRAFT repository source assessment covering certificate modes 1-3 and optional craft-maintain; broker constrained delegation and configurable multi-mode fallback are outside this assessment. Underlying operating systems and Active Directory are assumed fully STIG compliant. Inherited closures use that supplied assessment assumption, not independent host verification. Application-specific Open and Not_Reviewed controls remain subject to the stated closure evidence. Revised 11 October 2026 for source commit c107bef and the system owner's determinations: MFA, logging, backup and recovery and other platform mechanisms are deferred to the operating system, signed releases do not apply to a source-only distribution, and the enrollment SOAP controls do not apply because the AD CS Certificate Enrollment Web Service fixes the message format.</TARGET_COMMENT>
+    <TARGET_COMMENT>CRAFT repository source assessment covering Enrollment Agent, Key Trust and BYOC and optional craft-maintain; broker constrained delegation and configurable multi-mode fallback are outside this assessment. Underlying operating systems and Active Directory are assumed fully STIG compliant. Inherited closures use that supplied assessment assumption, not independent host verification. Application-specific Open and Not_Reviewed controls remain subject to the stated closure evidence. Revised 11 October 2026 for source commit c107bef and the system owner's determinations: MFA, logging, backup and recovery and other platform mechanisms are deferred to the operating system, signed releases do not apply to a source-only distribution, and the enrollment SOAP controls do not apply because the AD CS Certificate Enrollment Web Service fixes the message format.</TARGET_COMMENT>
     <TECH_AREA></TECH_AREA>
     <TARGET_KEY>4093</TARGET_KEY>
     <WEB_OR_DATABASE>false</WEB_OR_DATABASE>
@@ -1550,7 +1550,7 @@ If SOAP messages requiring integrity do not have the Message ID, Service Request
           <ATTRIBUTE_DATA>CCI-001453</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. Mode 1 speaks MS-WSTEP to the AD CS Certificate Enrollment Web Service, which fixes the message format: a WS-Trust request whose BinarySecurityToken carries the CMS certificate request, secured by the HTTPS binding with Kerberos or client-certificate authentication. That binding defines no envelope signature, timestamp or SAML assertion, and the service would not validate one, so a client has no whole-message signing to supply. Integrity of the exchange rests on verified TLS and on the enrollment agent's CMS signature over the request and requester name, and CRAFT validates the returned certificate before using it. Modes 2 and 3 send no SOAP. The benchmark's own exemption covers applications without SOAP; this disposition instead records that the requirement cannot be implemented against the service.</FINDING_DETAILS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. Enrollment Agent speaks MS-WSTEP to the AD CS Certificate Enrollment Web Service, which fixes the message format: a WS-Trust request whose BinarySecurityToken carries the CMS certificate request, secured by the HTTPS binding with Kerberos or client-certificate authentication. That binding defines no envelope signature, timestamp or SAML assertion, and the service would not validate one, so a client has no whole-message signing to supply. Integrity of the exchange rests on verified TLS and on the enrollment agent's CMS signature over the request and requester name, and CRAFT validates the returned certificate before using it. Key Trust and BYOC send no SOAP. The benchmark's own exemption covers applications without SOAP; this disposition instead records that the requirement cannot be implemented against the service.</FINDING_DETAILS>
         <COMMENTS>Evidence: System-owner determination, 11 October 2026 (AD CS CES protocol constraint); MS-WSTEP; source/src/enroll.hpp: wrap_eobo, soap_request, send_ces, parse_response; source/src/worker.cpp: enroll. Follow-up: Reassess if Microsoft adds message-level protection to CES, or if CRAFT gains another SOAP endpoint.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -1667,7 +1667,7 @@ If messages using WS Security do not contain time stamps, sequence numbers, and 
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. CRAFT does not use WS-Security or SAML to protect messages. Its one SOAP exchange, MS-WSTEP with the AD CS Certificate Enrollment Web Service in mode 1, uses the BinarySecurityToken element only as the container that MS-WSTEP prescribes for the CMS certificate request and the returned certificate. The binding defines no security header, timestamp, validity period or assertion, and the service would not process one. The exchange is protected by verified TLS and the enrollment agent's CMS signature. Modes 2 and 3 send no SOAP.</FINDING_DETAILS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. CRAFT does not use WS-Security or SAML to protect messages. Its one SOAP exchange, MS-WSTEP with the AD CS Certificate Enrollment Web Service in Enrollment Agent, uses the BinarySecurityToken element only as the container that MS-WSTEP prescribes for the CMS certificate request and the returned certificate. The binding defines no security header, timestamp, validity period or assertion, and the service would not process one. The exchange is protected by verified TLS and the enrollment agent's CMS signature. Key Trust and BYOC send no SOAP.</FINDING_DETAILS>
         <COMMENTS>Evidence: System-owner determination, 11 October 2026 (AD CS CES protocol constraint); MS-WSTEP; source/src/enroll.hpp: soap_request, send_ces, parse_response. Follow-up: Reassess with V-222398 if the CES protocol changes.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -1786,7 +1786,7 @@ If the design document does not exist, or does not indicate validity periods are
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. CRAFT does not use WS-Security or SAML to protect messages. Its one SOAP exchange, MS-WSTEP with the AD CS Certificate Enrollment Web Service in mode 1, uses the BinarySecurityToken element only as the container that MS-WSTEP prescribes for the CMS certificate request and the returned certificate. The binding defines no security header, timestamp, validity period or assertion, and the service would not process one. The exchange is protected by verified TLS and the enrollment agent's CMS signature. Modes 2 and 3 send no SOAP.</FINDING_DETAILS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. CRAFT does not use WS-Security or SAML to protect messages. Its one SOAP exchange, MS-WSTEP with the AD CS Certificate Enrollment Web Service in Enrollment Agent, uses the BinarySecurityToken element only as the container that MS-WSTEP prescribes for the CMS certificate request and the returned certificate. The binding defines no security header, timestamp, validity period or assertion, and the service would not process one. The exchange is protected by verified TLS and the enrollment agent's CMS signature. Key Trust and BYOC send no SOAP.</FINDING_DETAILS>
         <COMMENTS>Evidence: System-owner determination, 11 October 2026 (AD CS CES protocol constraint); MS-WSTEP; source/src/enroll.hpp: soap_request, send_ces, parse_response. Follow-up: Reassess with V-222398 if the CES protocol changes.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -1905,7 +1905,7 @@ If the design document does not exist, or does not indicate SAML assertion ident
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The mode 1 PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The Enrollment Agent PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: soap_request, parse_response. Follow-up: Reassess if a SAML identity-provider or relying-party integration is introduced.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -2026,7 +2026,7 @@ If the design document does not exist, or does not indicate all WS-Security toke
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. CRAFT does not use WS-Security or SAML to protect messages. Its one SOAP exchange, MS-WSTEP with the AD CS Certificate Enrollment Web Service in mode 1, uses the BinarySecurityToken element only as the container that MS-WSTEP prescribes for the CMS certificate request and the returned certificate. The binding defines no security header, timestamp, validity period or assertion, and the service would not process one. The exchange is protected by verified TLS and the enrollment agent's CMS signature. Modes 2 and 3 send no SOAP.</FINDING_DETAILS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination, as a constraint of the server protocol. CRAFT does not use WS-Security or SAML to protect messages. Its one SOAP exchange, MS-WSTEP with the AD CS Certificate Enrollment Web Service in Enrollment Agent, uses the BinarySecurityToken element only as the container that MS-WSTEP prescribes for the CMS certificate request and the returned certificate. The binding defines no security header, timestamp, validity period or assertion, and the service would not process one. The exchange is protected by verified TLS and the enrollment agent's CMS signature. Key Trust and BYOC send no SOAP.</FINDING_DETAILS>
         <COMMENTS>Evidence: System-owner determination, 11 October 2026 (AD CS CES protocol constraint); MS-WSTEP; source/src/enroll.hpp: soap_request, send_ces, parse_response. Follow-up: Reassess with V-222398 if the CES protocol changes.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -2147,7 +2147,7 @@ If SOAP messages do not contain &lt;NotOnOrAfter&gt; elements, this is a finding
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The mode 1 PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The Enrollment Agent PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: soap_request, parse_response. Follow-up: Reassess if a SAML identity-provider or relying-party integration is introduced.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -2268,7 +2268,7 @@ If SOAP using the &lt;Conditions&gt; element does not contain &lt;NotBefore&gt; 
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The mode 1 PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The Enrollment Agent PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: soap_request, parse_response. Follow-up: Reassess if a SAML identity-provider or relying-party integration is introduced.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -2387,7 +2387,7 @@ If SOAP message uses more than one, OneTimeUse element in a SAML assertion, this
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The mode 1 PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The Enrollment Agent PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: soap_request, parse_response. Follow-up: Reassess if a SAML identity-provider or relying-party integration is introduced.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -2506,7 +2506,7 @@ If the SessionIndex is tied to privacy information, and it is not encrypted, thi
           <ATTRIBUTE_DATA>CCI-000068</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The mode 1 PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The Enrollment Agent PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: soap_request, parse_response. Follow-up: Reassess if a SAML identity-provider or relying-party integration is introduced.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -7684,7 +7684,7 @@ If HTTP headers are not logged, this is a finding.</ATTRIBUTE_DATA>
           <ATTRIBUTE_DATA>CCI-000169</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not operate an HTTP server receiving User-Agent, Referer, GET or POST requests from application users. Mode 1 sends its own fixed SOAP POST as a client; it does not accept HTTP application access.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not operate an HTTP server receiving User-Agent, Referer, GET or POST requests from application users. Enrollment Agent sends its own fixed SOAP POST as a client; it does not accept HTTP application access.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: send_ces; source/src/worker.cpp. Follow-up: Assess request-header auditing at the independently operated CES/web server.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -18600,7 +18600,7 @@ If SSL mutual authentication is required and is not being utilized, this is a fi
           <ATTRIBUTE_DATA>CCI-000778</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>Mode 1 supports either Negotiate or mutual TLS for CES. Verified server TLS plus Kerberos client authentication is not the same as TLS client-certificate authentication. Device non-repudiation and non-releasable-data requirements, the selected CES mode and endpoint configuration are not established for a deployment.</FINDING_DETAILS>
+        <FINDING_DETAILS>Enrollment Agent supports either Negotiate or mutual TLS for CES. Verified server TLS plus Kerberos client authentication is not the same as TLS client-certificate authentication. Device non-repudiation and non-releasable-data requirements, the selected CES mode and endpoint configuration are not established for a deployment.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/config.hpp: parse_config; source/src/enroll.hpp: send_ces; source/README.md. Follow-up: Determine whether the applicable service/device profile requires mutual TLS; inspect client/server certificate configuration and test it when required. Confirm scope for modes that do not consume CES.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -18875,7 +18875,7 @@ If SSL/TLS mutual authentication is required due to the application processing n
           <ATTRIBUTE_DATA>CCI-001967</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>Mode 1 supports either Negotiate or mutual TLS for CES. Verified server TLS plus Kerberos client authentication is not the same as TLS client-certificate authentication. Device non-repudiation and non-releasable-data requirements, the selected CES mode and endpoint configuration are not established for a deployment.</FINDING_DETAILS>
+        <FINDING_DETAILS>Enrollment Agent supports either Negotiate or mutual TLS for CES. Verified server TLS plus Kerberos client authentication is not the same as TLS client-certificate authentication. Device non-repudiation and non-releasable-data requirements, the selected CES mode and endpoint configuration are not established for a deployment.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/config.hpp: parse_config; source/src/enroll.hpp: send_ces; source/README.md. Follow-up: Determine whether the applicable service/device profile requires mutual TLS; inspect client/server certificate configuration and test it when required. Confirm scope for modes that do not consume CES.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -21026,7 +21026,7 @@ If the application does not construct a certificate path to an accepted trust an
           <ATTRIBUTE_DATA>CCI-000185</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>Modes 1 and 3 validate the user/agent chain with configured CA trust and CRL_CHECK/CRL_CHECK_ALL. All modes check that KDC trust/CRL files are safe and supply KDC anchors, but effective KDC CRL/hostname/EKU enforcement depends on administrator-controlled Kerberos configuration and the installed PKINIT plugin. Key Trust deliberately uses directory key authorization rather than a trusted user-CA chain, and adds its ephemeral issuer to the PKINIT anchor bundle. No blanket all-mode PKI-chain/revocation assurance follows from source alone.</FINDING_DETAILS>
+        <FINDING_DETAILS>Enrollment Agent and BYOC validate the user/agent chain with configured CA trust and CRL_CHECK/CRL_CHECK_ALL. All modes check that KDC trust/CRL files are safe and supply KDC anchors, but effective KDC CRL/hostname/EKU enforcement depends on administrator-controlled Kerberos configuration and the installed PKINIT plugin. Key Trust deliberately uses directory key authorization rather than a trusted user-CA chain, and adds its ephemeral issuer to the PKINIT anchor bundle. No blanket all-mode PKI-chain/revocation assurance follows from source alone.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/x509.hpp: verify_chain, validate_leaf; source/src/pkinit.hpp: get_tgt; source/src/worker.cpp; source/config/krb5.conf.example. Follow-up: Inspect effective Kerberos configuration/trust files and test revoked, expired, untrusted and missing-CRL cases against the actual plugin. Document the Key Trust authorization model and accepted trust anchors separately.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -21405,7 +21405,7 @@ If the application is not configured to implement a CRL, this is a finding.</ATT
           <ATTRIBUTE_DATA>CCI-001991</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>Modes 1 and 3 validate the user/agent chain with configured CA trust and CRL_CHECK/CRL_CHECK_ALL. All modes check that KDC trust/CRL files are safe and supply KDC anchors, but effective KDC CRL/hostname/EKU enforcement depends on administrator-controlled Kerberos configuration and the installed PKINIT plugin. Key Trust deliberately uses directory key authorization rather than a trusted user-CA chain, and adds its ephemeral issuer to the PKINIT anchor bundle. No blanket all-mode PKI-chain/revocation assurance follows from source alone.</FINDING_DETAILS>
+        <FINDING_DETAILS>Enrollment Agent and BYOC validate the user/agent chain with configured CA trust and CRL_CHECK/CRL_CHECK_ALL. All modes check that KDC trust/CRL files are safe and supply KDC anchors, but effective KDC CRL/hostname/EKU enforcement depends on administrator-controlled Kerberos configuration and the installed PKINIT plugin. Key Trust deliberately uses directory key authorization rather than a trusted user-CA chain, and adds its ephemeral issuer to the PKINIT anchor bundle. No blanket all-mode PKI-chain/revocation assurance follows from source alone.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/x509.hpp: verify_chain, validate_leaf; source/src/pkinit.hpp: get_tgt; source/src/worker.cpp; source/config/krb5.conf.example. Follow-up: Inspect effective Kerberos configuration/trust files and test revoked, expired, untrusted and missing-CRL cases against the actual plugin. Document the Key Trust authorization model and accepted trust anchors separately.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -24019,7 +24019,7 @@ If the application is using cryptographic modules that are not FIPS-validated wh
           <ATTRIBUTE_DATA>CCI-002450</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The mode 1 PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
+        <FINDING_DETAILS>CRAFT does not issue, consume or validate SAML assertions, SubjectConfirmation/Conditions elements, AuthnStatement or SAML SessionIndex values. The Enrollment Agent PKCS7 enrollment token is not a SAML assertion.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp: soap_request, parse_response. Follow-up: Reassess if a SAML identity-provider or relying-party integration is introduced.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
@@ -30745,7 +30745,7 @@ If deadlock issues are not being addressed via documented web service configurat
           <ATTRIBUTE_DATA>CCI-000366</ATTRIBUTE_DATA>
         </STIG_DATA>
         <STATUS>Not_Applicable</STATUS>
-        <FINDING_DETAILS>Mode 1 consumes the independently operated CES web service; CRAFT does not develop or host that service. The check explicitly exempts applications that consume web services without responsibility for their development. Local process/concurrency risks remain covered by other controls.</FINDING_DETAILS>
+        <FINDING_DETAILS>Enrollment Agent consumes the independently operated CES web service; CRAFT does not develop or host that service. The check explicitly exempts applications that consume web services without responsibility for their development. Local process/concurrency risks remain covered by other controls.</FINDING_DETAILS>
         <COMMENTS>Evidence: source/src/enroll.hpp; source/src/worker.cpp; source/README.md</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>

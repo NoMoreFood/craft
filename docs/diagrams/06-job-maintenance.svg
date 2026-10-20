@@ -27,7 +27,7 @@
   <text x="824" y="361.15" font-size="15" font-family="'Segoe UI', Arial, sans-serif" fill="#007F7C" font-weight="600" text-anchor="start">02 / FRESH AUTHENTICATION</text>
   <text x="824" y="401.68" font-size="28" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="start">Obtain fresh credentials</text>
   <text x="824" y="440.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Missing/expired credentials or TGT rollover;</text>
-  <text x="824" y="467.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">mode 4: the earliest service ticket is near expiry.</text>
+  <text x="824" y="467.39" font-size="19" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="400" text-anchor="start">Service-only cache: the earliest ticket is near expiry.</text>
   <text x="824" y="494.96" font-size="16" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="start">Rollover margin: 1/7 of the renewal window, capped at 1 day.</text>
   <rect x="64" y="522" width="191" height="79" rx="9" fill="#E3EBFA" stroke="none" stroke-width="1" />
   <text x="159.5" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">Cached TGT</text>
@@ -49,7 +49,7 @@
   <text x="913.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">select source</text>
   <rect x="1062" y="522" width="218" height="79" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
   <text x="1171.0" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">Selected mode</text>
-  <text x="1171.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">1, 2, 3 or 4</text>
+  <text x="1171.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">configured order</text>
   <rect x="1340" y="522" width="196" height="79" rx="9" fill="#E2F2EF" stroke="none" stroke-width="1" />
   <text x="1438.0" y="553.01" font-size="21" font-family="'Segoe UI', Arial, sans-serif" fill="#18334A" font-weight="600" text-anchor="middle">KDC</text>
   <text x="1438.0" y="582.77" font-size="17" font-family="'Segoe UI', Arial, sans-serif" fill="#586F7F" font-weight="400" text-anchor="middle">TGT or services</text>

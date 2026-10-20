@@ -1,0 +1,13 @@
+policy_module(craft_gssproxy, 1.0)
+
+gen_require(`
+    type gssproxy_t;
+')
+
+# Label the dedicated issuer's entire private home so temporary and replaced caches inherit this type.
+type craft_credential_t;
+files_type(craft_credential_t)
+
+# Kerberos may cache service tickets alongside the source TGT. Consumers receive no access to these files.
+files_search_var_lib(gssproxy_t)
+manage_files_pattern(gssproxy_t, craft_credential_t, craft_credential_t)

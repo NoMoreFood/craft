@@ -13,3 +13,5 @@
 CMakeLists.txt text eol=lf
 .clang-format text eol=lf
 source/config/* text eol=lf
+source/selinux/* text eol=lf
+source/tests/*.py text eol=lf
