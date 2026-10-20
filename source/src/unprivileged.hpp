@@ -93,7 +93,7 @@ inline void exit_with_peer(int fd)
 
 // Serialize broker attempts and charge one cooldown per launcher-generated request identifier. Later modes
 // share that admission; a new invocation cannot bypass it. Record admission before contacting a server.
-inline Fd rate_limit(int directory, uid_t uid, uint32_t interval, time_t now, std::string_view request = {})
+inline Fd rate_limit(int directory, uid_t uid, uint32_t interval, time_t now, std::string_view request)
 {
     Fd lock = open_private(directory, std::format("{}.lock", uid).c_str(), O_RDWR | O_CREAT, "issuance lock");
     sysneed(lock.get() >= 0, "open per-user issuance lock");
@@ -104,12 +104,15 @@ inline Fd rate_limit(int directory, uid_t uid, uint32_t interval, time_t now, st
     if (const auto last = read_record(lock.get()); !last.empty())
     {
         const auto space = last.find(' ');
+        need(space != last.npos && last.size() - space == 33 &&
+                 last.find_first_not_of("0123456789abcdef", space + 1) == last.npos,
+             "invalid issuance state");
         const auto then = number<uint64_t>(std::string_view(last).substr(0, space));
         const auto current = static_cast<uint64_t>(now);
-        if (!request.empty() && space != last.npos && last.substr(space + 1) == request) return lock;
+        if (last.substr(space + 1) == request) return lock;
         need(then > current || current - then >= interval, "per-user enrollment rate limit reached");
     }
-    write_record(lock.get(), request.empty() ? std::to_string(now) : std::format("{} {}", now, request));
+    write_record(lock.get(), std::format("{} {}", now, request));
     return lock;
 }
 

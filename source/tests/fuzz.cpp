@@ -141,7 +141,6 @@ void run(testing::FuzzTarget target, ByteView input, Fixture &fixture)
     {
         // A state file as an earlier run, or anyone who can write it, left it.
         const Fd file = file_holding(input);
-        if (const auto record = read_record(file.get()); !record.empty()) (void)number<uint64_t>(record);
         maintain::Result result;
         maintain::claim_enrollment(file.get(), 900, result);
         break;

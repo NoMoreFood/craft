@@ -295,28 +295,9 @@ namespace Craft
                 using (X509Certificate2 copy = new X509Certificate2(pfx, password, flags))
                 using (RSA rsa = RSACertificateExtensions.GetRSAPrivateKey(copy))
                 {
-                    // Export CNG keys directly and convert legacy CSP RSA keys using the native CNG encoder.
+                    // Export RSA keys with the native CNG encoder.
                     if (rsa is RSACng)
                         return ExportCng(((RSACng)rsa).Key);
-                    if (rsa != null)
-                    {
-                        RSAParameters parameters = rsa.ExportParameters(true);
-                        try
-                        {
-                            using (RSACng converted = new RSACng())
-                            {
-                                converted.ImportParameters(parameters);
-                                return ExportCng(converted.Key);
-                            }
-                        }
-                        finally
-                        {
-                            foreach (byte[] value in new byte[][] {
-                                parameters.D, parameters.P, parameters.Q,
-                                parameters.DP, parameters.DQ, parameters.InverseQ })
-                                if (value != null) Array.Clear(value, 0, value.Length);
-                        }
-                    }
 
                     // Windows ECDSA certificates use CNG's PKCS#8 encoder.
                     using (ECDsa ecdsa = ECDsaCertificateExtensions.GetECDsaPrivateKey(copy))
@@ -324,7 +305,7 @@ namespace Craft
                         if (ecdsa is ECDsaCng)
                             return ExportCng(((ECDsaCng)ecdsa).Key);
                     }
-                    throw new InvalidOperationException("Use an exportable RSA or ECDSA software-key template.");
+                    throw new InvalidOperationException("Use an exportable CNG RSA or ECDSA software-key template.");
                 }
             }
             finally

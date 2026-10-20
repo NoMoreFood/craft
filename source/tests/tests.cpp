@@ -773,24 +773,30 @@ static void process_tests()
          {
              const time_t now = 1700000000;
              {
-                 const Fd first = rate_limit(dir.get(), 1234, 60, now);
-                 rejects([&] { rate_limit(dir.get(), 1234, 60, now + 120); }); // still running
-                 const Fd other = rate_limit(dir.get(), 4321, 60, now);        // another user is independent
+                 const Fd first = rate_limit(dir.get(), 1234, 60, now, random_hex());
+                 rejects([&] { rate_limit(dir.get(), 1234, 60, now + 120, random_hex()); }); // still running
+                 const Fd other =
+                     rate_limit(dir.get(), 4321, 60, now, random_hex()); // another user is independent
              }
-             rejects([&] { rate_limit(dir.get(), 1234, 60, now + 59); });
+             rejects([&] { rate_limit(dir.get(), 1234, 60, now + 59, random_hex()); });
              {
                  // The refusal above must not have restarted the interval.
-                 const Fd later = rate_limit(dir.get(), 1234, 60, now + 60);
+                 const Fd later = rate_limit(dir.get(), 1234, 60, now + 60, random_hex());
              }
              {
                  // A clock stepped back restarts the interval instead of locking the user out until it
                  // catches up.
-                 const Fd stepped = rate_limit(dir.get(), 1234, 60, now - 3600);
+                 const Fd stepped = rate_limit(dir.get(), 1234, 60, now - 3600, random_hex());
              }
-             rejects([&] { rate_limit(dir.get(), 1234, 60, now - 3600 + 30); });
+             rejects([&] { rate_limit(dir.get(), 1234, 60, now - 3600 + 30, random_hex()); });
              const Fd record = open_private(dir.get(), "1234.lock", O_RDWR, "issuance lock");
-             write_record(record.get(), "not a time");
-             rejects([&] { rate_limit(dir.get(), 1234, 60, now); });
+             for (const auto &invalid : {std::to_string(now - 120),
+                                         std::format("{} invalid", now - 120),
+                                         std::string("not a time")})
+             {
+                 write_record(record.get(), invalid);
+                 rejects([&] { rate_limit(dir.get(), 1234, 60, now, random_hex()); });
+             }
          });
 
     test("broker fallback shares one request admission without bypassing locks or restarting the cooldown",
