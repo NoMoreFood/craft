@@ -72,10 +72,10 @@ inline void sslneed(bool good, std::string_view what)
 inline std::string objtext(const ASN1_OBJECT *o)
 {
     need(o != nullptr, "missing OID");
-    char s[256];
+    char s[256]{};
     const int n = OBJ_obj2txt(s, sizeof(s), o, 1);
     need(n > 0 && n < static_cast<int>(sizeof(s)), "invalid OID");
-    return s;
+    return {s, static_cast<size_t>(n)};
 }
 
 // Encode bounded ASN.1 structures by hand where OpenSSL has no typed builder.

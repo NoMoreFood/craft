@@ -89,7 +89,7 @@ inline Config parse_config(std::string_view text, std::optional<CertificateSourc
         if (value.empty()) fail("empty config value", key);
         if (!values.emplace(key, value).second) fail("duplicate config key", key);
     }
-    const auto optional = [&](std::string_view key, std::string fallback)
+    const auto optional = [&](std::string_view key, const std::string &fallback)
     {
         const auto found = values.find(key);
         return found == values.end() ? fallback : found->second;

@@ -125,18 +125,18 @@ inline Bytes wrap_eobo(X509_REQ *req, X509 *agent, EVP_PKEY *agent_key, std::str
 
 inline std::string xml_escape(std::string_view s)
 {
-    std::string out;
+    std::string escaped;
     for (const char c : s)
     {
         need(static_cast<unsigned char>(c) >= 32, "control in XML text");
-        if (c == '&') out += "&amp;";
-        else if (c == '<') out += "&lt;";
-        else if (c == '>') out += "&gt;";
-        else if (c == '"') out += "&quot;";
-        else if (c == '\'') out += "&apos;";
-        else out += c;
+        if (c == '&') escaped += "&amp;";
+        else if (c == '<') escaped += "&lt;";
+        else if (c == '>') escaped += "&gt;";
+        else if (c == '"') escaped += "&quot;";
+        else if (c == '\'') escaped += "&apos;";
+        else escaped += c;
     }
-    return out;
+    return escaped;
 }
 
 inline std::string random_uuid()
@@ -227,7 +227,7 @@ inline void reject_fault(xmlDocPtr doc)
 }
 
 // Require a unique issued certificate for the generated key.
-inline Cert parse_response(const std::string &body, EVP_PKEY *expected_key)
+inline Cert parse_response(const std::string &body, const EVP_PKEY *expected_key)
 {
     const auto doc = parse_soap(body);
     reject_fault(doc.get());

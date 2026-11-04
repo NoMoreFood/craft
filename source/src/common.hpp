@@ -104,7 +104,7 @@ public:
 
     [[nodiscard]] std::string_view summary() const noexcept
     {
-        return std::string_view(what()).substr(0, summary_);
+        return {what(), ::strnlen(what(), summary_)};
     }
 };
 
@@ -324,7 +324,7 @@ inline std::string caller_notice(const std::exception &error)
 {
     const auto *failure = dynamic_cast<const Failure *>(&error);
     const std::string_view summary = failure ? failure->summary() : "unexpected failure";
-    if (failure && summary.size() == std::strlen(error.what())) return sanitize_ascii(summary);
+    if (failure && error.what()[summary.size()] == '\0') return sanitize_ascii(summary);
     return sanitize_ascii(std::format("{}: see the system log under {}[{}]", summary, program, getpid()));
 }
 
@@ -461,7 +461,7 @@ inline void close_listed_from(int first)
     while (const dirent *entry = readdir(listing))
     {
         int fd{};
-        const auto end = entry->d_name + std::strlen(entry->d_name);
+        const auto end = entry->d_name + ::strnlen(entry->d_name, sizeof(entry->d_name));
         if (std::from_chars(entry->d_name, end, fd).ptr == end && fd >= first && fd != dirfd(listing))
             open.push_back(fd);
     }
@@ -581,8 +581,8 @@ public:
     [[nodiscard]] bool wait(int expected = 0)
     {
         int status{};
-        const pid_t pid = std::exchange(pid_, -1);
-        sysneed(waitpid_retry(pid, &status) == pid, "waitpid");
+        const pid_t child = std::exchange(pid_, -1);
+        sysneed(waitpid_retry(child, &status) == child, "waitpid");
         return WIFEXITED(status) && WEXITSTATUS(status) == expected;
     }
 };

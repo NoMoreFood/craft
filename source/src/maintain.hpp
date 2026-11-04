@@ -420,7 +420,8 @@ inline void update(const Account &caller, const std::string &expected, Result &r
             auto text = krb_owner<char, krb5_free_unparsed_name>(ctx);
             krb_check(ctx, krb5_unparse_name(ctx, client.get(), out(text)), "format cache principal");
             need(expected.empty() || expected == text.get(), "maintained principal changed");
-            need(std::strlen(text.get()) < sizeof(result.principal), "cache principal is too long");
+            need(::strnlen(text.get(), sizeof(result.principal)) < sizeof(result.principal),
+                 "cache principal is too long");
             set_text(result.principal, text.get());
             server = tgs_principal(ctx, std::string_view(realm->data, realm->length));
             krb5_creds match{};
@@ -571,8 +572,6 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
     const auto deadline =
         option.maximum ? Clock::now() + std::chrono::seconds(option.maximum) : Clock::time_point::max();
     bool announced = false;
-    uint32_t failures = 0;
-    std::string expected;
     ScopeExit close_ready(
         [&]() noexcept
         {
@@ -588,6 +587,8 @@ inline void serve(const Account &caller, const Options &option, const Watch &wat
         // Maintenance does not begin unless the host logging service takes this record.
         audit(LOG_INFO, std::format("maintenance started uid={} job={}", caller.uid, option.watch));
         prune_stale_files(caller_home(caller).get(), time(nullptr));
+        uint32_t failures = 0;
+        std::string expected;
         while (!stopping && Clock::now() < deadline && !exited(watch))
         {
             Result result;
