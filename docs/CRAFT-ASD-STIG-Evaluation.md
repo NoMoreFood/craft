@@ -4,8 +4,8 @@
 > **Benchmark**: Application Security and Development STIG, Version 6, Release 5  
 > **Benchmark Date**: 30 September 2026  
 > **Assessment Basis**: Repository source and recorded validation, with fully STIG-compliant OSs and AD assumed; no independent host assessment  
-> **Revised**: 11 October 2026, for source commit `c107bef` and the system owner's determinations in section 1  
-> **Overall Status**: Incomplete - 0 Open, 50 Not Reviewed, 109 Not a Finding, 127 Not Applicable
+> **Source Review Basis**: Source commit `c107bef` and the system owner's determinations in section 1\
+> **Overall Status**: Incomplete - 0 Open, 45 Not Reviewed, 109 Not a Finding, 132 Not Applicable
 
 ## 1. Scope and assessment method
 
@@ -51,10 +51,11 @@ The distinction between infrastructure and application semantics is material. RH
 
 ### System-owner determinations
 
-On 11 October 2026 the system owner gave the dispositions below. Each control closed on one of them cites it, and none is an independently observed host configuration.
+The system owner's determinations below establish the application scope and inherited controls used by this assessment. Each closed control cites its applicable determination. Platform inheritance relies on the assessment assumptions.
 
 | Determination | Effect |
 | --- | --- |
+| CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. | V-222453, V-222457 and V-222461 are Not Applicable under the compartmentalized-data exemption; V-222664 and V-265634 are Not Applicable because CRAFT does not process classified information. |
 | Multifactor authentication is inherited from the operating system. Users reach CRAFT from an authenticated host session, and administrators must authenticate with MFA to install or administer it. | The PIV and MFA controls, and the lockout and non-organizational-user controls that follow from host logon, are inherited. |
 | CRAFT is maintained on GitHub and distributed as source, with no binaries. | Signed-release and release-hash controls are Not Applicable. |
 | Backup and recovery are deferred to the operating-system configuration. | Contingency, backup, restoration and stored-data protection controls are inherited. |
@@ -67,15 +68,15 @@ On 11 October 2026 the system owner gave the dispositions below. Each control cl
 | Severity | Total | Not a Finding | Not Applicable | Open | Not Reviewed |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | CAT I (High) | 34 | 11 | 16 | 0 | 7 |
-| CAT II (Medium) | 230 | 97 | 98 | 0 | 35 |
+| CAT II (Medium) | 230 | 97 | 103 | 0 | 30 |
 | CAT III (Low) | 22 | 1 | 13 | 0 | 8 |
-| **Total** | **286** | **109** | **127** | **0** | **50** |
+| **Total** | **286** | **109** | **132** | **0** | **45** |
 
 ## 2. Benchmark and authoritative sources
 
 The authoritative source is DISA's [U_ASD_V6R5_STIG.zip](https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_ASD_V6R5_STIG.zip), containing `U_ASD_STIG_V6R5_Manual-xccdf.xml` and the benchmark overview/revision history. The XCCDF benchmark ID is `Application_Security_Development_STIG`; its release metadata is `Release: 5 Benchmark Date: 30 Sep 2026`. The benchmark contains 34 high, 230 medium and 22 low severity rules. Rule IDs, titles, severities, CCIs, group titles and full checklist text are taken from that XCCDF, including its DoW terminology.
 
-The current password-age control, **V-222545 / APSC-DV-001770**, specifies a **180-day** maximum. It is Not Applicable to the passwordless CRAFT interface. **V-222643 / APSC-DV-003120** explicitly allows Not Applicable when a system processes no sensitive/classified/CUI information and requires no classification markings. This assessment leaves that determination Not Reviewed because the information owner's data scope is not supplied.
+The current password-age control, **V-222545 / APSC-DV-001770**, specifies a **180-day** maximum. It is Not Applicable to the passwordless CRAFT interface. **V-222643 / APSC-DV-003120** explicitly allows Not Applicable when a system processes no sensitive/classified/CUI information and requires no classification markings. The system owner excludes classified and compartmentalized information, but CUI, other sensitive data and marking requirements remain to be determined for these marking controls.
 
 Archive SHA-256: `b73e8a74d591982d49cdc9e0c5c0023b37ab87d91f3f3f150d6dab8baa23c435`. The [DISA release announcement](https://www.cyber.mil/stigs/stig-announcements) identifies the Application Security and Development STIG as Version 6, Release 5.
 
@@ -97,11 +98,11 @@ The application's current network acquisition modes use software-backed credenti
 
 ## 4. Open findings and closure priorities
 
-No control is Open and 50 are Not Reviewed. None of them is a missing mechanism in the operating system or Active Directory; each needs a decision or a record that only the system owner, the deployment or the development team can supply.
+No control is Open and 45 are Not Reviewed. None of them is a missing mechanism in the operating system or Active Directory; each needs a decision or a record that only the system owner, the deployment or the development team can supply.
 
 | Area | Controls | Required closure |
 | --- | --- | --- |
-| Deployment and data profile | V-222393, V-222394, V-222395, V-222423, V-222424, V-222453, V-222457, V-222461, V-222643, V-222664, V-265634 | The information owner's data classification, marking and compartmentalization requirements, and whether classified data or a National Security System is in scope. Most of these become Not Applicable once that is stated. |
+| Deployment and data profile | V-222393, V-222394, V-222395, V-222423, V-222424, V-222643 | The information owner's CUI and other marking requirements, credential/data-protection requirements and any required data-mining protections; whether a National Security System is in scope. |
 | Mode and capability profile | V-222518 | The approved set of modes for the deployment. |
 | Log content review | V-222444 | Review of success and failure records from each deployed mode for sensitive data. |
 | PKI and CES transport profile | V-222532, V-222534, V-222550, V-222553, V-222584 | The approved trust anchors, CRLs and CES authentication mode, with revoked, untrusted and missing-CRL tests against the deployed KDC and CES. |
@@ -115,12 +116,12 @@ The four enrollment SOAP controls (V-222398, V-222399, V-222400, V-222402) are N
 
 ### Closed since the first assessment
 
-The first assessment recorded 17 Open and 117 Not Reviewed controls. Eighty-four have since been closed in three ways.
+The first assessment recorded 17 Open and 117 Not Reviewed controls. Eighty-nine have since been closed in three ways.
 
 | Basis | Controls |
 | --- | --- |
 | Source commit `c107bef`: audit records for requests, issuance, Key Trust changes, publication and renewal; a stop when the host logging service does not take a record; caller-visible summaries with detail kept for the log; a recorded fuzz procedure and run | V-222455, V-222468, V-222469, V-222472, V-222486, V-222600, V-222610, V-222611, V-222624 |
-| System-owner determinations of 11 October 2026 (section 1) on MFA, logging, backup, source-only distribution and other platform mechanisms, including the host audit and logging services that complete the controls above | Seventy-one controls, listed with their basis in the inherited-controls table and in each entry |
+| System-owner determinations (section 1) on application data scope, MFA, logging, backup, source-only distribution and other platform mechanisms, including the host audit and logging services that complete the controls above | Seventy-six controls, with their basis in the inherited-controls table and individual entries |
 | System-owner determination that the AD CS CES protocol fixes the enrollment SOAP message format | V-222398, V-222399, V-222400, V-222402 |
 
 Two caveats travel with these closures. The example host audit rules in `source/config/craft.audit.rules` were written to convention and have not been loaded on a live host by this assessment. And five transport controls (V-222396, V-222397, V-222597, V-222598, V-222599) name TLS in their check text, while CRAFT's directory connection uses the GSSAPI security layer that Active Directory requires; an assessor must accept that as the equivalent.
@@ -131,7 +132,7 @@ Two caveats travel with these closures. The example host audit rules in `source/
 
 None.
 
-### 5.2. Evidence or applicability pending (50 controls)
+### 5.2. Evidence or applicability pending (45 controls)
 
 #### [V-222393] APSC-DV-000110 - The application must associate organization-defined types of security attributes having organization-defined security attribute values with information in storage.
 
@@ -180,30 +181,6 @@ None.
 - **Evaluation Status**: **`Not_Reviewed`**
 - **Finding Details / Assessment**: Intended logging paths do not serialize private keys, ticket ciphertext or session-key bytes. However, sanitized library error strings and CES SOAP fault text are relayed into diagnostics/audit messages. Character filtering is not sensitive-data redaction, and no deployed success/failure log corpus was reviewed.
 - **Comments / Evidence**: Evidence: [source/src/worker.cpp](../source/src/worker.cpp); [source/src/enroll.hpp](../source/src/enroll.hpp): reject_fault, send_ces; [source/src/common.hpp](../source/src/common.hpp): sanitize_ascii; [source/src/maintain.hpp](../source/src/maintain.hpp). Follow-up: Inspect realistic success/failure logs from every enabled mode and maintainer, including CES faults and library errors, for credentials and other sensitive data. Use synthetic secrets for negative tests.
-
-#### [V-222453] APSC-DV-000740 - The application must generate audit records when successful/unsuccessful attempts to access categories of information (e.g., classification levels) occur.
-
-- **Rule ID**: `SV-222453r961797_rule`
-- **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
-- **Evaluation Status**: **`Not_Reviewed`**
-- **Finding Details / Assessment**: The repository does not establish organization-defined data-mining, non-repudiation or compartmentalized information requirements. Credential-helper architecture alone does not establish the policy-dependent exemption for this control.
-- **Comments / Evidence**: Evidence: [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md). Follow-up: Obtain the applicable information-protection policy and scope decision. Demonstrate the required mechanism and events if applicable, or record the documented basis for Not Applicable.
-
-#### [V-222457] APSC-DV-000780 - The application must generate audit records when successful/unsuccessful attempts to modify categories of information (e.g., classification levels) occur.
-
-- **Rule ID**: `SV-222457r961809_rule`
-- **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
-- **Evaluation Status**: **`Not_Reviewed`**
-- **Finding Details / Assessment**: The repository does not establish organization-defined data-mining, non-repudiation or compartmentalized information requirements. Credential-helper architecture alone does not establish the policy-dependent exemption for this control.
-- **Comments / Evidence**: Evidence: [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md). Follow-up: Obtain the applicable information-protection policy and scope decision. Demonstrate the required mechanism and events if applicable, or record the documented basis for Not Applicable.
-
-#### [V-222461] APSC-DV-000820 - The application must generate audit records when successful/unsuccessful attempts to delete categories of information (e.g., classification levels) occur.
-
-- **Rule ID**: `SV-222461r961821_rule`
-- **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
-- **Evaluation Status**: **`Not_Reviewed`**
-- **Finding Details / Assessment**: The repository does not establish organization-defined data-mining, non-repudiation or compartmentalized information requirements. Credential-helper architecture alone does not establish the policy-dependent exemption for this control.
-- **Comments / Evidence**: Evidence: [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md). Follow-up: Obtain the applicable information-protection policy and scope decision. Demonstrate the required mechanism and events if applicable, or record the documented basis for Not Applicable.
 
 #### [V-222515] APSC-DV-001460 - An application vulnerability assessment must be conducted.
 
@@ -493,14 +470,6 @@ None.
 - **Finding Details / Assessment**: OS/domain patches, vendor support and distribution-managed dependencies are covered by the platform assumption. CRAFT itself is locally built/installed; its release-update checks, superseded-build removal, maintenance responsibility and decommission/user-notification process are not established merely by a compliant OS package inventory.
 - **Comments / Evidence**: Evidence: [README.md](../README.md): Project status; [source/README.md](../source/README.md); [source/CMakeLists.txt](../source/CMakeLists.txt); [source/SECURITY.md](../source/SECURITY.md). Follow-up: Assign an application maintainer; document weekly release/security review, supported builds, replacement/removal and decommission notifications. Use the existing OS package/update mechanism for CRAFT where practical, with a verified release artifact.
 
-#### [V-222664] APSC-DV-003290 - If the application contains classified data, a Security Classification Guide must exist containing data elements and their classification.
-
-- **Rule ID**: `SV-222664r1051277_rule`
-- **Severity**: **MEDIUM** | **CCIs**: `CCI-003124`
-- **Evaluation Status**: **`Not_Reviewed`**
-- **Finding Details / Assessment**: The source review does not establish whether the deployment processes classified information or SAMI. Ordinary OpenSSL/Kerberos cryptography does not demonstrate NSA Type 1 or other required classified-data protections, and the repository supplies no deployment Security Classification Guide.
-- **Comments / Evidence**: Evidence: [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md); [source/CMakeLists.txt](../source/CMakeLists.txt). Follow-up: Obtain the classification/network designation. Use Not Applicable only for a documented nonclassified scope; otherwise review the required classification guide and approved cryptographic protections.
-
 #### [V-222669] APSC-DV-003340 - At least one application administrator must be registered to receive update notifications, or security alerts, when automated alerts are available.
 
 - **Rule ID**: `SV-222669r961863_rule`
@@ -524,14 +493,6 @@ None.
 - **Evaluation Status**: **`Not_Reviewed`**
 - **Finding Details / Assessment**: Source code, tests and coding style do not establish annual job-specific security/SDLC training for program management, designers, developers and testers. No personnel training records were reviewed.
 - **Comments / Evidence**: Evidence: [README.md](../README.md); [source/TESTING.md](../source/TESTING.md). Follow-up: Provide the annual role-specific training program and completion records required by the check.
-
-#### [V-265634] APSC-DV-002010 - The application must implement NSA-approved cryptography to protect classified information in accordance with applicable federal laws, Executive Orders, directives, policies, regulations, and standards.
-
-- **Rule ID**: `SV-265634r1117183_rule`
-- **Severity**: **MEDIUM** | **CCIs**: `CCI-002450`
-- **Evaluation Status**: **`Not_Reviewed`**
-- **Finding Details / Assessment**: The source review does not establish whether the deployment processes classified information or SAMI. Ordinary OpenSSL/Kerberos cryptography does not demonstrate NSA Type 1 or other required classified-data protections, and the repository supplies no deployment Security Classification Guide.
-- **Comments / Evidence**: Evidence: [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md); [source/CMakeLists.txt](../source/CMakeLists.txt). Follow-up: Obtain the classification/network designation. Use Not Applicable only for a documented nonclassified scope; otherwise review the required classification guide and approved cryptographic protections.
 
 ### 5.3. Source behavior or inherited controls supported (109 controls)
 
@@ -1407,7 +1368,7 @@ None.
 - **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. CRAFT exposes no listener and is not publicly accessible. The enclave boundary and any DMZ for the services it reaches are those of the network and host.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (deferred to the OS). Follow-up: None for CRAFT.
 
-### 5.4. Benchmark exemptions and absent features (127 controls)
+### 5.4. Benchmark exemptions and absent features (132 controls)
 
 #### [V-222387] APSC-DV-000010 - The application must provide a capability to limit the number of logon sessions per user.
 
@@ -1745,6 +1706,14 @@ None.
 - **Finding Details / Assessment**: CRAFT does not expose application role/security-level creation, assignment, modification, deletion or user role switching. It requests the caller's existing identity and does not grant that AD account new authorization privileges. OS credential transitions and delegated credential operations still require auditing under the applicable privileged-function and security-object controls.
 - **Comments / Evidence**: Evidence: [source/src/launcher.cpp](../source/src/launcher.cpp); [source/src/worker.cpp](../source/src/worker.cpp); [source/src/pkinit.hpp](../source/src/pkinit.hpp). Follow-up: Reassess if application-managed roles or privilege-management features are added.
 
+#### [V-222453] APSC-DV-000740 - The application must generate audit records when successful/unsuccessful attempts to access categories of information (e.g., classification levels) occur.
+
+- **Rule ID**: `SV-222453r961797_rule`
+- **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
+- **Evaluation Status**: **`Not_Applicable`**
+- **Finding Details / Assessment**: Not applicable by the system owner's determination: CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. The benchmark's check explicitly permits Not Applicable for this scope. Protection of credentials and auditing of credential operations remain governed by their applicable controls.
+- **Comments / Evidence**: Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md). Follow-up: Reassess if CRAFT's requirements include classified or compartmentalized information or category-based access controls.
+
 #### [V-222454] APSC-DV-000750 - The application must generate audit records when successful/unsuccessful attempts to modify privileges occur.
 
 - **Rule ID**: `SV-222454r961800_rule`
@@ -1760,6 +1729,14 @@ None.
 - **Evaluation Status**: **`Not_Applicable`**
 - **Finding Details / Assessment**: CRAFT does not expose application role/security-level creation, assignment, modification, deletion or user role switching. It requests the caller's existing identity and does not grant that AD account new authorization privileges. OS credential transitions and delegated credential operations still require auditing under the applicable privileged-function and security-object controls.
 - **Comments / Evidence**: Evidence: [source/src/launcher.cpp](../source/src/launcher.cpp); [source/src/worker.cpp](../source/src/worker.cpp); [source/src/pkinit.hpp](../source/src/pkinit.hpp). Follow-up: Reassess if application-managed roles or privilege-management features are added.
+
+#### [V-222457] APSC-DV-000780 - The application must generate audit records when successful/unsuccessful attempts to modify categories of information (e.g., classification levels) occur.
+
+- **Rule ID**: `SV-222457r961809_rule`
+- **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
+- **Evaluation Status**: **`Not_Applicable`**
+- **Finding Details / Assessment**: Not applicable by the system owner's determination: CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. The benchmark's check explicitly permits Not Applicable for this scope. Protection of credentials and auditing of credential operations remain governed by their applicable controls.
+- **Comments / Evidence**: Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md). Follow-up: Reassess if CRAFT's requirements include classified or compartmentalized information or category-based access controls.
 
 #### [V-222458] APSC-DV-000790 - The application must generate audit records when successful/unsuccessful attempts to delete privileges occur.
 
@@ -1784,6 +1761,14 @@ None.
 - **Evaluation Status**: **`Not_Applicable`**
 - **Finding Details / Assessment**: CRAFT has no relational database, SQL query interface, database security objects or production-to-test database exports. Active Directory access uses LDAP and is evaluated under directory/credential controls.
 - **Comments / Evidence**: Evidence: [source/src/directory.hpp](../source/src/directory.hpp); [source/src/worker.cpp](../source/src/worker.cpp); [source/README.md](../source/README.md)
+
+#### [V-222461] APSC-DV-000820 - The application must generate audit records when successful/unsuccessful attempts to delete categories of information (e.g., classification levels) occur.
+
+- **Rule ID**: `SV-222461r961821_rule`
+- **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
+- **Evaluation Status**: **`Not_Applicable`**
+- **Finding Details / Assessment**: Not applicable by the system owner's determination: CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. The benchmark's check explicitly permits Not Applicable for this scope. Protection of credentials and auditing of credential operations remain governed by their applicable controls.
+- **Comments / Evidence**: Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md). Follow-up: Reassess if CRAFT's requirements include classified or compartmentalized information or category-based access controls.
 
 #### [V-222464] APSC-DV-000850 - The application must generate audit records showing starting and ending time for user access to the system.
 
@@ -2401,6 +2386,14 @@ None.
 - **Finding Details / Assessment**: CRAFT does not create, accept, prompt for, hash, change or distribute application user passwords/PINs or ship a default password. PKINIT uses private keys; directory/CES machine authentication uses an administrator-provisioned keytab or TLS key. Password lifecycle for externally managed host/AD accounts must be assessed in those systems.
 - **Comments / Evidence**: Evidence: [source/src/pkinit.hpp](../source/src/pkinit.hpp): acquire_transport, refuse_prompt, get_tgt; [source/src/x509.hpp](../source/src/x509.hpp): read_key; [source/config/config.example](../source/config/config.example); [source/README.md](../source/README.md)
 
+#### [V-222664] APSC-DV-003290 - If the application contains classified data, a Security Classification Guide must exist containing data elements and their classification.
+
+- **Rule ID**: `SV-222664r1051277_rule`
+- **Severity**: **MEDIUM** | **CCIs**: `CCI-003124`
+- **Evaluation Status**: **`Not_Applicable`**
+- **Finding Details / Assessment**: Not applicable by the system owner's determination that CRAFT does not manage classified information. The benchmark's check explicitly excludes applications that do not process classified information, so an application Security Classification Guide is not required for this scope. Credential protection and other data-handling requirements remain governed by their applicable controls.
+- **Comments / Evidence**: Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md); [source/CMakeLists.txt](../source/CMakeLists.txt). Follow-up: Reassess if CRAFT's scope includes classified information or requires an application Security Classification Guide.
+
 #### [V-222665] APSC-DV-003300 - The designer must ensure uncategorized or emerging mobile code is not used in applications.
 
 - **Rule ID**: `SV-222665r961863_rule`
@@ -2424,3 +2417,10 @@ None.
 - **Evaluation Status**: **`Not_Applicable`**
 - **Finding Details / Assessment**: CRAFT does not provide a server-side user logon service spanning remote workstations or maintain concurrent workstation sessions. Per-user local issuance locks are not a cross-workstation session monitor. The KDC and downstream services must assess their own concurrent logon auditing.
 - **Comments / Evidence**: Evidence: [source/src/launcher.cpp](../source/src/launcher.cpp); [source/src/unprivileged.hpp](../source/src/unprivileged.hpp): rate_limit; [source/src/maintain.hpp](../source/src/maintain.hpp)
+#### [V-265634] APSC-DV-002010 - The application must implement NSA-approved cryptography to protect classified information in accordance with applicable federal laws, Executive Orders, directives, policies, regulations, and standards.
+
+- **Rule ID**: `SV-265634r1117183_rule`
+- **Severity**: **MEDIUM** | **CCIs**: `CCI-002450`
+- **Evaluation Status**: **`Not_Applicable`**
+- **Finding Details / Assessment**: Not applicable by the system owner's determination that CRAFT does not manage classified information. The benchmark's check explicitly excludes applications that do not process classified data. Cryptographic protection of unclassified credentials and communications remains governed by the applicable unclassified cryptography controls.
+- **Comments / Evidence**: Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); [source/SECURITY.md](../source/SECURITY.md); [source/README.md](../source/README.md); [source/CMakeLists.txt](../source/CMakeLists.txt). Follow-up: Reassess if CRAFT's scope includes classified information requiring NSA-approved cryptography.

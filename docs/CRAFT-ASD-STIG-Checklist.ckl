@@ -8426,9 +8426,9 @@ If the application does not generate an audit record when successful and unsucce
           <VULN_ATTRIBUTE>CCI_REF</VULN_ATTRIBUTE>
           <ATTRIBUTE_DATA>CCI-000172</ATTRIBUTE_DATA>
         </STIG_DATA>
-        <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>The repository does not establish organization-defined data-mining, non-repudiation or compartmentalized information requirements. Credential-helper architecture alone does not establish the policy-dependent exemption for this control.</FINDING_DETAILS>
-        <COMMENTS>Evidence: source/SECURITY.md; source/README.md. Follow-up: Obtain the applicable information-protection policy and scope decision. Demonstrate the required mechanism and events if applicable, or record the documented basis for Not Applicable.</COMMENTS>
+        <STATUS>Not_Applicable</STATUS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination: CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. The benchmark's check explicitly permits Not Applicable for this scope. Protection of credentials and auditing of credential operations remain governed by their applicable controls.</FINDING_DETAILS>
+        <COMMENTS>Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); source/SECURITY.md; source/README.md. Follow-up: Reassess if CRAFT's requirements include classified or compartmentalized information or category-based access controls.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
       </VULN>
@@ -8937,9 +8937,9 @@ If the application does not generate an audit record when successful and unsucce
           <VULN_ATTRIBUTE>CCI_REF</VULN_ATTRIBUTE>
           <ATTRIBUTE_DATA>CCI-000172</ATTRIBUTE_DATA>
         </STIG_DATA>
-        <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>The repository does not establish organization-defined data-mining, non-repudiation or compartmentalized information requirements. Credential-helper architecture alone does not establish the policy-dependent exemption for this control.</FINDING_DETAILS>
-        <COMMENTS>Evidence: source/SECURITY.md; source/README.md. Follow-up: Obtain the applicable information-protection policy and scope decision. Demonstrate the required mechanism and events if applicable, or record the documented basis for Not Applicable.</COMMENTS>
+        <STATUS>Not_Applicable</STATUS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination: CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. The benchmark's check explicitly permits Not Applicable for this scope. Protection of credentials and auditing of credential operations remain governed by their applicable controls.</FINDING_DETAILS>
+        <COMMENTS>Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); source/SECURITY.md; source/README.md. Follow-up: Reassess if CRAFT's requirements include classified or compartmentalized information or category-based access controls.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
       </VULN>
@@ -9447,9 +9447,9 @@ If the application does not generate an audit record when successful and unsucce
           <VULN_ATTRIBUTE>CCI_REF</VULN_ATTRIBUTE>
           <ATTRIBUTE_DATA>CCI-000172</ATTRIBUTE_DATA>
         </STIG_DATA>
-        <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>The repository does not establish organization-defined data-mining, non-repudiation or compartmentalized information requirements. Credential-helper architecture alone does not establish the policy-dependent exemption for this control.</FINDING_DETAILS>
-        <COMMENTS>Evidence: source/SECURITY.md; source/README.md. Follow-up: Obtain the applicable information-protection policy and scope decision. Demonstrate the required mechanism and events if applicable, or record the documented basis for Not Applicable.</COMMENTS>
+        <STATUS>Not_Applicable</STATUS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination: CRAFT does not manage classified or compartmentalized information, and its requirements do not call for compartmentalized data protection. The benchmark's check explicitly permits Not Applicable for this scope. Protection of credentials and auditing of credential operations remain governed by their applicable controls.</FINDING_DETAILS>
+        <COMMENTS>Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); source/SECURITY.md; source/README.md. Follow-up: Reassess if CRAFT's requirements include classified or compartmentalized information or category-based access controls.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
       </VULN>
@@ -23520,9 +23520,9 @@ Implement NSA-validated type-1 encryption of all SAMI data stored in the enclave
           <VULN_ATTRIBUTE>CCI_REF</VULN_ATTRIBUTE>
           <ATTRIBUTE_DATA>CCI-002450</ATTRIBUTE_DATA>
         </STIG_DATA>
-        <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>The source review does not establish whether the deployment processes classified information or SAMI. Ordinary OpenSSL/Kerberos cryptography does not demonstrate NSA Type 1 or other required classified-data protections, and the repository supplies no deployment Security Classification Guide.</FINDING_DETAILS>
-        <COMMENTS>Evidence: source/SECURITY.md; source/README.md; source/CMakeLists.txt. Follow-up: Obtain the classification/network designation. Use Not Applicable only for a documented nonclassified scope; otherwise review the required classification guide and approved cryptographic protections.</COMMENTS>
+        <STATUS>Not_Applicable</STATUS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination that CRAFT does not manage classified information. The benchmark's check explicitly excludes applications that do not process classified data. Cryptographic protection of unclassified credentials and communications remains governed by the applicable unclassified cryptography controls.</FINDING_DETAILS>
+        <COMMENTS>Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); source/SECURITY.md; source/README.md; source/CMakeLists.txt. Follow-up: Reassess if CRAFT's scope includes classified information requiring NSA-approved cryptography.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
       </VULN>
@@ -35804,9 +35804,9 @@ If the security classification guide does not exist, or does not contain applica
           <VULN_ATTRIBUTE>CCI_REF</VULN_ATTRIBUTE>
           <ATTRIBUTE_DATA>CCI-003124</ATTRIBUTE_DATA>
         </STIG_DATA>
-        <STATUS>Not_Reviewed</STATUS>
-        <FINDING_DETAILS>The source review does not establish whether the deployment processes classified information or SAMI. Ordinary OpenSSL/Kerberos cryptography does not demonstrate NSA Type 1 or other required classified-data protections, and the repository supplies no deployment Security Classification Guide.</FINDING_DETAILS>
-        <COMMENTS>Evidence: source/SECURITY.md; source/README.md; source/CMakeLists.txt. Follow-up: Obtain the classification/network designation. Use Not Applicable only for a documented nonclassified scope; otherwise review the required classification guide and approved cryptographic protections.</COMMENTS>
+        <STATUS>Not_Applicable</STATUS>
+        <FINDING_DETAILS>Not applicable by the system owner's determination that CRAFT does not manage classified information. The benchmark's check explicitly excludes applications that do not process classified information, so an application Security Classification Guide is not required for this scope. Credential protection and other data-handling requirements remain governed by their applicable controls.</FINDING_DETAILS>
+        <COMMENTS>Evidence: System-owner scope determination (CRAFT does not manage classified or compartmentalized information); source/SECURITY.md; source/README.md; source/CMakeLists.txt. Follow-up: Reassess if CRAFT's scope includes classified information or requires an application Security Classification Guide.</COMMENTS>
         <SEVERITY_OVERRIDE></SEVERITY_OVERRIDE>
         <SEVERITY_JUSTIFICATION></SEVERITY_JUSTIFICATION>
       </VULN>
