@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(craft VERSION 3.2 DESCRIPTION "Certificate Request Agent For Tickets" LANGUAGES CXX)
+project(craft VERSION 3.3 DESCRIPTION "Certificate Request Agent For Tickets" LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -84,16 +84,13 @@ add_executable(craft-maintain src/maintain.cpp)
 target_link_libraries(craft-worker PRIVATE PkgConfig::KRB5 PkgConfig::GSSAPI PkgConfig::WORKER craft-ldap)
 target_link_libraries(craft-maintain PRIVATE PkgConfig::KRB5)
 
-# The optional wrapper names the configured launcher; emit it executable whatever mode the checkout recorded.
-configure_file(scripts/with-craft.in "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft" @ONLY NEWLINE_STYLE UNIX)
-file(COPY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}"
-     FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-# Applications can opt into a separately configured GSS-Proxy service without running the issuer.
-configure_file(scripts/with-craft-gssproxy.in "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft-gssproxy"
-               @ONLY NEWLINE_STYLE UNIX)
-file(COPY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/with-craft-gssproxy" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}"
-     FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+# Emit both optional wrappers executable whatever mode the checkout recorded.
+foreach(wrapper IN ITEMS with-craft with-craft-gssproxy)
+  configure_file("scripts/${wrapper}.in" "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${wrapper}"
+                 @ONLY NEWLINE_STYLE UNIX)
+  file(COPY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${wrapper}" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}"
+       FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endforeach()
 
 include(CTest)
 if(BUILD_TESTING)

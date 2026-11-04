@@ -2007,7 +2007,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
             rmdir(config_path.c_str());
             rmdir(path);
         });
-    test("absent user identity directories and pair select enrollment",
+    test("absent user identity directories and pair return no identity",
          [&]
          {
              need(user_identity_files(caller).certificate.get() < 0,
@@ -2019,7 +2019,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
              need(user_identity_files(caller).certificate.get() < 0, "missing pair selected a certificate");
              need(chmod(config_path.c_str(), 0770) == 0, "unrelated writable .config fixture");
              need(user_identity_files(caller).certificate.get() < 0,
-                  "empty writable directory blocked enrollment");
+                  "empty writable directory did not return an absent identity");
              need(chmod(config_path.c_str(), 0700) == 0, "restore .config fixture");
          });
     const Fd directory(open(directory_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
@@ -2069,7 +2069,7 @@ static void user_identity_tests(const Config &cfg, const Mapping &map, EVP_PKEY 
              sslneed(X509_check_private_key(identity.certificate.get(), identity.key.get()) == 1,
                      "identity followed replacement inode");
          });
-    test("incomplete symlinked and nonregular private keys fail without enrollment",
+    test("incomplete symlinked and nonregular private keys reject the home identity",
          [&]
          {
              need(unlinkat(directory.get(), "user.key", 0) == 0, "remove fixture key");

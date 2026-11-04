@@ -79,7 +79,8 @@ EXIT /B 64
 
 .PARAMETER RenewBeforeDays
     Override the default one-calendar-month window with this many days, including fractional days.
-    Set 0 to replace only expired certificates. Run again to check; there is no background scheduler.
+    Set 0 to disable early renewal; profile checks still require more than 60 seconds of validity.
+    Run again to check; there is no background scheduler.
 
 .PARAMETER DeleteAfterExport
     Remove the current Windows certificate after successful export or reuse. Default: off.

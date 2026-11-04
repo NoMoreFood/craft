@@ -4,8 +4,8 @@
 > **Benchmark**: Application Security and Development STIG, Version 6, Release 5  
 > **Benchmark Date**: 30 September 2026  
 > **Assessment Basis**: Repository source and recorded validation, with fully STIG-compliant OSs and AD assumed; no independent host assessment  
-> **Source Review Basis**: Source commit `c107bef` and the system owner's determinations in section 1\
-> **Overall Status**: Incomplete - 0 Open, 45 Not Reviewed, 109 Not a Finding, 132 Not Applicable
+> **Source Review Basis**: Repository source and the system owner's determinations in section 1\
+> **Overall Status**: Incomplete - 1 Open, 45 Not Reviewed, 108 Not a Finding, 132 Not Applicable
 
 ## 1. Scope and assessment method
 
@@ -26,7 +26,7 @@ No compliance percentage is calculated while applicable controls remain unreview
 
 ### Inherited OS/AD controls
 
-**106 controls** rely on the platform assumption for inherited mechanisms or explicit enterprise exemptions. Each item records its inherited basis. Enterprise identity-management and centralized-offload exemptions use `Not_Applicable` where the official check requires that disposition; supported host/domain mechanisms use `NotAFinding`.
+**105 controls** rely on the platform assumption for inherited mechanisms or explicit enterprise exemptions. Each item records its inherited basis. Enterprise identity-management and centralized-offload exemptions use `Not_Applicable` where the official check requires that disposition; supported host/domain mechanisms use `NotAFinding`.
 
 | Inherited mechanism | ASD controls |
 | --- | --- |
@@ -38,7 +38,7 @@ No compliance percentage is calculated while applicable controls remain unreview
 | Local host authentication/MFA and approved native cryptographic mechanisms | V-222528, V-222572, V-222596, V-222641 |
 | Host logon and MFA, lockout and non-organizational identities | V-222410, V-222432, V-222433, V-222523 through V-222527, V-222556 through V-222560 |
 | Host access control, AD CS restrictions and directory delegation | V-222425, V-222427 through V-222430, V-222516 |
-| Host audit and logging: file, connection and configuration-change records, non-repudiation and the response to audit failure | V-222438, V-222451, V-222465, V-222470, V-222471, V-222486, V-222512, V-222586 |
+| Host audit and logging: file, connection and configuration-change records, non-repudiation and recovery diagnostics | V-222438, V-222451, V-222465, V-222470, V-222471, V-222512, V-222586 |
 | Centralized log management, integrity, retention and review | V-222480, V-222487 through V-222495, V-222507, V-222621 through V-222623 |
 | Host backup, recovery and storage protection | V-222587 through V-222589, V-222636 through V-222640 |
 | Platform cryptography, transport protection and replay resistance | V-222396, V-222397, V-222530, V-222531, V-222571, V-222597 through V-222599 |
@@ -47,7 +47,7 @@ No compliance percentage is calculated while applicable controls remain unreview
 
 Illustrative mappings are drawn from the official [RHEL 9 STIG](https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_RHEL_9_V2R9_STIG.zip) and [Windows Server 2022 STIG](https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_MS_Windows_Server_2022_V2R9_STIG.zip). Their rule identifiers explain the inherited mechanisms; they do not declare the actual OS/version inventory. Equivalent controls from the deployed platforms are covered by the same assessment assumption.
 
-The distinction between infrastructure and application semantics is material. RHEL-09-654070's example rules capture file-open permission failures, not every successful CRAFT key read. RHEL-09-654265's critical audit response covers the audit subsystem, not an application's own submission to the logging service. [Microsoft documents](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5136) that directory attribute-change events need an appropriate object/attribute SACL. Likewise, host/AD authentication records close actual logon auditing; they do not describe final CRAFT cache-publication outcomes. Source commit `c107bef` answers these boundaries from both sides: CRAFT now writes its own records for requests, issuance, Key Trust changes, publication and renewal, checks that the host logging service takes each one, and ships example host audit rules for file access, launcher use and outbound connections.
+The distinction between infrastructure and application semantics is material. RHEL-09-654070's example rules capture file-open permission failures, not every successful CRAFT key read. RHEL-09-654265's critical audit response covers the audit subsystem, not an application's own submission to the logging service. [Microsoft documents](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5136) that directory attribute-change events need an appropriate object/attribute SACL. Likewise, host/AD authentication records close actual logon auditing; they do not describe final CRAFT cache-publication outcomes. CRAFT submits application records for requests, issuance, Key Trust changes, publication and renewal, and ships example host audit rules for file access, launcher use and outbound connections. Checked startup and issuance records gate privileged work and credential release. Failure diagnostics are best effort, the final publication record follows replacement, and a detached maintainer can retry after an audit failure; V-222486 records the shutdown gap.
 
 ### System-owner determinations
 
@@ -59,7 +59,7 @@ The system owner's determinations below establish the application scope and inhe
 | Multifactor authentication is inherited from the operating system. Users reach CRAFT from an authenticated host session, and administrators must authenticate with MFA to install or administer it. | The PIV and MFA controls, and the lockout and non-organizational-user controls that follow from host logon, are inherited. |
 | CRAFT is maintained on GitHub and distributed as source, with no binaries. | Signed-release and release-hash controls are Not Applicable. |
 | Backup and recovery are deferred to the operating-system configuration. | Contingency, backup, restoration and stored-data protection controls are inherited. |
-| Logging is deferred to the operating system. | Central log management, integrity, retention and review are inherited or exempt; CRAFT's part is to write its records and stop when they are not taken. |
+| Logging is deferred to the operating system. | Central log management, integrity, retention and review are inherited or exempt. Application submission and shutdown behavior remain assessed separately under V-222486. |
 | Anything else that can reasonably be deferred to the operating system is deferred and noted. | Host access control, platform cryptography and transport, ports, IPv6, monitoring and software maintenance are inherited, each with its basis. |
 | The enrollment SOAP exchange is fixed by the AD CS Certificate Enrollment Web Service (MS-WSTEP), whose binding defines no message-level signature, timestamp or assertion. | The SOAP message-signing and WS-Security controls (V-222398, V-222399, V-222400, V-222402) are Not Applicable, with the constraint recorded in each entry. |
 
@@ -68,9 +68,9 @@ The system owner's determinations below establish the application scope and inhe
 | Severity | Total | Not a Finding | Not Applicable | Open | Not Reviewed |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | CAT I (High) | 34 | 11 | 16 | 0 | 7 |
-| CAT II (Medium) | 230 | 97 | 103 | 0 | 30 |
+| CAT II (Medium) | 230 | 96 | 103 | 1 | 30 |
 | CAT III (Low) | 22 | 1 | 13 | 0 | 8 |
-| **Total** | **286** | **109** | **132** | **0** | **45** |
+| **Total** | **286** | **108** | **132** | **1** | **45** |
 
 ## 2. Benchmark and authoritative sources
 
@@ -86,9 +86,9 @@ CRAFT obtains a user TGT through PKINIT and publishes a caller-owned mode-0600 `
 
 1. **Privileged enrollment** generates a software key, signs an enrollment-on-behalf-of CMS request with an agent credential, submits it to CES over verified HTTPS and validates the returned certificate before PKINIT. The complete SOAP envelope is not digitally signed.
 2. **Privileged Key Trust** authenticates to a writable DC with LDAP/GSSAPI, adds one temporary public-key credential to the caller's directory object, obtains a TGT and requires cleanup success before returning credential bytes. An independent guardian attempts cleanup after worker failure. Directory/host failure can still leave a residual key; the client certificate is directory-authorized rather than chained to a trusted user CA.
-3. **Home certificate** uses a caller-owned certificate and unencrypted PEM key under `~/.config/craft/`. A complete home pair takes priority on every installation; a partial or invalid pair fails instead of selecting a privileged fallback. The files persist after acquisition.
+3. **Home certificate** uses a caller-owned certificate and unencrypted PEM key under `~/.config/craft/`. The administrator's ordered `modes` list determines when home credentials are tried; a failed home attempt can advance to another enabled mode. This configurable fallback requires the separate review identified in section 1. The files persist after acquisition.
 
-The descriptor-verified worker processes certificates, network data and Kerberos outside root. The launcher reads only the home-selection byte while elevated and drops to the caller before receiving credential bytes or publishing the cache. Membership restrictions on privileged execution come from installed file permissions; CA/AD restrictions come from separately configured authorities. The source does not directly enforce a `craft-users` group-membership check.
+The descriptor-verified worker processes certificates, network data and Kerberos outside root. The launcher reads the bounded mode-policy response and worker readiness byte while elevated, then drops to the caller before receiving credential bytes or publishing the cache. Membership restrictions on privileged execution come from installed file permissions; CA/AD restrictions come from separately configured authorities. The source does not directly enforce a `craft-users` group-membership check.
 
 RSA generation defaults to 3072 bits and accepts configured 2048, 3072 or 4096 bits. Initial/renewed user-ticket checks restrict session and outer-ticket encryption to AES128/AES256. CES has a TLS 1.2 minimum and peer/hostname validation, with optional `https-crls.pem`. Approved OS cryptographic modules/policies are inherited when CRAFT uses the governed OS libraries; bundled/private modules fall outside that scope. Directory traffic uses a GSSAPI security layer with minimum SSF 128, not LDAP over TLS. CRAFT-specific KDC trust/CRL/EKU/hostname settings still need an approved deployment profile and acceptance evidence.
 
@@ -98,10 +98,11 @@ The application's current network acquisition modes use software-backed credenti
 
 ## 4. Open findings and closure priorities
 
-No control is Open and 45 are Not Reviewed. None of them is a missing mechanism in the operating system or Active Directory; each needs a decision or a record that only the system owner, the deployment or the development team can supply.
+One control is Open: V-222486 requires a terminal response to audit failure, while detached maintenance can retry. Another 45 controls are Not Reviewed and need owner, deployment or development evidence.
 
 | Area | Controls | Required closure |
 | --- | --- | --- |
+| Audit-failure shutdown | V-222486 | A terminal maintenance response to audit failure with a daemon-level regression check, or a documented ISSO availability exception and its required handling. |
 | Deployment and data profile | V-222393, V-222394, V-222395, V-222423, V-222424, V-222643 | The information owner's CUI and other marking requirements, credential/data-protection requirements and any required data-mining protections; whether a National Security System is in scope. |
 | Mode and capability profile | V-222518 | The approved set of modes for the deployment. |
 | Log content review | V-222444 | Review of success and failure records from each deployed mode for sensitive data. |
@@ -114,23 +115,29 @@ No control is Open and 45 are Not Reviewed. None of them is a missing mechanism 
 
 The four enrollment SOAP controls (V-222398, V-222399, V-222400, V-222402) are Not Applicable by the system owner's determination. The AD CS Certificate Enrollment Web Service fixes the [MS-WSTEP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wstep/4766a85d-0d18-4fa1-a51f-e5cb98b752ea) message format, so there is no whole-envelope signature, timestamp or assertion for a client to add; the exchange is protected by verified TLS and the enrollment agent's CMS signature. Do not add WS-Security elements to work around this: the service would ignore or reject them. Reassess if the CES protocol changes.
 
-### Closed since the first assessment
+### Closure bases
 
-The first assessment recorded 17 Open and 117 Not Reviewed controls. Eighty-nine have since been closed in three ways.
+Closed controls rely on application behavior, accepted platform inheritance or an explicit applicability determination.
 
 | Basis | Controls |
 | --- | --- |
-| Source commit `c107bef`: audit records for requests, issuance, Key Trust changes, publication and renewal; a stop when the host logging service does not take a record; caller-visible summaries with detail kept for the log; a recorded fuzz procedure and run | V-222455, V-222468, V-222469, V-222472, V-222486, V-222600, V-222610, V-222611, V-222624 |
-| System-owner determinations (section 1) on application data scope, MFA, logging, backup, source-only distribution and other platform mechanisms, including the host audit and logging services that complete the controls above | Seventy-six controls, with their basis in the inherited-controls table and individual entries |
+| Application audit records for requests, issuance, Key Trust changes, publication and renewal; caller-visible summaries with log details; recorded fuzzing and sanitizer evidence | V-222455, V-222468, V-222469, V-222472, V-222600, V-222610, V-222611, V-222624 |
+| System-owner determinations (section 1) on application data scope, MFA, logging, backup, source-only distribution and other platform mechanisms, including the host audit and logging services that complete the controls above | Controls identified in the inherited-controls table and individual entries |
 | System-owner determination that the AD CS CES protocol fixes the enrollment SOAP message format | V-222398, V-222399, V-222400, V-222402 |
 
 Two caveats travel with these closures. The example host audit rules in `source/config/craft.audit.rules` were written to convention and have not been loaded on a live host by this assessment. And five transport controls (V-222396, V-222397, V-222597, V-222598, V-222599) name TLS in their check text, while CRAFT's directory connection uses the GSSAPI security layer that Active Directory requires; an assessor must accept that as the equivalent.
 
 ## 5. Control-by-control responses
 
-### 5.1. Open findings (0 controls)
+### 5.1. Open findings (1 control)
 
-None.
+#### [V-222486] APSC-DV-001120 - The application must shut down by default upon audit failure (unless availability is an overriding concern).
+
+- **Rule ID**: `SV-222486r1043188_rule`
+- **Severity**: **MEDIUM** | **CCIs**: `CCI-000140`
+- **Evaluation Status**: **`Open`**
+- **Finding Details / Assessment**: Local log submission gates startup, credential release and renewal publication. However, an audit failure during a detached maintenance operation is caught as an ordinary operation failure: run_update returns a failed result and serve can retry with backoff instead of shutting down. No documented availability exception covers that behavior. Failure diagnostics and the maintainer's final record also use best-effort try_audit. The launcher exits on a failed final publication record, but the cache has already changed. OS log retention and forwarding remain inherited; they do not establish the application's required shutdown response.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit, try_audit; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure, run_update, serve; [source/src/launcher.cpp](../source/src/launcher.cpp): publication ordering; [source/tests/tests.cpp](../source/tests/tests.cpp): renewal rejection without logging. Follow-up: Propagate audit failures as a terminal maintenance condition and verify daemon shutdown after loss of the logging service, or obtain and implement the documented ISSO availability exception required by the benchmark. Keep downstream storage and forwarding failure response in the host assessment.
 
 ### 5.2. Evidence or applicability pending (45 controls)
 
@@ -494,7 +501,7 @@ None.
 - **Finding Details / Assessment**: Source code, tests and coding style do not establish annual job-specific security/SDLC training for program management, designers, developers and testers. No personnel training records were reviewed.
 - **Comments / Evidence**: Evidence: [README.md](../README.md); [source/TESTING.md](../source/TESTING.md). Follow-up: Provide the annual role-specific training program and completion records required by the check.
 
-### 5.3. Source behavior or inherited controls supported (109 controls)
+### 5.3. Source behavior or inherited controls supported (108 controls)
 
 #### [V-222396] APSC-DV-000160 - The application must implement DoW-approved encryption to protect the confidentiality of remote access sessions.
 
@@ -605,8 +612,8 @@ None.
 - **Rule ID**: `SV-222438r1263542_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000166`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Non-repudiation rests on audit records, deferred to the OS by the system owner's determination. CRAFT's records bind each request, issuance, Key Trust change and publication to the caller's UID and account name, and the host audit service binds that session to its login identity. CRAFT offers no other action a caller could later deny.
-- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/README.md](../source/README.md): Audit Records and Diagnostics. Follow-up: None beyond the inherited audit retention.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Non-repudiation relies on retained host and directory audit records by the system owner's determination. Launcher and issuance records identify the caller by UID and account name; worker records also carry a request identifier. Key Trust records identify the directory object and worker process, which must be correlated with host process/login identity and directory auditing. A process ID or caller-supplied log message alone is not trusted proof of identity.
+- **Comments / Evidence**: Evidence: OS/AD compliance assumption; system-owner logging determination; [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard; [source/README.md](../source/README.md): Audit records and diagnostics. Follow-up: Preserve trusted host/login metadata and correlation across application and directory records.
 
 #### [V-222446] APSC-DV-000670 - The application must record a time stamp indicating when the event occurred.
 
@@ -621,24 +628,24 @@ None.
 - **Rule ID**: `SV-222449r960879_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000169`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Host-generated event identity supplies UID/AUID and process identity for the host audit trail. Emitted CRAFT records carry LOG_PID, and worker acquisition records additionally carry requesting_uid. The compliant host logging/auditing context identifies the account associated with an event even where a maintainer message omits a redundant UID in its text. Service-account origin must not be misrepresented as the original caller; explicit requesting_uid in guardian events remains a useful application correlation improvement.
-- **Comments / Evidence**: Evidence: OS/AD compliance assumption; RHEL-09-653100, RHEL-09-654270; trusted host UID/AUID and process metadata; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/src/directory.hpp](../source/src/directory.hpp): detach_key_credential, KeyCredentialGuard. Follow-up: Preserve trusted origin identity in collection/forwarding. Include requesting_uid and a request identifier in added application events to distinguish caller identity from service/guardian identity.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Host-generated UID/AUID and process metadata identify the login session. CRAFT formats its program name and emitting PID in each record; acquisition and maintenance messages include the caller UID, while Key Trust records identify the directory object and worker. Correlation must preserve the distinction between the caller and the service-account or guardian process. The worker request field is an opaque request identifier, not the launcher PID.
+- **Comments / Evidence**: Evidence: OS/AD compliance assumption; RHEL-09-653100, RHEL-09-654270; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard. Follow-up: Preserve trusted origin identity and process/request correlation through collection and forwarding.
 
 #### [V-222451] APSC-DV-000720 - The application must generate audit records when successful/unsuccessful attempts to access security objects occur.
 
 - **Rule ID**: `SV-222451r961791_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Closed by CRAFT's own records together with the host audit and logging services, to which logging is deferred by the system owner's determination. CRAFT records each request, issuance and failure, with the caller's UID and a request number, in the host AUTHPRIV log, and refuses to act when that service does not take a record. Reads of CRAFT's keys, keytab, configuration and trust files are host file accesses, recorded with the login identity by the STIG-compliant host audit service; source/config/craft.audit.rules supplies the watches. Access to the directory attribute is recorded by Active Directory auditing.
-- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, report; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/config/craft.audit.rules](../source/config/craft.audit.rules); [source/README.md](../source/README.md): Audit Records and Diagnostics; [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Carry the example watches, or equivalent ones, in the host audit configuration and keep the msDS-KeyCredentialLink SACL in the Active Directory audit policy. The rules file has not been loaded on a live host by this assessment.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. CRAFT submits request, issuance and failure records to the host AUTHPRIV log. Checked startup and issuance submissions gate privileged work and credential release; failure reporting is best effort, and the final publication record follows cache replacement. Host auditing covers reads of keys, keytabs, configuration and trust files with the login identity; source/config/craft.audit.rules supplies example watches. Directory attribute access relies on Active Directory auditing. These host and directory mechanisms remain necessary when an application record cannot be submitted.
+- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, report; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/config/craft.audit.rules](../source/config/craft.audit.rules); [source/README.md](../source/README.md): Audit Records and Diagnostics; [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Carry the example watches, or equivalent ones, in the host audit configuration and keep the msDS-KeyCredentialLink SACL in the Active Directory audit policy. The rules file has not been loaded on a live host by this assessment.
 
 #### [V-222455] APSC-DV-000760 - The application must generate audit records when successful/unsuccessful attempts to modify security objects occur.
 
 - **Rule ID**: `SV-222455r961803_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: CRAFT changes two objects and records both. Each Key Trust change to msDS-KeyCredentialLink produces a key credential added or key credential removed record naming the directory object and the worker; a refused change produces a failure record and a value left behind a CRITICAL one. Each cache replacement produces a request finished record with outcome=published, and each maintainer renewal a renewed TGT record before the cache is replaced. A change whose record the host logging service does not take is withdrawn or not made. Changes to CRAFT's own files are host file modifications, recorded by the host audit service to which logging is deferred by the system owner's determination.
-- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard, detach_key_credential; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): renew; [source/tests/key-trust.cpp](../source/tests/key-trust.cpp); [source/tests/tests.cpp](../source/tests/tests.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Keep directory attribute-change auditing for msDS-KeyCredentialLink so that Active Directory records can be matched with CRAFT's.
+- **Finding Details / Assessment**: Key Trust add/remove records identify the directory object and worker. An add-record failure triggers cleanup, and credentials are withheld unless cleanup and its record are confirmed; cleanup can still fail during a directory or host outage. The launcher submits outcome=published after replacing the cache, while the maintainer submits renewed TGT before renewal publication. A failed final publication record cannot undo the replacement. Failure and CRITICAL cleanup diagnostics are best effort. Host file auditing and directory attribute-change auditing, inherited under the system owner's logging determination, provide the independent modification trail.
+- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard, detach_key_credential; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): renew; [source/tests/key-trust.cpp](../source/tests/key-trust.cpp); [source/tests/tests.cpp](../source/tests/tests.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Keep directory attribute-change auditing for msDS-KeyCredentialLink so that Active Directory records can be matched with CRAFT's.
 
 #### [V-222462] APSC-DV-000830 - The application must generate audit records when successful/unsuccessful logon attempts occur.
 
@@ -661,24 +668,24 @@ None.
 - **Rule ID**: `SV-222465r961836_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000172`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Closed by CRAFT's own records together with the host audit and logging services, to which logging is deferred by the system owner's determination. CRAFT records each request, issuance and failure, with the caller's UID and a request number, in the host AUTHPRIV log, and refuses to act when that service does not take a record. Reads of CRAFT's keys, keytab, configuration and trust files are host file accesses, recorded with the login identity by the STIG-compliant host audit service; source/config/craft.audit.rules supplies the watches. Access to the directory attribute is recorded by Active Directory auditing.
-- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, report; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/config/craft.audit.rules](../source/config/craft.audit.rules); [source/README.md](../source/README.md): Audit Records and Diagnostics; [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Carry the example watches, or equivalent ones, in the host audit configuration and keep the msDS-KeyCredentialLink SACL in the Active Directory audit policy. The rules file has not been loaded on a live host by this assessment.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. CRAFT submits request, issuance and failure records to the host AUTHPRIV log. Checked startup and issuance submissions gate privileged work and credential release; failure reporting is best effort, and the final publication record follows cache replacement. Host auditing covers reads of keys, keytabs, configuration and trust files with the login identity; source/config/craft.audit.rules supplies example watches. Directory attribute access relies on Active Directory auditing. These host and directory mechanisms remain necessary when an application record cannot be submitted.
+- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, report; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/config/craft.audit.rules](../source/config/craft.audit.rules); [source/README.md](../source/README.md): Audit Records and Diagnostics; [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Carry the example watches, or equivalent ones, in the host audit configuration and keep the msDS-KeyCredentialLink SACL in the Active Directory audit policy. The rules file has not been loaded on a live host by this assessment.
 
 #### [V-222468] APSC-DV-000910 - The application must initiate session auditing upon startup.
 
 - **Rule ID**: `SV-222468r960888_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-001464`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Every run is bracketed by records in the host log. The launcher writes request started before any privileged step and request finished, or a failure record, when it ends. The detached maintainer writes maintenance started for its watched job and maintenance stopped or maintenance failed when it ends. Neither begins unless the host logging service takes the first record. The start and exit of each CRAFT process are also host events, recorded by the host audit service to which logging is deferred by the system owner's determination.
-- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Keep the AUTHPRIV facility in the host's retained and forwarded logs.
+- **Finding Details / Assessment**: The launcher submits request started before privileged acquisition and request finished after cache publication; handled failures attempt a diagnostic record. The detached maintainer submits maintenance started and attempts a stopped or failed record on normal exit. Startup requires successful local log submission. Failure reporting and the maintainer's exit record are best effort, and abrupt process or host loss can prevent a final record. Host process auditing supplies the independent start/exit trail under the system owner's logging determination.
+- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Keep the AUTHPRIV facility in the host's retained and forwarded logs.
 
 #### [V-222469] APSC-DV-000940 - The application must log application shutdown events.
 
 - **Rule ID**: `SV-222469r960891_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000130`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Every run is bracketed by records in the host log. The launcher writes request started before any privileged step and request finished, or a failure record, when it ends. The detached maintainer writes maintenance started for its watched job and maintenance stopped or maintenance failed when it ends. Neither begins unless the host logging service takes the first record. The start and exit of each CRAFT process are also host events, recorded by the host audit service to which logging is deferred by the system owner's determination.
-- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Keep the AUTHPRIV facility in the host's retained and forwarded logs.
+- **Finding Details / Assessment**: The launcher submits request started before privileged acquisition and request finished after cache publication; handled failures attempt a diagnostic record. The detached maintainer submits maintenance started and attempts a stopped or failed record on normal exit. Startup requires successful local log submission. Failure reporting and the maintainer's exit record are best effort, and abrupt process or host loss can prevent a final record. Host process auditing supplies the independent start/exit trail under the system owner's logging determination.
+- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Keep the AUTHPRIV facility in the host's retained and forwarded logs.
 
 #### [V-222470] APSC-DV-000950 - The application must log destination IP addresses.
 
@@ -693,16 +700,16 @@ None.
 - **Rule ID**: `SV-222471r960891_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000130`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Closed by CRAFT's own records together with the host audit and logging services, to which logging is deferred by the system owner's determination. CRAFT records each request, issuance and failure, with the caller's UID and a request number, in the host AUTHPRIV log, and refuses to act when that service does not take a record. Reads of CRAFT's keys, keytab, configuration and trust files are host file accesses, recorded with the login identity by the STIG-compliant host audit service; source/config/craft.audit.rules supplies the watches. Access to the directory attribute is recorded by Active Directory auditing.
-- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, report; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/config/craft.audit.rules](../source/config/craft.audit.rules); [source/README.md](../source/README.md): Audit Records and Diagnostics; [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Carry the example watches, or equivalent ones, in the host audit configuration and keep the msDS-KeyCredentialLink SACL in the Active Directory audit policy. The rules file has not been loaded on a live host by this assessment.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. CRAFT submits request, issuance and failure records to the host AUTHPRIV log. Checked startup and issuance submissions gate privileged work and credential release; failure reporting is best effort, and the final publication record follows cache replacement. Host auditing covers reads of keys, keytabs, configuration and trust files with the login identity; source/config/craft.audit.rules supplies example watches. Directory attribute access relies on Active Directory auditing. These host and directory mechanisms remain necessary when an application record cannot be submitted.
+- **Comments / Evidence**: Evidence: OS/AD compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, report; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/config/craft.audit.rules](../source/config/craft.audit.rules); [source/README.md](../source/README.md): Audit Records and Diagnostics; [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Carry the example watches, or equivalent ones, in the host audit configuration and keep the msDS-KeyCredentialLink SACL in the Active Directory audit policy. The rules file has not been loaded on a live host by this assessment.
 
 #### [V-222472] APSC-DV-000970 - The application must log user actions involving changes to data.
 
 - **Rule ID**: `SV-222472r960891_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000130`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: CRAFT changes two objects and records both. Each Key Trust change to msDS-KeyCredentialLink produces a key credential added or key credential removed record naming the directory object and the worker; a refused change produces a failure record and a value left behind a CRITICAL one. Each cache replacement produces a request finished record with outcome=published, and each maintainer renewal a renewed TGT record before the cache is replaced. A change whose record the host logging service does not take is withdrawn or not made. Changes to CRAFT's own files are host file modifications, recorded by the host audit service to which logging is deferred by the system owner's determination.
-- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard, detach_key_credential; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): renew; [source/tests/key-trust.cpp](../source/tests/key-trust.cpp); [source/tests/tests.cpp](../source/tests/tests.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Keep directory attribute-change auditing for msDS-KeyCredentialLink so that Active Directory records can be matched with CRAFT's.
+- **Finding Details / Assessment**: Key Trust add/remove records identify the directory object and worker. An add-record failure triggers cleanup, and credentials are withheld unless cleanup and its record are confirmed; cleanup can still fail during a directory or host outage. The launcher submits outcome=published after replacing the cache, while the maintainer submits renewed TGT before renewal publication. A failed final publication record cannot undo the replacement. Failure and CRITICAL cleanup diagnostics are best effort. Host file auditing and directory attribute-change auditing, inherited under the system owner's logging determination, provide the independent modification trail.
+- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard, detach_key_credential; [source/src/launcher.cpp](../source/src/launcher.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): renew; [source/tests/key-trust.cpp](../source/tests/key-trust.cpp); [source/tests/tests.cpp](../source/tests/tests.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Keep directory attribute-change auditing for msDS-KeyCredentialLink so that Active Directory records can be matched with CRAFT's.
 
 #### [V-222473] APSC-DV-000980 - The application must produce audit records containing information to establish when (date and time) the events occurred.
 
@@ -717,15 +724,15 @@ None.
 - **Rule ID**: `SV-222474r960897_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000132`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: The audit helper uses the craft identifier and LOG_PID; the maintainer uses craft-maintain and LOG_PID. Emitted acquisition, renewal and cleanup messages distinguish outcomes and relevant operations; worker records include the requesting UID and success records include the username/source. These fields identify the emitting process/component and outcome. Missing events and incomplete caller identity are tracked separately and are not closed by this disposition.
-- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): update, serve. Follow-up: Preserve identifiers/outcomes in the deployed collector and resolve the separate event-coverage and user-identity findings.
+- **Finding Details / Assessment**: The audit helper formats the emitting program (craft, craft-worker or craft-maintain) and PID. Message text identifies the operation and outcome. Worker issuance records include the caller UID, account name, request identifier and credential source; Key Trust records identify the object and worker. These fields distinguish components and operations. Host metadata and retained related events supply caller/session correlation; event coverage and failure handling remain separate controls.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard; [source/src/maintain.hpp](../source/src/maintain.hpp): update, serve. Follow-up: Preserve program, process, request, object and outcome fields in the deployed collector.
 
 #### [V-222475] APSC-DV-001000 - When using centralized logging; the application must include a unique identifier in order to distinguish itself from other application logs.
 
 - **Rule ID**: `SV-222475r960900_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000133`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. The host logging system preserves originating-host identity, while CRAFT supplies craft or craft-maintain and LOG_PID. Together these distinguish the program and source system in centrally collected records.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. The host logging system preserves originating-host identity. CRAFT formats craft, craft-worker or craft-maintain and the emitting PID in its records. Together these identify the program and source system in centrally collected logs.
 - **Comments / Evidence**: Evidence: OS/AD compliance assumption; RHEL-09-653060; host/AD source-system labeling controls; [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/maintain.hpp](../source/src/maintain.hpp): serve. Follow-up: Preserve source-system and program identifiers when changing the collector or forwarding format.
 
 #### [V-222476] APSC-DV-001010 - The application must produce audit records that contain information to establish the outcome of the events.
@@ -733,16 +740,16 @@ None.
 - **Rule ID**: `SV-222476r960903_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000134`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: The audit helper uses the craft identifier and LOG_PID; the maintainer uses craft-maintain and LOG_PID. Emitted acquisition, renewal and cleanup messages distinguish outcomes and relevant operations; worker records include the requesting UID and success records include the username/source. These fields identify the emitting process/component and outcome. Missing events and incomplete caller identity are tracked separately and are not closed by this disposition.
-- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): update, serve. Follow-up: Preserve identifiers/outcomes in the deployed collector and resolve the separate event-coverage and user-identity findings.
+- **Finding Details / Assessment**: The audit helper formats the emitting program (craft, craft-worker or craft-maintain) and PID. Message text identifies the operation and outcome. Worker issuance records include the caller UID, account name, request identifier and credential source; Key Trust records identify the object and worker. These fields distinguish components and operations. Host metadata and retained related events supply caller/session correlation; event coverage and failure handling remain separate controls.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard; [source/src/maintain.hpp](../source/src/maintain.hpp): update, serve. Follow-up: Preserve program, process, request, object and outcome fields in the deployed collector.
 
 #### [V-222477] APSC-DV-001020 - The application must generate audit records containing information that establishes the identity of any individual or process associated with the event.
 
 - **Rule ID**: `SV-222477r960906_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-001487`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: The audit helper uses the craft identifier and LOG_PID; the maintainer uses craft-maintain and LOG_PID. Emitted acquisition, renewal and cleanup messages distinguish outcomes and relevant operations; worker records include the requesting UID and success records include the username/source. These fields identify the emitting process/component and outcome. Missing events and incomplete caller identity are tracked separately and are not closed by this disposition.
-- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/maintain.hpp](../source/src/maintain.hpp): update, serve. Follow-up: Preserve identifiers/outcomes in the deployed collector and resolve the separate event-coverage and user-identity findings.
+- **Finding Details / Assessment**: The audit helper formats the emitting program (craft, craft-worker or craft-maintain) and PID. Message text identifies the operation and outcome. Worker issuance records include the caller UID, account name, request identifier and credential source; Key Trust records identify the object and worker. These fields distinguish components and operations. Host metadata and retained related events supply caller/session correlation; event coverage and failure handling remain separate controls.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp): main; [source/src/directory.hpp](../source/src/directory.hpp): KeyCredentialGuard; [source/src/maintain.hpp](../source/src/maintain.hpp): update, serve. Follow-up: Preserve program, process, request, object and outcome fields in the deployed collector.
 
 #### [V-222482] APSC-DV-001080 - The application must be configured to write application logs to a centralized log repository.
 
@@ -776,20 +783,12 @@ None.
 - **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Audit-provider processing/storage failure alerts to the required administrators are supplied by the compliant underlying audit/logging services. CRAFT does not need to duplicate those backend alarms. This is an inheritance closure for audit-provider failures. Submission from CRAFT to the provider is checked by CRAFT itself and assessed under V-222486.
 - **Comments / Evidence**: Evidence: OS/AD compliance assumption; RHEL-09-653070, RHEL-09-653125; host/AD audit-provider failure notification; [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/maintain.hpp](../source/src/maintain.hpp): serve; [source/SECURITY.md](../source/SECURITY.md). Follow-up: Maintain inherited audit-provider alert recipients and failure responses. Address application submission/continuation behavior under V-222486 and test that boundary during acceptance.
 
-#### [V-222486] APSC-DV-001120 - The application must shut down by default upon audit failure (unless availability is an overriding concern).
-
-- **Rule ID**: `SV-222486r1043188_rule`
-- **Severity**: **MEDIUM** | **CCIs**: `CCI-000140`
-- **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: CRAFT halts on a detected audit failure. Each record is sent to the host logging socket and the result is checked: when the service does not take a record the launcher does not start, the worker releases no credentials, a published Key Trust key is withdrawn and the maintainer does not publish a renewal. What follows acceptance by the host service (storage, forwarding, capacity alarms and the response to their failure) is deferred to the STIG-compliant OS logging and audit configuration by the system owner's determination.
-- **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): audit, try_audit; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/key-trust.cpp](../source/tests/key-trust.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Keep the host logging service's own failure response in the OS assessment; CRAFT confirms submission only as far as the local socket.
-
 #### [V-222497] APSC-DV-001250 - The applications must use internal system clocks to generate time stamps for audit records.
 
 - **Rule ID**: `SV-222497r960927_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000159`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: CRAFT delegates audit timestamp generation to the underlying syslog service and uses the internal POSIX system clock for its own credential/expiry time values. It does not accept user-supplied audit timestamps. Collector format, UTC mapping and synchronization remain separate deployment review items.
+- **Finding Details / Assessment**: CRAFT generates audit timestamps from the host POSIX system clock using time, localtime_r and strftime. It does not accept caller-supplied audit timestamps. The emitted timestamp uses the host local timezone; collector normalization, UTC mapping and clock synchronization remain platform responsibilities.
 - **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): audit; [source/src/worker.cpp](../source/src/worker.cpp); [source/src/maintain.hpp](../source/src/maintain.hpp)
 
 #### [V-222498] APSC-DV-001260 - The application must record time stamps for audit records that can be mapped to Coordinated Universal Time (UTC) or Greenwich Mean Time (GMT).
@@ -1037,8 +1036,8 @@ None.
 - **Rule ID**: `SV-222586r961125_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-001665`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: The cause of every failure is recorded in the host log, to which logging is deferred by the system owner's determination, with the request and caller it belongs to. CRAFT keeps no state between runs that must be preserved to bring it back: a failed run leaves the previous cache in place and the next run starts afresh.
-- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): report; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Residual Key Trust values after a directory or host failure remain assessed under V-222585.
+- **Finding Details / Assessment**: CRAFT attempts to submit handled failure diagnostics to the host log with the available request, caller and process context. Reporting is best effort when logging itself fails; abrupt host/process loss can also prevent a record. Failures before cache publication preserve the previous cache, while a final logging or output failure can occur after replacement. A new acquisition can run without restoring process memory. Host logs, configuration and recovery procedures remain inherited under the system owner's determination; residual Key Trust values require the separate recovery procedure assessed under V-222585.
+- **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (logging deferred to the OS); [source/src/common.hpp](../source/src/common.hpp): report; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Residual Key Trust values after a directory or host failure remain assessed under V-222585.
 
 #### [V-222587] APSC-DV-002330 - The application must protect the confidentiality and integrity of stored information when required by DoW policy or the information owner.
 
@@ -1141,8 +1140,8 @@ None.
 - **Rule ID**: `SV-222600r961638_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-002420`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Callers receive a summary of what failed and a reference to the log. System paths, configuration keys, CES fault text and library messages go only to the host AUTHPRIV log, which the OS restricts to administrators. Every failure carries a summary and separate detail, and the outer handlers of the launcher, the worker, their child processes and the maintainer print the summary alone. Messages printed by libxml2 are discarded. The maintainer's status file follows the same rule.
-- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): Failure, caller_notice, report, root_open; [source/src/enroll.hpp](../source/src/enroll.hpp): parse_soap, reject_fault; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Review the caller-visible summaries again when a failure path is added.
+- **Finding Details / Assessment**: Callers receive a bounded failure summary and, where detail exists, a reference to the log. System paths, configuration keys, CES fault text and library diagnostics are submitted to the host AUTHPRIV log, whose access controls are inherited from the OS. Recognized failures separate summary and detail; unexpected exceptions receive a generic caller message. The launcher, worker, child-process and maintainer handlers apply this policy, including maintainer status output. Direct libxml2 diagnostics are suppressed.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): Failure, caller_notice, report, root_open; [source/src/enroll.hpp](../source/src/enroll.hpp): parse_soap, reject_fault; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Review the caller-visible summaries again when a failure path is added.
 
 #### [V-222604] APSC-DV-002510 - The application must protect from command injection.
 
@@ -1157,23 +1156,23 @@ None.
 - **Rule ID**: `SV-222610r961167_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-001312`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Callers receive a summary of what failed and a reference to the log. System paths, configuration keys, CES fault text and library messages go only to the host AUTHPRIV log, which the OS restricts to administrators. Every failure carries a summary and separate detail, and the outer handlers of the launcher, the worker, their child processes and the maintainer print the summary alone. Messages printed by libxml2 are discarded. The maintainer's status file follows the same rule.
-- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): Failure, caller_notice, report, root_open; [source/src/enroll.hpp](../source/src/enroll.hpp): parse_soap, reject_fault; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Review the caller-visible summaries again when a failure path is added.
+- **Finding Details / Assessment**: Callers receive a bounded failure summary and, where detail exists, a reference to the log. System paths, configuration keys, CES fault text and library diagnostics are submitted to the host AUTHPRIV log, whose access controls are inherited from the OS. Recognized failures separate summary and detail; unexpected exceptions receive a generic caller message. The launcher, worker, child-process and maintainer handlers apply this policy, including maintainer status output. Direct libxml2 diagnostics are suppressed.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): Failure, caller_notice, report, root_open; [source/src/enroll.hpp](../source/src/enroll.hpp): parse_soap, reject_fault; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Review the caller-visible summaries again when a failure path is added.
 
 #### [V-222611] APSC-DV-002580 - The application must reveal error messages only to the ISSO, ISSM, or SA.
 
 - **Rule ID**: `SV-222611r961170_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-001314`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Callers receive a summary of what failed and a reference to the log. System paths, configuration keys, CES fault text and library messages go only to the host AUTHPRIV log, which the OS restricts to administrators. Every failure carries a summary and separate detail, and the outer handlers of the launcher, the worker, their child processes and the maintainer print the summary alone. Messages printed by libxml2 are discarded. The maintainer's status file follows the same rule.
-- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): Failure, caller_notice, report, root_open; [source/src/enroll.hpp](../source/src/enroll.hpp): parse_soap, reject_fault; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Audit and Diagnostics Validation. Follow-up: Review the caller-visible summaries again when a failure path is added.
+- **Finding Details / Assessment**: Callers receive a bounded failure summary and, where detail exists, a reference to the log. System paths, configuration keys, CES fault text and library diagnostics are submitted to the host AUTHPRIV log, whose access controls are inherited from the OS. Recognized failures separate summary and detail; unexpected exceptions receive a generic caller message. The launcher, worker, child-process and maintainer handlers apply this policy, including maintainer status output. Direct libxml2 diagnostics are suppressed.
+- **Comments / Evidence**: Evidence: [source/src/common.hpp](../source/src/common.hpp): Failure, caller_notice, report, root_open; [source/src/enroll.hpp](../source/src/enroll.hpp): parse_soap, reject_fault; [source/src/maintain.hpp](../source/src/maintain.hpp): record_failure; [source/tests/tests.cpp](../source/tests/tests.cpp); [source/tests/maintain-integration.cpp](../source/tests/maintain-integration.cpp); [source/TESTING.md](../source/TESTING.md): Linux build and MIT KDC coverage. Follow-up: Review the caller-visible summaries again when a failure path is added.
 
 #### [V-222613] APSC-DV-002610 - The application must remove organization-defined software components after updated versions have been installed.
 
 - **Rule ID**: `SV-222613r961677_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-002617`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the host's software maintenance. CRAFT's dependencies are OS packages, updated and removed by the OS package manager. CRAFT itself is three executables built from the GitHub source and installed over the previous ones, so no superseded build remains; applying its updates is part of the same host maintenance process.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. CRAFT's dependencies are OS packages maintained by the host package manager. Its three executables are built from source and installed at configured paths. Applying source updates and removing superseded copies are host software-maintenance responsibilities; installing new executables does not itself discover older copies elsewhere.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (deferred to the OS; maintained on GitHub); [source/README.md](../source/README.md): Build, Shared Linux installation. Follow-up: None beyond the host's update schedule.
 
 #### [V-222614] APSC-DV-002630 - Security-relevant software updates and patches must be kept up to date.
@@ -1181,7 +1180,7 @@ None.
 - **Rule ID**: `SV-222614r1117151_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-002605`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the host's software maintenance. CRAFT's dependencies are OS packages, updated and removed by the OS package manager. CRAFT itself is three executables built from the GitHub source and installed over the previous ones, so no superseded build remains; applying its updates is part of the same host maintenance process.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. CRAFT's dependencies are OS packages maintained by the host package manager. Its three executables are built from source and installed at configured paths. Applying source updates and removing superseded copies are host software-maintenance responsibilities; installing new executables does not itself discover older copies elsewhere.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (deferred to the OS; maintained on GitHub); [source/README.md](../source/README.md): Build, Shared Linux installation. Follow-up: None beyond the host's update schedule.
 
 #### [V-222619] APSC-DV-002880 - The ISSO must ensure an account management process is implemented, verifying only authorized users can gain access to the application, and individual accounts designated as inactive, suspended, or terminated are promptly removed.
@@ -1221,7 +1220,7 @@ None.
 - **Rule ID**: `SV-222624r1051272_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000256`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Fuzz testing is now part of the test procedure and its results are recorded. craft-fuzz, a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer, covers every parser that takes bytes someone else controls; TESTING.md gives the procedure, settings and the run of 11 October 2026, whose one finding was fixed. The unit, Key Trust and integration suites also pass under both sanitizers. Vulnerability scanning of the installed host is deferred to the OS and enclave scanning program by the system owner's determination; CRAFT has no listener for a network scanner to probe.
+- **Finding Details / Assessment**: The repository provides a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer for configuration, enrollment responses, certificate parsing/extensions, Kerberos ticket decoding, maintenance state/options and proc text. TESTING.md records the procedure, settings, observed finding and remediation, and sanitizer runs of the offline and integration suites. This is evidence for the recorded targets and runs, not proof that every parser or deployed path has been fuzzed. Host vulnerability scanning remains inherited from the OS and enclave scanning program by the system owner's determination.
 - **Comments / Evidence**: Evidence: System-owner determination, 11 October 2026 (deferred to the OS); [source/tests/fuzz.cpp](../source/tests/fuzz.cpp); [source/tests/fuzz-targets.hpp](../source/tests/fuzz-targets.hpp); [source/TESTING.md](../source/TESTING.md): Fuzz Testing; [source/SECURITY.md](../source/SECURITY.md): Not Claimed. Follow-up: Repeat and record the fuzz run for each release; this closure lapses if a release is not fuzzed.
 
 #### [V-222626] APSC-DV-002960 - The designer must ensure the application does not store configuration and control files in the same directory as user data.
@@ -1269,7 +1268,7 @@ None.
 - **Rule ID**: `SV-222636r1263613_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000445`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the operating system's backup and recovery configuration by the system owner's determination. CRAFT keeps no data of its own to restore: its configuration, trust files and service credentials are host files under /etc/craft, covered by the host's backup, contingency and recovery procedures, and its source is held off the host in the GitHub repository. Ticket caches and generated keys are short-lived and are issued again, not restored.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Backup and recovery are deferred to the operating system by the system owner's determination. Configuration, trust material and service credentials are host files under the configured CRAFT directory and must be covered by host backup and recovery procedures; the source is retained in GitHub. Short-lived ticket caches and generated keys are reacquired rather than restored.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (backup and recovery deferred to the OS); [source/README.md](../source/README.md): Shared Linux installation; [source/SECURITY.md](../source/SECURITY.md): User Credential Storage. Follow-up: Rotate the service keytab and agent key if a backup holding them is exposed.
 
 #### [V-222637] APSC-DV-003060 - Recovery procedures and technical system features must exist so recovery is performed in a secure and verifiable manner. The ISSO will document circumstances inhibiting a trusted recovery.
@@ -1277,7 +1276,7 @@ None.
 - **Rule ID**: `SV-222637r961863_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000448`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the operating system's backup and recovery configuration by the system owner's determination. CRAFT keeps no data of its own to restore: its configuration, trust files and service credentials are host files under /etc/craft, covered by the host's backup, contingency and recovery procedures, and its source is held off the host in the GitHub repository. Ticket caches and generated keys are short-lived and are issued again, not restored.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Backup and recovery are deferred to the operating system by the system owner's determination. Configuration, trust material and service credentials are host files under the configured CRAFT directory and must be covered by host backup and recovery procedures; the source is retained in GitHub. Short-lived ticket caches and generated keys are reacquired rather than restored.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (backup and recovery deferred to the OS); [source/README.md](../source/README.md): Shared Linux installation; [source/SECURITY.md](../source/SECURITY.md): User Credential Storage. Follow-up: Rotate the service keytab and agent key if a backup holding them is exposed.
 
 #### [V-222638] APSC-DV-003070 - Data backup must be performed at required intervals in accordance with DoW policy.
@@ -1285,7 +1284,7 @@ None.
 - **Rule ID**: `SV-222638r1263615_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000537`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the operating system's backup and recovery configuration by the system owner's determination. CRAFT keeps no data of its own to restore: its configuration, trust files and service credentials are host files under /etc/craft, covered by the host's backup, contingency and recovery procedures, and its source is held off the host in the GitHub repository. Ticket caches and generated keys are short-lived and are issued again, not restored.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Backup and recovery are deferred to the operating system by the system owner's determination. Configuration, trust material and service credentials are host files under the configured CRAFT directory and must be covered by host backup and recovery procedures; the source is retained in GitHub. Short-lived ticket caches and generated keys are reacquired rather than restored.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (backup and recovery deferred to the OS); [source/README.md](../source/README.md): Shared Linux installation; [source/SECURITY.md](../source/SECURITY.md): User Credential Storage. Follow-up: Rotate the service keytab and agent key if a backup holding them is exposed.
 
 #### [V-222639] APSC-DV-003080 - Back-up copies of the application software or source code must be stored in a fire-rated container or stored separately (offsite).
@@ -1293,7 +1292,7 @@ None.
 - **Rule ID**: `SV-222639r961863_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000540`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the operating system's backup and recovery configuration by the system owner's determination. CRAFT keeps no data of its own to restore: its configuration, trust files and service credentials are host files under /etc/craft, covered by the host's backup, contingency and recovery procedures, and its source is held off the host in the GitHub repository. Ticket caches and generated keys are short-lived and are issued again, not restored.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Backup and recovery are deferred to the operating system by the system owner's determination. Configuration, trust material and service credentials are host files under the configured CRAFT directory and must be covered by host backup and recovery procedures; the source is retained in GitHub. Short-lived ticket caches and generated keys are reacquired rather than restored.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (backup and recovery deferred to the OS); [source/README.md](../source/README.md): Shared Linux installation; [source/SECURITY.md](../source/SECURITY.md): User Credential Storage. Follow-up: Rotate the service keytab and agent key if a backup holding them is exposed.
 
 #### [V-222640] APSC-DV-003090 - Procedures must be in place to assure the appropriate physical and technical protection of the backup and restoration of the application.
@@ -1301,7 +1300,7 @@ None.
 - **Rule ID**: `SV-222640r961863_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-000540`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Deferred to the operating system's backup and recovery configuration by the system owner's determination. CRAFT keeps no data of its own to restore: its configuration, trust files and service credentials are host files under /etc/craft, covered by the host's backup, contingency and recovery procedures, and its source is held off the host in the GitHub repository. Ticket caches and generated keys are short-lived and are issued again, not restored.
+- **Finding Details / Assessment**: Inherited under the assessment assumption that the underlying operating systems and Active Directory satisfy their applicable STIG controls. Backup and recovery are deferred to the operating system by the system owner's determination. Configuration, trust material and service credentials are host files under the configured CRAFT directory and must be covered by host backup and recovery procedures; the source is retained in GitHub. Short-lived ticket caches and generated keys are reacquired rather than restored.
 - **Comments / Evidence**: Evidence: OS compliance assumption; System-owner determination, 11 October 2026 (backup and recovery deferred to the OS); [source/README.md](../source/README.md): Shared Linux installation; [source/SECURITY.md](../source/SECURITY.md): User Credential Storage. Follow-up: Rotate the service keytab and agent key if a backup holding them is exposed.
 
 #### [V-222641] APSC-DV-003100 - The application must use encryption to implement key exchange and authenticate endpoints prior to establishing a communication channel for key exchange.
@@ -1341,7 +1340,7 @@ None.
 - **Rule ID**: `SV-222663r961863_rule`
 - **Severity**: **MEDIUM** | **CCIs**: `CCI-003124`
 - **Evaluation Status**: **`NotAFinding`**
-- **Finding Details / Assessment**: The repository includes configuration/build guides for all three modes, example configuration and Kerberos policy, trust/CRL setup, permissions, authorization boundaries, credential lifecycle and acceptance checks. This provides an Application Configuration Guide. Site-specific enclave, audit, backup/recovery and standardized build inventories still require deployment/process evidence under the corresponding controls.
+- **Finding Details / Assessment**: The repository includes configuration/build guides for the three assessed acquisition modes, example configuration and Kerberos policy, trust/CRL setup, permissions, authorization boundaries, credential lifecycle and acceptance checks. This provides an Application Configuration Guide. Site-specific enclave, audit, backup/recovery and standardized build inventories still require deployment/process evidence under the corresponding controls.
 - **Comments / Evidence**: Evidence: [source/README.md](../source/README.md); [source/config/config.example](../source/config/config.example); [source/config/krb5.conf.example](../source/config/krb5.conf.example); [source/SECURITY.md](../source/SECURITY.md); [source/TESTING.md](../source/TESTING.md); [docs/02-CRAFT-Configuration-and-Validation.pdf](02-CRAFT-Configuration-and-Validation.pdf). Follow-up: Complete and maintain site-specific configuration/environment records before operational use.
 
 #### [V-222667] APSC-DV-003320 - Protections against DoS attacks must be implemented.

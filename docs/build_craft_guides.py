@@ -375,9 +375,9 @@ def process_guide(images):
         'for seven days.'
     ))
     paragraph(doc, (
-        'require_full_tgt_lifetime=yes rejects shortened initial or renewal '
-        'grants without replacing the cache. Administrators can set no to accept '
-        'shorter grants with a warning. Returned ticket times are never '
+        'require_full_tgt_lifetime=yes rejects shortened initial TGT validity or renewal '
+        'windows. Set no to accept them with a warning. Later TGT renewal validates '
+        'against the original grant and deadline. Returned ticket times are never '
         'rewritten. Enrollment certificate caps default to ten hours total, '
         "including backdating; they do not cap BYOC's supplied certificate or "
         "Key Trust's local identity."
@@ -411,8 +411,9 @@ def process_guide(images):
     ))
     code(doc, '/usr/local/bin/craft-maintain --status --watch-pid "$job_pid"\nklist -ef -c "$KRB5CCNAME"')
     paragraph(doc, (
-        'Failures preserve credentials and retry; later failures do not stop the '
-        'job. Status and AUTHPRIV logs report failures. Maintenance stops with '
+        'Acquisition and renewal failures are retried. A status-file write failure stops '
+        'maintenance; failures do not stop the watched job. Check status and AUTHPRIV '
+        'logs for diagnostics. Maintenance stops with '
         'the watched PID and leaves the cache. Applications must reload refreshed'
         ' credentials. Keep CRLs current and replace the supplied certificate '
         'before expiry; TGT maintenance does not renew it.'
@@ -939,9 +940,9 @@ minimum_interval_seconds=60
         'a pidfd when available, or /proc on older kernels such as RHEL 8. The '
         'scheduler must retain detached processes. Renewal uses the cache alone; '
         'fresh authentication applies the same configured mode selection. Keep CRLs, '
-        'service credentials and supplied certificates current. Status/log '
-        'failures preserve the cache and retry; later failures do not terminate '
-        'the job.'
+        'service credentials and supplied certificates current. Acquisition and renewal '
+        'failures are retried. A status-file write failure stops '
+        'the maintainer; failures do not terminate the watched job.'
     ))
     paragraph(doc, (
         'Test renewal, fresh authentication near the absolute renewal deadline, '
@@ -958,7 +959,8 @@ minimum_interval_seconds=60
     page(doc, "Audit maintenance and operational disable")
     paragraph(doc, (
         'Read AUTHPRIV records from the host logging service with administrator access. '
-        'The worker request= field matches the launcher PID. Key Trust records identify '
+        'Workers in one invocation share an opaque request= identifier. Correlate launcher '
+        'and worker processes through host audit metadata. Key Trust records identify '
         'the object and worker; correlate them with directory change event 5136 and KDC '
         'event 4768. Configure the required directory SACL and CA audit categories. '
         'Do not place private keys, tickets or export passwords in logs.'
@@ -968,7 +970,9 @@ minimum_interval_seconds=60
         'Every mode requires /dev/log. Failure to submit an audit record blocks startup, '
         'credential release or renewal publication. The final launcher completion record '
         'follows cache replacement, so a logging failure there can be reported after the '
-        'cache changed. Local submission does not establish durable retention or forwarding. '
+        'cache changed. Detached maintenance can retry after an audit failure; failure and '
+        'exit diagnostics are best effort. Local submission does not establish durable '
+        'retention or forwarding. '
         'Install the example host audit rules only after adjusting paths, architecture and '
         'rules for files actually present.'
     ))

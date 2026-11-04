@@ -419,10 +419,10 @@ inline void update(const Account &caller, const std::string &expected, Result &r
                  "cache principal does not match the Linux caller");
             auto text = krb_owner<char, krb5_free_unparsed_name>(ctx);
             krb_check(ctx, krb5_unparse_name(ctx, client.get(), out(text)), "format cache principal");
-            need(expected.empty() || expected == text.get(), "maintained principal changed");
-            need(::strnlen(text.get(), sizeof(result.principal)) < sizeof(result.principal),
-                 "cache principal is too long");
-            set_text(result.principal, text.get());
+            const std::string_view principal(text.get(), ::strnlen(text.get(), sizeof(result.principal)));
+            need(principal.size() < sizeof(result.principal), "cache principal is too long");
+            need(expected.empty() || expected == principal, "maintained principal changed");
+            set_text(result.principal, principal);
             server = tgs_principal(ctx, std::string_view(realm->data, realm->length));
             krb5_creds match{};
             match.client = client.get();

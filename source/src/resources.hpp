@@ -174,15 +174,13 @@ inline void counted(Bytes &b, const krb5_data &d)
 
 inline void append_cache_credential(krb5_context ctx, Bytes &b, krb5_creds &cred)
 {
-    krb5_data *marshaled = nullptr;
-    ScopeExit free_marshaled(
+    auto marshaled = krb_owner<krb5_data, krb5_free_data>(ctx);
+    ScopeExit erase(
         [&]() noexcept
         {
-            if (!marshaled) return;
-            if (marshaled->data) ::explicit_bzero(marshaled->data, marshaled->length);
-            krb5_free_data(ctx, marshaled);
+            if (marshaled && marshaled->data) ::explicit_bzero(marshaled->data, marshaled->length);
         });
-    need(krb5_marshal_credentials(ctx, &cred, &marshaled) == 0, "serialize credential failed");
+    need(krb5_marshal_credentials(ctx, &cred, out(marshaled)) == 0, "serialize credential failed");
     need(b.size() + marshaled->length <= MAX_BLOB, "ticket cache exceeds size limit");
     b.insert(b.end(), marshaled->data, marshaled->data + marshaled->length);
 }

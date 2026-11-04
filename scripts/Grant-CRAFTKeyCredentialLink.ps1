@@ -7,8 +7,8 @@
 
 .DESCRIPTION
     CRAFT's key_trust mechanism obtains a Kerberos TGT through AD public-key
-    authorization without user-certificate CA enrollment. When no home certificate
-    pair is present, the dedicated service account writes a temporary public key to
+    authorization without user-certificate CA enrollment. When key_trust is reached
+    in the ordered modes list, the service account writes a temporary public key to
     the caller's msDS-KeyCredentialLink, performs Key Trust PKINIT, and then removes
     that key. KDC certificate trust and CRLs are still required. This script grants
     the service account the least-privilege permission required for that write:
@@ -248,11 +248,6 @@ if ($PSCmdlet.ParameterSetName -eq "OU")
     }
     $targetDN = $target.DistinguishedName
     $isUser = $false
-    $domainDN = (Get-ADDomain).DistinguishedName
-    if ($targetDN -eq $domainDN -and -not $Force)
-    {
-        throw "Refusing to delegate at the domain root. Choose a dedicated OU, or pass -Force to override."
-    }
     foreach ($container in $defaultContainers)
     {
         if ($targetDN -like "$container*" -and -not $Force)

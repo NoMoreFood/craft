@@ -35,7 +35,7 @@ Run [`Grant-CRAFTKeyCredentialLink.ps1`](../scripts/Grant-CRAFTKeyCredentialLink
 
 The OU rule inherits only to descendant user objects; a user rule applies only to that object. The helper grants no GenericWrite/GenericAll or other attribute rights, is idempotent and supports `-WhatIf`. `-Remove` removes its matching explicit rule; separately review other permissions that might still authorize the service account.
 
-The helper refuses privileged targets, the domain root and default containers (`CN=Users`, `CN=Computers`, `CN=Managed Service Accounts`) unless `-Force` is supplied. It checks privileged group membership and `adminCount=1`, including users in an OU. These checks are guardrails, not a continuing privilege filter. Confirm effective rights after applying the rule; other grants, Deny rules or blocked inheritance can change the outcome.
+The helper always refuses the domain root. It refuses privileged targets and default containers (`CN=Users`, `CN=Computers`, `CN=Managed Service Accounts`) unless `-Force` is supplied. It checks privileged group membership and `adminCount=1`, including users in an OU. These checks are guardrails, not a continuing privilege filter. Confirm effective rights after applying the rule; other grants, Deny rules or blocked inheritance can change the outcome.
 
 ## Govern the delegated scope
 

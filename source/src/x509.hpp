@@ -197,7 +197,7 @@ inline UserIdentityFiles user_identity_files(const Account &caller)
         directory = std::move(next);
     }
 
-    // Only an entirely absent pair selects the fallback; partial or unsafe inputs fail.
+    // An absent pair returns no identity; partial or unsafe inputs fail this home-mode attempt.
     off_t certificate_size = 0, key_size = 0;
     UserIdentityFiles files{
         open_private(

@@ -100,7 +100,7 @@ inline Config parse_config(std::string_view text, std::optional<CertificateSourc
         if (wanted && found == values.end()) fail("missing config key", key);
         return wanted ? found->second : std::string{};
     };
-    const auto seconds = [&](std::string_view key, uint32_t fallback, uint32_t maximum)
+    const auto integer = [&](std::string_view key, uint32_t fallback, uint32_t maximum = UINT32_MAX)
     {
         const auto found = values.find(key);
         return found == values.end() ? fallback : number(found->second, maximum);
@@ -139,14 +139,14 @@ inline Config parse_config(std::string_view text, std::optional<CertificateSourc
     c.gc_url = optional("gc_url", "ldap://" + c.domain + ":3268");
     c.gc_base_dn = optional("gc_base_dn", domain_to_dn(c.domain));
     c.certificate_cn = optional("certificate_cn", c.certificate_cn);
-    c.key_bits = number(optional("key_bits", std::to_string(c.key_bits)));
+    c.key_bits = integer("key_bits", c.key_bits);
     need(c.key_bits == 2048 || c.key_bits == 3072 || c.key_bits == 4096,
          "key_bits must be 2048, 3072, or 4096");
-    c.tgt = seconds("tgt_seconds", c.tgt, 604800);
-    c.renew = seconds("renew_seconds", c.renew, 604800);
-    c.cert_remaining = seconds("cert_remaining_max_seconds", c.cert_remaining, 86400);
-    c.cert_total = seconds("cert_total_max_seconds", c.cert_total, 86400);
-    c.interval = seconds("minimum_interval_seconds", c.interval, 86400);
+    c.tgt = integer("tgt_seconds", c.tgt, 604800);
+    c.renew = integer("renew_seconds", c.renew, 604800);
+    c.cert_remaining = integer("cert_remaining_max_seconds", c.cert_remaining, 86400);
+    c.cert_total = integer("cert_total_max_seconds", c.cert_total, 86400);
+    c.interval = integer("minimum_interval_seconds", c.interval, 86400);
     const auto full = optional("require_full_tgt_lifetime", "yes");
     need(full == "yes" || full == "no", "require_full_tgt_lifetime must be yes or no");
     c.require_full_tgt_lifetime = full == "yes";
@@ -179,7 +179,7 @@ inline Config parse_config(std::string_view text, std::optional<CertificateSourc
             need(c.service_spns.size() <= 32, "service_spns permits at most 32 targets");
         }
         need(!c.service_spns.empty(), "service_spns requires at least one target");
-        c.service_ticket_seconds = seconds("service_ticket_seconds", c.service_ticket_seconds, 604800);
+        c.service_ticket_seconds = integer("service_ticket_seconds", c.service_ticket_seconds, 604800);
         need(c.service_ticket_seconds >= 60, "service_ticket_seconds must be at least 60");
     }
     if (enrollment)

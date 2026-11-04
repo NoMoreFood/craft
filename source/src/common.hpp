@@ -275,9 +275,8 @@ inline std::string sanitize_ascii(std::string_view text, size_t maximum = 500)
 // The name this program reports and logs under; the worker and the maintainer set their own at startup.
 inline const char *program = "craft";
 
-// Hand one record to the host logging service and fail unless that service took it: CRAFT stops rather than
-// act unrecorded. What happens beyond the socket (storage, forwarding, alarms) is the service's own duty. The
-// record is bounded printable ASCII, so nothing a peer or a library says can forge another one.
+// Require local submission; storage, forwarding and alarms remain the host logging service's duty.
+// Bounded printable ASCII prevents peer or library text from injecting additional records.
 inline void audit(int priority, std::string_view message)
 {
     const sockaddr_un service{.sun_family = AF_UNIX, .sun_path = "/dev/log"};

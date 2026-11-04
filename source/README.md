@@ -318,7 +318,7 @@ CRAFT configuration uses case-sensitive `key=value` entries and full-line `#` co
 | `realm` | Required uppercase DNS realm, e.g. `DOMAIN.LOCAL` | All |
 | `tgt_seconds` | `36000`; integer 60–604800 | Certificate modes |
 | `renew_seconds` | `604800`; 0 disables renewal, otherwise greater than `tgt_seconds`, at most 604800 | Certificate modes |
-| `require_full_tgt_lifetime` | `yes`; `no` accepts shorter initial/renewal grants with a warning | Certificate modes |
+| `require_full_tgt_lifetime` | `yes`; `no` accepts shorter initial TGT validity or renewal windows with a warning | Certificate modes |
 | `modes` | Required ordered list of unique `home`, `enrollment`, `key_trust`, `constrained_delegation` names; no default | All |
 | `service_principal` | Required exact AD principal matching `submitter.keytab` | Broker modes |
 | `key_bits` | `3072`; accepts 2048, 3072 or 4096; satisfy the enrollment template minimum | Enrollment Agent and Key Trust |
@@ -338,9 +338,9 @@ CRAFT configuration uses case-sensitive `key=value` entries and full-line `#` co
 
 Shared numeric and length limits are parsed even when unused. Required settings for every enabled mode are validated before acquisition. Omit irrelevant settings rather than leaving invalid placeholders.
 
-Ticket validity and certificate validity are separate. Certificate modes request ten hours initially and seven days of renewal by default, while the KDC controls the actual grant. Certificate/key lifetime can constrain initial PKINIT validity. Strict policy compares grants with a five-second tolerance and refuses shortened or excessive grants before replacing the cache. Setting `require_full_tgt_lifetime=no` permits shorter grants; it does not permit wrong principals, flags, non-AES encryption or excessive lifetimes. Use policy appropriate to the domain rather than increasing certificate caps to accommodate an unintended template. See [RFC 4556 ticket lifetime rules](https://www.rfc-editor.org/rfc/rfc4556#section-3.2.3).
+Ticket validity and certificate validity are separate. Certificate modes request ten hours initially and seven days of renewal by default, while the KDC controls the actual grant. Certificate/key lifetime can constrain initial PKINIT validity. Strict policy compares grants with a five-second tolerance and refuses shortened or excessive grants before replacing the cache. Setting `require_full_tgt_lifetime=no` permits shorter initial validity or renewal windows; it does not permit wrong principals, flags, non-AES encryption or excessive lifetimes. This setting does not control later cached-TGT renewal, which validates against the original grant and absolute renewal deadline. Use policy appropriate to the domain rather than increasing certificate caps to accommodate an unintended template. See [RFC 4556 ticket lifetime rules](https://www.rfc-editor.org/rfc/rfc4556#section-3.2.3).
 
-The accepted Kerberos encryption types are `aes256-cts-hmac-sha1-96` (18) and `aes128-cts-hmac-sha1-96` (17), in that preference order. Configure suitable AES keys/policy on the DC, `krbtgt` and service account. Session and outer-ticket encryption are checked separately and may use different AES sizes.
+Requested session-key types are `aes256-cts-hmac-sha1-96` (18) and `aes128-cts-hmac-sha1-96` (17), in that preference order. Outer-ticket validation also accepts `aes128-cts-hmac-sha256-128` (19) and `aes256-cts-hmac-sha384-192` (20). Configure suitable AES keys/policy on the DC, `krbtgt` and service account. Session and outer-ticket encryption are checked separately and may use different AES sizes.
 
 ## Use
 
@@ -384,7 +384,7 @@ klist -ef -c "$KRB5CCNAME"
 
 Status reports `ready`, `retrying`, `expired`, `stopped` or `failed`, `ticket_kind` (`tgt` or `service`), `ticket_expires` and `renew_until` as Unix seconds, `maintainer_pid`, `next_check` and `last_error`. A successful status read does not prove credential health; `next_check=0` indicates no further checks. Private `.krb5cc_craft.maintain.<PID>.status` files remain after exit and are pruned by a later maintainer once a week old. Jobs for one UID share the cache and fresh-acquisition cooldown.
 
-Renewal failures preserve credentials and retry without immediate fresh authentication. Missing/expired TGTs, nonextendible tickets near expiry and renewal-window rollover require fresh acquisition; failures share a cooldown from one minute to one hour. Later failures do not terminate the job. Keep required CRLs, service credentials and supplied certificate pairs current.
+Renewal failures preserve credentials and retry without immediate fresh authentication. Missing/expired TGTs, nonextendible tickets near expiry and renewal-window rollover require fresh acquisition; failures share a cooldown from one minute to one hour. A status-file write failure stops the maintainer; failures do not terminate the watched job. Keep required CRLs, service credentials and supplied certificate pairs current.
 
 ## Audit records and diagnostics
 
@@ -394,9 +394,9 @@ Read AUTHPRIV records with administrator access:
 sudo journalctl -t craft -t craft-worker -t craft-maintain
 ```
 
-On other logging systems, inspect the configured AUTHPRIV destination. `craft` records request start, per-mode failures (`mode failed uid=... mode=...`) and completed cache publication; `craft-worker` records TGT issuance with `certificate_source=home|enrollment|key_trust`, Constrained Delegation issuance with `mechanism=constrained_delegation` and the service count, and Key Trust add/remove/cleanup failures; `craft-maintain` records startup, stop, renewal and fresh acquisition. The worker's `request=` matches the launcher's PID, and `worker=` identifies the directory-operation process. Records contain no key, ticket or certificate bytes.
+On other logging systems, inspect the configured AUTHPRIV destination. `craft` records request start, per-mode failures (`mode failed uid=... mode=...`) and completed cache publication; `craft-worker` records TGT issuance with `certificate_source=home|enrollment|key_trust`, Constrained Delegation issuance with `mechanism=constrained_delegation` and the service count, and Key Trust add/remove/cleanup failures; `craft-maintain` records startup, stop, renewal and fresh acquisition. Workers in one launcher invocation share an opaque `request=` identifier; `worker=` identifies the Key Trust worker process. Correlate launcher and worker processes through host audit metadata. Records contain no key, ticket or certificate bytes.
 
-Logging failure blocks startup, credential release and renewal publication. A launcher failure to log its completed publication can occur after the cache was replaced; inspect the cache and logs when diagnosing such a failure. The `/dev/log` check confirms local submission, not durable retention or forwarding.
+Logging failure blocks startup, credential release and renewal publication. A launcher failure to log its completed publication can occur after the cache was replaced; inspect the cache and logs when diagnosing such a failure. Detached maintenance can retry after an audit failure; it does not guarantee shutdown for every logging error. Failure diagnostics and its final stop record are best effort. The `/dev/log` check confirms local submission, not durable retention or forwarding.
 
 Callers receive a failure summary and a log identity/PID for system, server or library details. Correctable caller-file and rate-limit errors are shown directly. `craft-maintain --status` uses the same diagnostic policy.
 
@@ -429,7 +429,7 @@ Run from the repository root with a dedicated local destination directory:
 | Option | Behavior |
 | --- | --- |
 | `/WhatIf` | Preview without enrollment or export changes |
-| `/RenewBeforeDays N` | Override the default one-calendar-month renewal window; accepts 0–3650 days, including fractional days; 0 replaces expired certificates only |
+| `/RenewBeforeDays N` | Override the default one-calendar-month renewal window; accepts 0–3650 days, including fractional days; 0 disables early renewal; profile checks still require more than 60 seconds of validity |
 | `/DeleteAfterExport` | After successful export/reuse, remove the Windows-store certificate; default off; PEM files remain |
 
 The helper exports `user.pem`, matching unencrypted PKCS#8 `user.key`, and private `.craft-certificate.json` tracking metadata. New outputs permit only the caller, SYSTEM and local administrators. It checks the supplied-certificate profile before publication; Linux separately checks trust, revocation, permissions and KDC mapping. Outside the renewal window it reuses a valid managed pair. It refuses incomplete, modified, unmanaged or different-template output.
