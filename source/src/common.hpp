@@ -439,7 +439,7 @@ inline void no_core()
     const rlimit limit{0, 0};
     sysneed(setrlimit(RLIMIT_CORE, &limit) == 0, "disable core files");
     sysneed(prctl(PR_SET_DUMPABLE, 0) == 0, "disable dumpability");
-    ::umask(0077);
+    ::umask(0077); // sonar-resolve [fp] cpp:S2612 "Masks all group and other permissions."
 }
 
 // Open any closed standard descriptor, lowest first, so no later file can land on a standard stream.
