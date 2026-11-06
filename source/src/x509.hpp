@@ -102,7 +102,13 @@ inline Bytes der(unsigned char tag, ByteView value)
 }
 
 // Serialize any i2d-encodable OpenSSL object to DER.
-template <class T, class Encode> inline Bytes to_der(T *object, Encode encode, std::string_view what)
+template <class T, class Encode>
+    requires requires(Encode &encode, T *object, unsigned char *output)
+    {
+        { encode(object, nullptr) } -> std::same_as<int>;
+        { encode(object, &output) } -> std::same_as<int>;
+    }
+inline Bytes to_der(T *object, Encode encode, std::string_view what)
 {
     const int n = encode(object, nullptr);
     sslneed(n > 0, what);

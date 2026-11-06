@@ -46,7 +46,8 @@ struct Fixture
 // Run the certificate checks one by one: each must reject or accept by itself, whatever the others did.
 void inspect(X509 *certificate, const Fixture &fixture)
 {
-    const auto attempt = [](std::invocable auto &&check)
+    const auto attempt = [](auto &&check)
+        requires std::invocable<decltype(check) &>
     {
         try
         {

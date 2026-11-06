@@ -22,7 +22,14 @@ struct Deleter
 template <class T, auto Free> using Owned = std::unique_ptr<T, Deleter<T, Free>>;
 
 // Adopt C output parameters even on failure; C++20 has no std::out_ptr.
-template <class Owner> class Out
+template <class Owner>
+    requires requires(Owner &owner, typename Owner::pointer value)
+    {
+        requires std::is_pointer_v<typename Owner::pointer>;
+        { !owner } -> std::convertible_to<bool>;
+        { owner.reset(value) } noexcept;
+    }
+class Out
 {
     Owner &owner_;
     typename Owner::pointer value_ = nullptr;
@@ -48,13 +55,17 @@ public:
     }
 };
 
-template <class Owner> [[nodiscard]] auto out(Owner &owner)
+template <class Owner>
+    requires requires { typename Out<Owner>; }
+[[nodiscard]] auto out(Owner &owner)
 {
     return Out<Owner>(owner);
 }
 
 // Carry the owning Kerberos context in each deleter; destroy handles before the context.
-template <class T, auto Free> struct KrbDeleter
+template <class T, auto Free>
+    requires std::invocable<decltype(Free), krb5_context, T *>
+struct KrbDeleter
 {
     krb5_context context = nullptr;
 
@@ -66,7 +77,9 @@ template <class T, auto Free> struct KrbDeleter
 
 template <class T, auto Free> using KrbOwned = std::unique_ptr<T, KrbDeleter<T, Free>>;
 
-template <class T, auto Free> [[nodiscard]] auto krb_owner(krb5_context context, T *value = nullptr)
+template <class T, auto Free>
+    requires requires { typename KrbOwned<T, Free>; }
+[[nodiscard]] auto krb_owner(krb5_context context, T *value = nullptr)
 {
     return KrbOwned<T, Free>(value, {context});
 }

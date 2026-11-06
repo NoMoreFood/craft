@@ -131,14 +131,19 @@ inline void sysneed(bool ok, std::string_view message)
 }
 
 // Repeat a system call that a signal interrupted.
-template <std::invocable F> inline auto retry(F &&call)
+template <class F>
+    requires requires(F &call)
+    {
+        { call() } -> std::signed_integral;
+    }
+inline auto retry(F &&call)
 {
     for (;;)
         if (const auto result = call(); result >= 0 || errno != EINTR) return result;
 }
 
 // Run a nonthrowing cleanup exactly once unless dismissed.
-template <std::invocable F>
+template <class F>
     requires std::is_nothrow_invocable_v<F &> && std::is_nothrow_move_constructible_v<F>
 class ScopeExit
 {
@@ -516,8 +521,8 @@ inline pid_t waitpid_retry(pid_t pid, int *status = nullptr, int options = 0)
 
 // Fork a child that runs `body` and exits with its result. The child never returns into the parent's frames,
 // so a failure cannot unwind into the parent's logic or run its cleanup a second time.
-template <std::invocable F>
-    requires std::convertible_to<std::invoke_result_t<F>, int>
+template <class F>
+    requires std::invocable<F &> && std::convertible_to<std::invoke_result_t<F &>, int>
 inline pid_t fork_child(F &&body)
 {
     const pid_t pid = fork();

@@ -36,13 +36,15 @@ extern "C" krb5_error_code __wrap_krb5_get_renewed_creds(
 }
 
 // OpenSSL keeps a per-thread error queue; start and leave each check with it empty.
-static void test(std::string_view name, std::invocable auto &&f)
+static void test(std::string_view name, auto &&f)
+    requires std::invocable<decltype(f) &>
 {
     ERR_clear_error();
     testing::test(name, f);
 }
 
-static void rejects(std::invocable auto &&f)
+static void rejects(auto &&f)
+    requires std::invocable<decltype(f) &>
 {
     testing::rejects(f);
     ERR_clear_error();
@@ -169,6 +171,29 @@ static krb5_creds make_test_creds(krb5_principal client,
 static void helper_tests()
 {
     static_assert(!std::copy_constructible<Fd> && std::movable<Fd>);
+
+    test("callbacks are invoked as lvalues even when passed as temporaries",
+         []
+         {
+             struct Callback
+             {
+                 int &calls;
+
+                 int operator()() & noexcept
+                 {
+                     return calls++;
+                 }
+             };
+
+             int calls = 0;
+             {
+                 ScopeExit cleanup(Callback{calls});
+             }
+             need(calls == 1, "scope cleanup was not called exactly once");
+             need(retry(Callback{calls}) == 1 && calls == 2, "retry did not call the callback");
+             Child child(fork_child(Callback{calls}));
+             need(child.wait(2) && calls == 2, "child callback returned or modified the parent's state");
+         });
 
     test("Linux account names enforce ASCII syntax and length boundaries",
          []
@@ -612,7 +637,8 @@ static void process_tests()
     test("a failure shows the caller its summary and keeps the detail for the audit log",
          [&]
          {
-             const auto failure = [](std::invocable auto &&operation)
+             const auto failure = [](auto &&operation)
+                 requires std::invocable<decltype(operation) &>
              {
                  try
                  {
@@ -632,7 +658,8 @@ static void process_tests()
                   "an unexpected failure was described to the caller");
 
              // System paths, configuration, server text and library text stay out of the caller's notice.
-             const auto hides = [&](std::string_view detail, std::invocable auto &&operation)
+             const auto hides = [&](std::string_view detail, auto &&operation)
+                 requires std::invocable<decltype(operation) &>
              {
                  const auto [what, shown] = failure(operation);
                  if (what.find(detail) == what.npos || shown.find(detail) != shown.npos ||

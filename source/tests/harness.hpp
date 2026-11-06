@@ -13,7 +13,8 @@ inline int passed = 0, failed = 0;
 
 // Run one named check. Integration harnesses stop at the first failure, since later checks build on its
 // state.
-inline void test(std::string_view name, std::invocable auto &&check, bool stop_on_failure = false)
+inline void test(std::string_view name, auto &&check, bool stop_on_failure = false)
+    requires std::invocable<decltype(check) &>
 {
     try
     {
@@ -29,7 +30,8 @@ inline void test(std::string_view name, std::invocable auto &&check, bool stop_o
     }
 }
 
-inline void rejects(std::invocable auto &&operation)
+inline void rejects(auto &&operation)
+    requires std::invocable<decltype(operation) &>
 {
     bool rejected = false;
     try

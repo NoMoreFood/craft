@@ -22,6 +22,8 @@ inline std::string trim(std::string_view text)
 }
 
 template <std::unsigned_integral T = uint32_t>
+    requires std::same_as<T, std::remove_cv_t<T>> &&
+             requires(const char *first, const char *last, T &value) { std::from_chars(first, last, value); }
 inline T number(std::string_view text, std::type_identity_t<T> maximum = std::numeric_limits<T>::max())
 {
     T value{};

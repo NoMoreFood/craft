@@ -88,7 +88,12 @@ inline Fd memory_file(const char *name, ByteView b)
 
 // Serialize PEM straight into a memory file and erase OpenSSL's buffer, so no other copy of a private key
 // remains.
-template <std::invocable<BIO *> Write> inline Fd pem_file(const char *name, Write write)
+template <class Write>
+    requires requires(Write &write, const Bio &bio)
+    {
+        { write(bio.get()) } -> std::same_as<int>;
+    }
+inline Fd pem_file(const char *name, Write write)
 {
     const Bio bio(BIO_new(BIO_s_mem()));
     sslneed(bio != nullptr, "PEM buffer allocate");
