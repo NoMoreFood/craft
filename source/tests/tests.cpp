@@ -1165,6 +1165,17 @@ static void revision_tests(const Config &cfg, const Mapping &map, EVP_PKEY *key,
                  });
          });
 
+    test("a certificate backdated by decades exceeds the total validity cap",
+         [&]
+         {
+             reject_leaf(
+                 [](X509 *c)
+                 {
+                     sslneed(ASN1_TIME_set_string(X509_getm_notBefore(c), "19500101000000Z") == 1,
+                             "backdated fixture validity");
+                 });
+         });
+
     test("missing non-CA constraint rejected",
          [&] { reject_leaf([](X509 *c) { remove_ext(c, "2.5.29.19"); }); });
 

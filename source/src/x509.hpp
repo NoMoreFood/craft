@@ -436,7 +436,8 @@ inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Conf
     const auto upn = certificate_upn(c);
     const time_t now = time(nullptr), start = as_time(X509_get0_notBefore(c)),
                  end = as_time(X509_get0_notAfter(c));
-    need(start <= now && end > now + 60, "certificate is not currently valid for at least 60 seconds");
+    need(start <= now && static_cast<int64_t>(end) > static_cast<int64_t>(now) + 60,
+         "certificate is not currently valid for at least 60 seconds");
 
     // The KDC alone maps a supplied home certificate to its account; the fallbacks bind the directory UPN
     // here.
@@ -445,9 +446,10 @@ inline time_t validate_leaf(X509 *c, EVP_PKEY *key, const Mapping &m, const Conf
     if (source == CertificateSource::Enrollment)
     {
         need(certificate_template(c) == cfg.template_oid, "CA returned the wrong certificate template");
-        need(end - start > 0 && end - start <= cfg.cert_total,
+        const auto total = static_cast<int64_t>(end) - start;
+        need(total > 0 && total <= cfg.cert_total,
              "CA issued a certificate with excessive total validity");
-        need(end - now <= cfg.cert_remaining,
+        need(static_cast<int64_t>(end) - now <= cfg.cert_remaining,
              "CA issued a certificate with excessive remaining validity; configure the short-lived template");
     }
     return end;
