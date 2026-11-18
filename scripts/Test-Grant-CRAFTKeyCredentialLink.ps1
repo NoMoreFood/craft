@@ -212,4 +212,34 @@ $otherSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-21-111-22
     Write-Host "PASS: privileged membership checks for users and entire OUs"
 }
 
+& {
+    $containerDN = 'CN=Users,DC=fixture'
+    $fixtureAcl = [System.DirectoryServices.ActiveDirectorySecurity]::new()
+    $fixtureAcl.AddAccessRule((New-KeyCredentialRule $sid $attribute $userClass $true))
+    $writes = [System.Collections.Generic.List[string]]::new()
+    function Import-Module($Name) { Assert ($Name -eq 'ActiveDirectory') "Unexpected module." }
+    function Get-ADRootDSE { @{ schemaNamingContext = 'CN=Schema,DC=fixture' } }
+    function Get-ADUser { @{ SID = $sid; SamAccountName = 'svc' } }
+    function Get-ADObject($Identity, $LDAPFilter)
+    {
+        if ($Identity -eq $containerDN) { return @{ objectClass = 'container'; DistinguishedName = $containerDN } }
+        if ($LDAPFilter -like '*msDS-KeyCredentialLink*') { return @{ schemaIDGUID = $attribute } }
+        return @{ schemaIDGUID = $userClass }
+    }
+    function Get-Acl($LiteralPath)
+    {
+        Assert ($LiteralPath -eq "AD:\$containerDN") "Unexpected delegation ACL path."
+        return $fixtureAcl
+    }
+    function Set-Acl($LiteralPath, $AclObject) { $writes.Add($LiteralPath) }
+
+    $refused = $false
+    try { & $scriptPath -ServiceAccount svc -TargetOU $containerDN -Confirm:$false }
+    catch { $refused = $_.Exception.Message -like 'Refusing to delegate over the default container*' }
+    Assert ($refused -and $writes.Count -eq 0) "Default container grant was allowed."
+    & $scriptPath -ServiceAccount svc -TargetOU $containerDN -Remove -Confirm:$false
+    $rules = $fixtureAcl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])
+    Assert ($writes.Count -eq 1 -and $writes[0] -eq "AD:\$containerDN" -and !$rules.Count) "Revocation failed."
+}
+Write-Host "PASS: default container delegation can be revoked without a force override"
 Write-Host "`nAll offline delegation checks passed. No Active Directory objects were read or modified."

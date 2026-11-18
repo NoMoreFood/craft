@@ -238,7 +238,6 @@ $trusteeSid = [System.Security.Principal.SecurityIdentifier]$trustee.SID
 Write-Info "Service account : $($trustee.SamAccountName) (SID: $($trusteeSid.Value))"
 
 # Resolve the target object and confirm it is the expected kind for this parameter set.
-$defaultContainers = @("CN=Users,", "CN=Computers,", "CN=Managed Service Accounts,")
 if ($PSCmdlet.ParameterSetName -eq "OU")
 {
     $target = Get-ADObject -Identity $TargetOU -Properties objectClass
@@ -248,12 +247,9 @@ if ($PSCmdlet.ParameterSetName -eq "OU")
     }
     $targetDN = $target.DistinguishedName
     $isUser = $false
-    foreach ($container in $defaultContainers)
+    if (-not $Remove -and -not $Force -and $targetDN -match '^CN=(Users|Computers|Managed Service Accounts),')
     {
-        if ($targetDN -like "$container*" -and -not $Force)
-        {
-            throw "Refusing to delegate over the default container '$targetDN'. Use a dedicated OU, or pass -Force."
-        }
+        throw "Refusing to delegate over the default container '$targetDN'. Use a dedicated OU, or pass -Force."
     }
     Write-Info "Target OU       : $targetDN (inherited to descendant user objects)"
 }
@@ -276,7 +272,7 @@ Write-Info "msDS-KeyCredentialLink : $attributeGuid"
 # Apply or revoke the delegation on the target's security descriptor.
 # -----------------------------------------------------------------------------
 $aclPath = "AD:\$targetDN"
-$acl = Get-Acl -Path $aclPath
+$acl = Get-Acl -LiteralPath $aclPath
 $rule = New-KeyCredentialRule $trusteeSid $attributeGuid $userClassGuid (-not $isUser)
 $existing = @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) |
     Where-Object { Test-KeyCredentialRule $_ $rule })
@@ -295,7 +291,7 @@ if ($Remove)
     }
     if ($PSCmdlet.ShouldProcess($targetDN, "Remove msDS-KeyCredentialLink write for $($trustee.SamAccountName)"))
     {
-        Set-Acl -Path $aclPath -AclObject $acl
+        Set-Acl -LiteralPath $aclPath -AclObject $acl
         Write-Info "Delegation removed."
     }
     return
@@ -314,7 +310,7 @@ if (-not $PSCmdlet.ShouldProcess($targetDN, "Grant msDS-KeyCredentialLink write 
 {
     return
 }
-Set-Acl -Path $aclPath -AclObject $acl
+Set-Acl -LiteralPath $aclPath -AclObject $acl
 Write-Info "Delegation granted (ReadProperty, WriteProperty on msDS-KeyCredentialLink only)."
 
 Write-Host @"

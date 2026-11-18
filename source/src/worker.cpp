@@ -43,7 +43,7 @@ int main(int argc, char **argv)
     uid_t requesting_uid = 0;
     const pid_t request = getppid(); // the launcher, whose own records carry this number
     KeyCredentialGuard published;
-    bool may_continue = true, credentials_ready = false;
+    bool may_continue = false, credentials_ready = false;
     try
     {
         // Reset inherited state and select the caller or dedicated-account workflow.
@@ -52,8 +52,7 @@ int main(int argc, char **argv)
         const auto selected = std::ranges::find(MODE_NAMES, mode);
         need(policy || selected != MODE_NAMES.end(), "worker is not a public interface; use craft");
         const std::string_view attempt = argv[4];
-        need(attempt.size() == 32 && attempt.find_first_not_of("0123456789abcdef") == attempt.npos,
-             "invalid acquisition identifier");
+        need(is_hex_id(attempt), "invalid acquisition identifier");
         sysneed(clearenv() == 0 && setenv("KRB5_CONFIG", path("krb5.conf").c_str(), 1) == 0 &&
                     setenv("HOME", "/nonexistent", 1) == 0 && setenv("LANG", "C", 1) == 0,
                 "set worker environment");
@@ -75,6 +74,7 @@ int main(int argc, char **argv)
         need(caller.name == m.name, "runtime UID/name changed; administrator review required");
         const Config cfg = config(policy ? std::optional<CertificateSource>{}
                                          : static_cast<CertificateSource>(selected - MODE_NAMES.begin()));
+        may_continue = true;
         const bool delegated = cfg.source == CertificateSource::ConstrainedDelegation;
         UserIdentityFiles files;
         if (home || policy)

@@ -155,8 +155,9 @@ inline void validate_tgt(krb5_context ctx,
         need(!(creds.ticket_flags & TKT_FLG_RENEWABLE) && till == 0,
              "KDC returned a renewable credential when renewal was not requested");
     require_aes_key(creds.keyblock);
-    need(start >= int64_t{requested_at} - 300 && start <= int64_t{now} + 300 && end > now && end > start &&
-             end - start <= int64_t{cfg.tgt} + 5 && end <= int64_t{now} + cfg.tgt + 5,
+    need(creds.times.authtime > 0 && start >= creds.times.authtime && start >= int64_t{requested_at} - 300 &&
+             start <= int64_t{now} + 300 && end > now && end > start && end - start <= int64_t{cfg.tgt} + 5 &&
+             end <= int64_t{now} + cfg.tgt + 5,
          "KDC returned an excessive/invalid TGT lifetime; synchronize clocks");
     if (end - start + 5 < cfg.tgt)
         short_grant(cfg,

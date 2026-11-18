@@ -77,9 +77,8 @@ directory_lookup(LDAP *ld, const Config &cfg, const std::string &base_dn, const 
                                      2,
                                      out(res));
 
-    // The size limit of two is deliberate: a truncated result still proves the name is ambiguous.
-    if ((rc != LDAP_SUCCESS && rc != LDAP_SIZELIMIT_EXCEEDED) || !res)
-        fail("LDAP search failed", ldap_err2string(rc));
+    // A server can impose a lower size limit than requested. Only a complete result proves uniqueness.
+    if (rc != LDAP_SUCCESS || !res) fail("LDAP search failed", ldap_err2string(rc));
     const int count = ldap_count_entries(ld, res.get());
     if (count == 0) fail(std::format("user '{}' not found in Active Directory", name));
     if (count != 1) fail(std::format("ambiguous user '{}': multiple Active Directory entries found", name));

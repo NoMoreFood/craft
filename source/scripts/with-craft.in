@@ -7,7 +7,6 @@ if [ "$#" -eq 0 ]; then
     printf '%s\n' 'Usage: with-craft command [argument ...]' >&2
     exit 2
 fi
-cache=$(@CRAFT_LAUNCHER@) || exit "$?"
-KRB5CCNAME=$cache
+KRB5CCNAME=$('@CRAFT_SHELL_LAUNCHER@') || exit "$?"
 export KRB5CCNAME
 exec "$@"

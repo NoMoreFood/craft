@@ -11,6 +11,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.section import WD_ORIENT, WD_SECTION_START
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -76,15 +77,13 @@ def dimensions(section, landscape=False):
     section.header_distance = section.footer_distance = Inches(0.25)
 
 
-def new_document(path, title, subtitle):
-    doc = Document(path)
-    for child in list(doc._element.body):
-        if child.tag != qn("w:sectPr"):
-            doc._element.body.remove(child)
-    for relation in list(doc.part.rels.values()):
-        if relation.reltype.endswith(("/hyperlink", "/image")):
-            doc.part.drop_rel(relation.rId)
-    dimensions(doc.sections[0])
+def new_document(title, subtitle):
+    doc = Document()
+    section = doc.sections[0]
+    dimensions(section)
+    note = doc.styles.add_style("Small Note", WD_STYLE_TYPE.PARAGRAPH)
+    note.font.size = Pt(8.5)
+    note.paragraph_format.space_after = Pt(3)
     for name in ("Normal", "Title", "Subtitle", "Heading 1", "Heading 2", "Caption", "Small Note"):
         style = doc.styles[name]
         style.font.name = "Calibri"
@@ -100,10 +99,11 @@ def new_document(path, title, subtitle):
     for name, size in (("Title", 25), ("Heading 1", 16), ("Heading 2", 12), ("Caption", 8.5)):
         doc.styles[name].font.size = Pt(size)
     doc.styles["Title"].paragraph_format.space_after = Pt(7)
+    doc.styles["Title"].paragraph_format.keep_with_next = True
     for name in ("Heading 1", "Heading 2"):
         doc.styles[name].paragraph_format.space_before = Pt(10)
         doc.styles[name].paragraph_format.space_after = Pt(5)
-    code = doc.styles["Code Block"]
+    code = doc.styles.add_style("Code Block", WD_STYLE_TYPE.PARAGRAPH)
     code.font.name = "Consolas"
     code.font.size = Pt(9)
     code.font.color.rgb = RGBColor(0, 0, 0)
@@ -112,19 +112,15 @@ def new_document(path, title, subtitle):
     doc.core_properties.title = title
     doc.core_properties.subject = "CRAFT Linux operating modes and PKINIT setup"
     doc.core_properties.author = "CRAFT"
-    for section in doc.sections:
-        for part in (section.header, section.footer):
-            for child in list(part._element):
-                part._element.remove(child)
-        p = section.header.add_paragraph("CRAFT | " + title)
-        p.style = doc.styles["Small Note"]
-        p.runs[0].font.color.rgb = RGBColor(0, 0, 0)
-        p.runs[0].font.size = Pt(9)
-        p = section.footer.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        field = OxmlElement("w:fldSimple")
-        field.set(qn("w:instr"), "PAGE")
-        p._p.append(field)
+    p = section.header.paragraphs[0]
+    p.style = note
+    p.add_run("CRAFT | " + title).font.size = Pt(9)
+    p = section.footer.paragraphs[0]
+    p.style = normal
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    field = OxmlElement("w:fldSimple")
+    field.set(qn("w:instr"), "PAGE")
+    p._p.append(field)
     doc.add_paragraph(title, "Title")
     doc.add_paragraph(subtitle, "Subtitle")
     return doc
@@ -230,7 +226,7 @@ def license_and_references(doc):
 
 def process_guide(images):
     path = ROOT / "docs/01-CRAFT-Process-Overview.docx"
-    doc = new_document(path,
+    doc = new_document(
         "CRAFT Linux Operating Modes and Tickets",
         "Certificate Request Agent for Tickets  |  Process overview")
     paragraph(doc, (
@@ -458,7 +454,7 @@ def process_guide(images):
 
 def configuration_guide():
     path = ROOT / "docs/02-CRAFT-Configuration-and-Validation.docx"
-    doc = new_document(path, "CRAFT Configuration and Validation", (
+    doc = new_document("CRAFT Configuration and Validation", (
         'Certificate Request Agent for Tickets  |  Administrator reference'
     ))
     paragraph(doc, (

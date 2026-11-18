@@ -493,12 +493,25 @@ inline void prune_stale_files(int home, time_t now, time_t age = 7 * 86400) noex
         if (copy >= 0) ::close(copy);
         return;
     }
-    const auto prefix = std::string(CACHE_NAME) + ".", status_prefix = prefix + "maintain.";
+    const auto status_prefix = std::string(CACHE_NAME) + ".maintain.";
     while (const dirent *entry = readdir(listing))
     {
-        const std::string_view name = entry->d_name;
-        const bool status = name.starts_with(status_prefix) && name.ends_with(".status");
-        if (!status && !(name.starts_with(prefix) && name.find(".tmp.") != name.npos)) continue;
+        std::string_view name = entry->d_name;
+        if (!name.starts_with(CACHE_NAME)) continue;
+        const auto tmp = name.rfind(".tmp.");
+        if (tmp != name.npos)
+        {
+            if (!is_hex_id(name.substr(tmp + 5))) continue;
+            name = name.substr(0, tmp);
+        }
+        if (tmp == name.npos || name != CACHE_NAME)
+        {
+            if (!name.starts_with(status_prefix)) continue;
+            pid_t pid{};
+            const auto parsed =
+                std::from_chars(name.data() + status_prefix.size(), name.data() + name.size(), pid);
+            if (parsed.ec != std::errc{} || pid <= 0 || name != status_name(pid)) continue;
+        }
         struct stat st
         {
         };

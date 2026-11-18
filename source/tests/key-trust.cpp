@@ -12,6 +12,7 @@ struct DirectoryFixture
 {
     int attached = 0, removals = 0, wrong_target = 0, add_result = LDAP_SUCCESS, delete_result = LDAP_SUCCESS;
     int bind_result = LDAP_SUCCESS, lock_retained = 0, add_delay_ms = 0;
+    bool inspected_partial = false;
     volatile pid_t guardian = 0;
     ino_t lock_inode = 0;
 };
@@ -42,6 +43,26 @@ extern "C" int __wrap_ldap_sasl_interactive_bind_s(LDAP *,
 }
 
 extern "C" int __wrap_ldap_unbind_ext_s(LDAP *, LDAPControl **, LDAPControl **)
+{
+    return LDAP_SUCCESS;
+}
+
+// A server-side size limit can leave a partial result even when the client asked for two entries.
+extern "C" int __wrap_ldap_search_ext_s(
+    LDAP *, const char *, int, const char *, char **, int, LDAPControl **, LDAPControl **,
+    timeval *, int, LDAPMessage **result)
+{
+    *result = reinterpret_cast<LDAPMessage *>(directory_fixture);
+    return LDAP_SIZELIMIT_EXCEEDED;
+}
+
+extern "C" int __wrap_ldap_count_entries(LDAP *, LDAPMessage *)
+{
+    directory_fixture->inspected_partial = true;
+    return 0;
+}
+
+extern "C" int __wrap_ldap_msgfree(LDAPMessage *)
 {
     return LDAP_SUCCESS;
 }
@@ -158,6 +179,13 @@ int main()
         (void)log.records();
         testing::test(name, check);
     };
+
+    test("a truncated directory search cannot establish the caller's identity",
+         [&]
+         {
+             testing::rejects([&] { (void)directory_lookup(nullptr, cfg, "DC=fixture", "alice"); });
+             need(!directory_fixture->inspected_partial, "partial directory entries were used");
+         });
 
     test("lost add response still removes the committed value by GUID",
          [&]

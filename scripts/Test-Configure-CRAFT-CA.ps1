@@ -122,7 +122,7 @@ Write-Host "PASS: provisioning parameter validation"
 
 & {
     # Generate the client files from synthetic directory and domain data.
-    $domain = [pscustomobject]@{ DNSRoot = 'example.com'; NetBIOSName = 'EXAMPLE' }
+    $domain = [pscustomobject]@{ DNSRoot = 'Example.COM'; NetBIOSName = 'Example' }
     $cesUrl = [uri]'https://ces.example.com/service.svc/CES'
     $ExportPath = Join-Path $env:USERPROFILE "CRAFT.Tests.$([Guid]::NewGuid().ToString('N'))"
     [System.IO.Directory]::CreateDirectory($ExportPath) | Out-Null
@@ -486,14 +486,14 @@ Write-Host "PASS: scoped CA restrictions, malformed policy rejection and fail-cl
     catch { $rejected = $true }
     Assert $rejected "The agent was allowed to change its own template permissions."
     $writes = [System.Collections.Generic.List[object]]::new()
-    function Get-Acl([string]$Path)
+    function Get-Acl([string]$LiteralPath)
     {
-        Assert ($Path -eq 'AD:offline-template') "ACL test accessed a real template."
+        Assert ($LiteralPath -eq 'AD:\offline-template') "ACL test accessed a real template."
         return $currentAcl
     }
-    function Set-Acl([string]$Path, $AclObject)
+    function Set-Acl([string]$LiteralPath, $AclObject)
     {
-        Assert ($Path -eq 'AD:offline-template') "ACL test wrote an unexpected template."
+        Assert ($LiteralPath -eq 'AD:\offline-template') "ACL test wrote an unexpected template."
         $writes.Add($AclObject)
     }
     Set-EnrollmentTemplatePermissions 'offline-template' @($administrator.Value) $agent $false

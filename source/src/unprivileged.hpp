@@ -13,6 +13,11 @@ inline std::string text_of(ByteView bytes)
     return {bytes.begin(), bytes.end()};
 }
 
+inline bool is_hex_id(std::string_view value)
+{
+    return value.size() == 32 && value.find_first_not_of("0123456789abcdef") == value.npos;
+}
+
 // Parse unsigned values without locale rules or implicit coercions.
 inline std::string trim(std::string_view text)
 {
@@ -106,8 +111,7 @@ inline Fd rate_limit(int directory, uid_t uid, uint32_t interval, time_t now, st
     if (const auto last = read_record(lock.get()); !last.empty())
     {
         const auto space = last.find(' ');
-        need(space != last.npos && last.size() - space == 33 &&
-                 last.find_first_not_of("0123456789abcdef", space + 1) == last.npos,
+        need(space != last.npos && is_hex_id(std::string_view(last).substr(space + 1)),
              "invalid issuance state");
         const auto then = number<uint64_t>(std::string_view(last).substr(0, space));
         const auto current = static_cast<uint64_t>(now);

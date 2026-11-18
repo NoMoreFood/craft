@@ -23,11 +23,12 @@ chmod 0644 "$audit"
 rm -f /dev/log
 "$build/craft-tests" --collect-audit /dev/log "$audit" &
 collector=$!
-trap 'kill "$collector" 2>/dev/null; rm -f "$audit" /dev/log' EXIT
-for attempt in 1 2 3 4 5; do
+trap 'kill "$collector" 2>/dev/null || :; wait "$collector" 2>/dev/null || :; rm -f "$audit" /dev/log' EXIT
+for _ in 1 2 3 4 5; do
     [ -S /dev/log ] && break
     sleep 1
 done
+[ -S /dev/log ] || { echo "Test audit collector did not start." >&2; exit 1; }
 
 # Run the harness once per way of watching the job: a pidfd, and the /proc form used where pidfd_open is missing.
 install -o root -g root -m 0755 "$build/craft-tests" /usr/local/bin/craft

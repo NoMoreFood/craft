@@ -385,6 +385,7 @@ inline Account service_account()
 enum class Trusted
 {
     Data,
+    OptionalData,
     Secret,
     Worker,
     Launcher
@@ -408,6 +409,7 @@ enum class Trusted
         require(!part.empty() && part != "." && part != "..", "invalid trusted path component");
         const int flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (last ? O_NONBLOCK : O_DIRECTORY);
         Fd next(::openat(dir.get(), part.c_str(), flags));
+        if (next.get() < 0 && errno == ENOENT && last && kind == Trusted::OptionalData) return next;
         if (next.get() < 0) fail(std::format("open trusted file: {}", std::strerror(errno)), path);
         struct stat st
         {
@@ -426,10 +428,9 @@ enum class Trusted
                 require(st.st_size >= 0 && static_cast<uint64_t>(st.st_size) <= 8 * MAX_BLOB,
                         "trusted file is too large");
 
-            // Root owns a secret and others are denied, so only the service account's group can have opened
-            // it.
             if (kind == Trusted::Secret)
-                require(!(st.st_mode & 0007), "secret must not be accessible to other users");
+                require(!(st.st_mode & 0007) && (!(st.st_mode & 0070) || st.st_gid == getegid()),
+                        "secret must be accessible only to root and the service group");
             return next;
         }
         require(S_ISDIR(st.st_mode), "trusted parent is not a directory");
@@ -461,15 +462,22 @@ inline void close_listed_from(int first)
 {
     DIR *listing = opendir("/proc/self/fd");
     sysneed(listing != nullptr, "enumerate open descriptors");
+    ScopeExit cleanup([&]() noexcept { closedir(listing); });
     std::vector<int> open;
-    while (const dirent *entry = readdir(listing))
+    for (;;)
     {
+        errno = 0;
+        const dirent *entry = readdir(listing);
+        if (!entry)
+        {
+            sysneed(errno == 0, "read open descriptor list");
+            break;
+        }
         int fd{};
         const auto end = entry->d_name + ::strnlen(entry->d_name, sizeof(entry->d_name));
         if (std::from_chars(entry->d_name, end, fd).ptr == end && fd >= first && fd != dirfd(listing))
             open.push_back(fd);
     }
-    closedir(listing);
     for (const int fd : open)
         ::close(fd);
 }

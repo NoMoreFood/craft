@@ -2,6 +2,7 @@
 
 // Strict parsing of the administrator's configuration, independent of privileged file access.
 #include "unprivileged.hpp"
+#include <libxml/uri.h>
 #include <map>
 #include <optional>
 #include <ranges>
@@ -46,9 +47,13 @@ inline bool plain_url(std::string_view url, std::string_view scheme)
 {
     if (!url.starts_with(scheme) || url.size() > 2048) return false;
     const auto rest = url.substr(scheme.size());
-    return !rest.empty() && rest.front() != '/' && rest.front() != ':' &&
-           rest.find_first_of("@?#\\") == rest.npos &&
-           std::ranges::all_of(rest, [](unsigned char c) { return c > 32 && c < 127; });
+    if (rest.find_first_of("@?#\\") != rest.npos ||
+        !std::ranges::all_of(rest, [](unsigned char c) { return c > 32 && c < 127; }))
+        return false;
+    const auto uri = xmlParseURI(std::string(url).c_str());
+    if (!uri) return false;
+    ScopeExit release([&]() noexcept { xmlFreeURI(uri); });
+    return uri->server && *uri->server && uri->port <= UINT16_MAX;
 }
 
 // Validate the whole enabled policy before acquisition; a worker may select only a listed mode.

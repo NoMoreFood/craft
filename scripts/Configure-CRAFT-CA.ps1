@@ -342,8 +342,8 @@ function Assert-EnrollmentTemplateAcl($Acl, [string]$AgentSid, [string[]]$Admini
 function Set-EnrollmentTemplatePermissions([string]$DistinguishedName, [string[]]$AdministratorSids,
     [System.Security.Principal.SecurityIdentifier]$AgentSid, [bool]$RemoveAuthenticatedEnroll)
 {
-    $path = "AD:$DistinguishedName"
-    $acl = Get-Acl -Path $path
+    $path = "AD:\$DistinguishedName"
+    $acl = Get-Acl -LiteralPath $path
     $enroll = [Guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55'
     $sidType = [System.Security.Principal.SecurityIdentifier]
     if ($RemoveAuthenticatedEnroll)
@@ -362,8 +362,8 @@ function Set-EnrollmentTemplatePermissions([string]$DistinguishedName, [string[]
     $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new(
         $AgentSid, 'ExtendedRight', 'Allow', $enroll))
     $acl.AddAccessRule([System.DirectoryServices.ActiveDirectoryAccessRule]::new($AgentSid, 'GenericRead', 'Allow'))
-    Set-Acl -Path $path -AclObject $acl
-    Assert-EnrollmentTemplateAcl (Get-Acl -Path $path) $AgentSid.Value $AdministratorSids $DistinguishedName
+    Set-Acl -LiteralPath $path -AclObject $acl
+    Assert-EnrollmentTemplateAcl (Get-Acl -LiteralPath $path) $AgentSid.Value $AdministratorSids $DistinguishedName
 }
 
 function Assert-EnrollmentAgentRestrictions([byte[]]$Descriptor, [string]$AgentSid, [string]$TargetSid,
@@ -503,14 +503,15 @@ function Export-ClientConfiguration([string]$Directory, $Domain, [string]$Templa
     [string]$Agent, [string]$Kdc, [int]$Hours, [int]$KeyBits)
 {
     # Keep both templates in step with source/config/config.example and source/config/krb5.conf.example.
+    $dnsRoot = $Domain.DNSRoot.ToLowerInvariant()
     $realm = $Domain.DNSRoot.ToUpperInvariant()
     $tgtHours = [Math]::Min($Hours, 10)
     @"
 enabled=no
 modes=enrollment
-domain=$($Domain.DNSRoot)
+domain=$dnsRoot
 realm=$realm
-netbios=$($Domain.NetBIOSName)
+netbios=$($Domain.NetBIOSName.ToUpperInvariant())
 template_oid=$TemplateOid
 certificate_cn={user}
 key_bits=$KeyBits
@@ -552,8 +553,8 @@ minimum_interval_seconds=60
     }
 
 [domain_realm]
-    .$($Domain.DNSRoot) = $realm
-    $($Domain.DNSRoot) = $realm
+    .$dnsRoot = $realm
+    $dnsRoot = $realm
 "@ | Set-Content -LiteralPath (Join-Path $Directory "krb5.conf") -Encoding ASCII
 }
 
@@ -652,7 +653,7 @@ if (@($caller.Groups.Value | Where-Object { $_ -in $administratorSids -and $_ -l
     $administratorSids += $caller.User.Value
 }
 $agentTemplateDN = "CN=EnrollmentAgent,$templatesDN"
-$agentTemplateAcl = Get-Acl -Path "AD:$agentTemplateDN"
+$agentTemplateAcl = Get-Acl -LiteralPath "AD:\$agentTemplateDN"
 Assert-EnrollmentTemplateAcl $agentTemplateAcl $agentSid.Value $administratorSids 'EnrollmentAgent'
 
 $templateExists = [ADSI]::Exists($templateLdapPath)

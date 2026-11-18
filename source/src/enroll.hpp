@@ -330,11 +330,7 @@ inline std::string send_ces(const Config &cfg, const std::string &request)
     need(capath == CURLE_OK || capath == CURLE_NOT_BUILT_IN, "curl CA directory option rejected");
 
     // An optional CRL bundle enforces revocation for the whole CES server chain.
-    if (access(crls.c_str(), F_OK) == 0)
-    {
-        require_trusted(crls);
-        opt(CURLOPT_CRLFILE, crls.c_str());
-    }
+    if (root_open(crls, Trusted::OptionalData).get() >= 0) opt(CURLOPT_CRLFILE, crls.c_str());
 
     // Permit only configured Negotiate or mTLS; CES must disallow GSS NTLM fallback.
     if (cfg.ces_negotiate)

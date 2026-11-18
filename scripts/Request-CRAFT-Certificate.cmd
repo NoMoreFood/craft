@@ -158,7 +158,7 @@ namespace Craft
             public uint Spec;
         }
 
-        public static string KeyContainer(X509Certificate2 certificate)
+        public static string KeyContainer(X509Certificate2 certificate, bool userOnly)
         {
             // Read provider metadata without opening private keys or prompting for a hardware-key PIN.
             uint size = 0;
@@ -169,6 +169,8 @@ namespace Craft
             {
                 if (!CertGetCertificateContextProperty(certificate.Handle, 2, buffer, ref size)) return null;
                 KeyProviderInfo info = (KeyProviderInfo)Marshal.PtrToStructure(buffer, typeof(KeyProviderInfo));
+                // Current-user stores cannot establish exclusive ownership of a machine key.
+                if (userOnly && (info.Flags & 0x20) != 0) return null;
                 string container = Marshal.PtrToStringUni(info.Container);
                 string provider = Marshal.PtrToStringUni(info.Provider);
                 if (String.IsNullOrEmpty(container) || String.IsNullOrEmpty(provider)) return null;
@@ -218,11 +220,12 @@ namespace Craft
             return result;
         }
 
-        public static void ValidateProfile(X509Certificate2 certificate, bool current)
+        public static void ValidateProfile(X509Certificate2 certificate)
         {
             // Match CRAFT's leaf policy before accepting an export; Linux separately checks trust and CRLs.
-            if (current && (certificate.NotBefore.ToUniversalTime() > DateTime.UtcNow ||
-                certificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow.AddSeconds(60)))
+            DateTime now = DateTime.UtcNow;
+            if (certificate.NotBefore.ToUniversalTime() > now ||
+                certificate.NotAfter.ToUniversalTime() <= now.AddSeconds(60))
                 throw new InvalidOperationException("Certificate must be currently valid for at least 60 seconds.");
 
             // An end-entity certificate may omit basicConstraints, as stock AD CS templates do; one that is
@@ -565,7 +568,11 @@ function Repair-CraftCertificateTransaction($Target)
             if ($current[$name] -eq $journal.Previous.PSObject.Properties[$name].Value) { continue }
             $path = Join-Path $Target.Path $name
             $temporary = Join-Path $stage ('restore-' + $name)
-            if (Test-Path -LiteralPath $temporary) { Assert-CraftPrivatePath $temporary; [IO.File]::Delete($temporary) }
+            if (Test-Path -LiteralPath $temporary)
+            {
+                Assert-CraftPrivatePath $temporary -AllowEmpty
+                [IO.File]::Delete($temporary)
+            }
             [IO.File]::Copy((Join-Path $stage ('old-' + $name)), $temporary, $false)
             if (Test-Path -LiteralPath $path)
             {
@@ -617,7 +624,7 @@ function Remove-CraftStoredCertificate([string]$Thumbprint)
     try
     {
         # A CSP container can hold two different public keys; compare the provider/container, not public keys.
-        $identity = [Craft.CertificateKeyExporter]::KeyContainer($certificate)
+        $identity = [Craft.CertificateKeyExporter]::KeyContainer($certificate, $true)
         if ($identity)
         {
             $exclusive = $true
@@ -626,7 +633,7 @@ function Remove-CraftStoredCertificate([string]$Thumbprint)
             foreach ($other in $others)
             {
                 if ($other.PSPath -eq $certificate.PSPath) { continue }
-                $container = [Craft.CertificateKeyExporter]::KeyContainer($other)
+                $container = [Craft.CertificateKeyExporter]::KeyContainer($other, $false)
                 if (($other.HasPrivateKey -and -not $container) -or
                     [string]::Equals($identity, $container, [StringComparison]::OrdinalIgnoreCase))
                 {
@@ -756,7 +763,7 @@ function Invoke-CraftCertificateEnrollment($Target, [string]$Template,
             $renewalStart = if ($null -eq $RenewBeforeDays) { $expiration.AddMonths(-1) }
                 else { $expiration.AddDays(-[double]$RenewBeforeDays) }
             $usable = $true
-            try { [Craft.CertificateKeyExporter]::ValidateProfile($previous.Certificate, $true) }
+            try { [Craft.CertificateKeyExporter]::ValidateProfile($previous.Certificate) }
             catch { $usable = $false }
             if ($usable -and [DateTime]::UtcNow -le $renewalStart)
             {
@@ -786,7 +793,7 @@ function Invoke-CraftCertificateEnrollment($Target, [string]$Template,
             throw "Certificate was not issued (status: $($result.Status))."
         }
         $certificate = $result.Certificate
-        [Craft.CertificateKeyExporter]::ValidateProfile($certificate, $true)
+        [Craft.CertificateKeyExporter]::ValidateProfile($certificate)
         if ($previous -and $certificate.Thumbprint -eq $previous.Certificate.Thumbprint)
         {
             throw 'Enrollment did not return a replacement certificate.'

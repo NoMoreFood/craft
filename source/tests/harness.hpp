@@ -33,16 +33,15 @@ inline void test(std::string_view name, auto &&check, bool stop_on_failure = fal
 inline void rejects(auto &&operation)
     requires std::invocable<decltype(operation) &>
 {
-    bool rejected = false;
     try
     {
         operation();
     }
     catch (const std::exception &)
     {
-        rejected = true;
+        return;
     }
-    if (!rejected) throw std::runtime_error("operation unexpectedly accepted invalid input");
+    throw std::runtime_error("operation unexpectedly accepted invalid input");
 }
 
 inline int finish(std::string_view note)

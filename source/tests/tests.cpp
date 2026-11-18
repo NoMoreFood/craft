@@ -18,6 +18,15 @@ static constexpr char OBJECTSID_OID[] = "1.3.6.1.4.1.311.25.2.1";
 static const krb5_creds *maintenance_grant = nullptr;
 static unsigned maintenance_renewals = 0;
 
+static bool directory_read_error = false;
+extern "C" dirent *__real_readdir(DIR *);
+extern "C" dirent *__wrap_readdir(DIR *dir)
+{
+    if (!directory_read_error) return __real_readdir(dir);
+    errno = EIO;
+    return nullptr;
+}
+
 // Substitute only the KDC exchange while exercising real cache reads, validation and publication.
 extern "C" krb5_error_code
 __real_krb5_get_renewed_creds(krb5_context, krb5_creds *, krb5_principal, krb5_ccache, const char *);
@@ -714,6 +723,9 @@ static void process_tests()
                               "https://host\\evil/",
                               "HTTPS://host/",
                               "https://:443/",
+                              "https://host:abc/",
+                              "https://host:65536/",
+                              "https://[::1/path",
                               "https://host/\x7f"})
                  need(!plain_url(url, "https://"), "unsafe URL accepted");
              need(!plain_url("https://host/" + std::string(2048, 'a'), "https://"), "oversized URL accepted");
@@ -857,12 +869,15 @@ static void process_tests()
                  need(file.get() >= 0 && futimens(file.get(), times) == 0, "prune fixture");
              };
              const auto stale = {".krb5cc_craft.maintain.111.status",
-                                 ".krb5cc_craft.tmp.0123",
-                                 ".krb5cc_craft.maintain.333.status.tmp.abcd"};
+                                 ".krb5cc_craft.tmp.0123456789abcdef0123456789abcdef",
+                                 ".krb5cc_craft.maintain.333.status.tmp.0123456789abcdef0123456789abcdef"};
              const auto kept = {".krb5cc_craft.maintain.222.status",
                                 ".krb5cc_craft",
                                 ".krb5cc_craft.lock",
                                 ".krb5cc_craft.maintain.lock",
+                                ".krb5cc_craft.maintain.notes.status",
+                                ".krb5cc_craft.maintain.111.status.tmp.backup",
+                                ".krb5cc_craft.lock.tmp.0123456789abcdef0123456789abcdef",
                                 "unrelated.status"};
              for (const char *name : stale)
                  make(name, 8 * 86400);
@@ -933,6 +948,14 @@ static void process_tests()
                  need(read_all(kept.reader.get(), 1) == Bytes{'k'} && child.wait(),
                       "descriptors leaked or were lost");
              });
+
+    test("an incomplete open descriptor list stops cleanup",
+         []
+         {
+             directory_read_error = true;
+             ScopeExit restore([]() noexcept { directory_read_error = false; });
+             rejects([] { close_listed_from(INT32_MAX); });
+         });
 
     test("a process watching its input pipe ends when the peer goes, and anything but a pipe is left alone",
          []
@@ -1070,6 +1093,14 @@ static void process_tests()
                       root_text(base + "/sub/file") == "x",
                   "trusted file unreadable");
              (void)root_open(base + "/secret", Trusted::Secret);
+             need(root_open(base + "/missing", Trusted::OptionalData).get() < 0 &&
+                      root_open(base + "/public", Trusted::OptionalData).get() >= 0,
+                  "optional trusted file presence");
+             sysneed(symlink("missing", (base + "/dangling").c_str()) == 0, "dangling symlink fixture");
+             rejects([&] { require_trusted(base + "/dangling", Trusted::OptionalData); });
+             rejects([&] { require_trusted(base + "/missing/child", Trusted::OptionalData); });
+             sysneed(chown((base + "/secret").c_str(), 0, 65534) == 0, "secret group fixture");
+             rejects([&] { require_trusted(base + "/secret", Trusted::Secret); });
              (void)root_open(base + "/program", Trusted::Worker);
              (void)root_open(base + "/setuid", Trusted::Launcher);
              need(truncate((base + "/program").c_str(), 9 * MAX_BLOB) == 0, "large program fixture");
@@ -1332,6 +1363,13 @@ static void revision_tests(const Config &cfg, const Mapping &map, EVP_PKEY *key,
 
     test("ten-hour AES256 ticket with seven-day renewal accepted",
          [&] { validate_tgt(ctx, cfg, creds, client.get(), server.get(), now, now); });
+
+    test("issuance rejects missing authentication time or a start before authentication",
+         [&]
+         {
+             reject_tgt([](auto &c) { c.times.authtime = 0; });
+             reject_tgt([](auto &c) { c.times.authtime = c.times.starttime + 1; });
+         });
 
     test("ten-hour AES128 ticket with seven-day renewal accepted",
          [&]

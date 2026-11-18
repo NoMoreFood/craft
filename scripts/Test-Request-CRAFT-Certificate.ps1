@@ -228,6 +228,22 @@ try
         }
         $script:certificatePath = 'Cert:\CurrentUser\My\' + $certificate.Thumbprint
         $fixtures.Add($script:certificatePath)
+        $principal = [System.Security.Principal.WindowsPrincipal]::new(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent())
+        if ($name -eq 'CNG-RSA' -and $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))
+        {
+            # Import a temporary machine-scoped key without installing a certificate in the machine store.
+            $pfx = $certificate.Export('Pfx', 'offline-test')
+            $machine = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $pfx, 'offline-test',
+                [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::MachineKeySet)
+            try
+            {
+                Assert ([Craft.CertificateKeyExporter]::KeyContainer($machine, $false) -and
+                    -not [Craft.CertificateKeyExporter]::KeyContainer($machine, $true)) 'Machine key marked exclusive.'
+            }
+            finally { $machine.Dispose(); [Array]::Clear($pfx, 0, $pfx.Length) }
+        }
         if ($name -eq 'Encrypted-export-only')
         {
             $sourceKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
@@ -631,6 +647,11 @@ Invoke-CraftCertificateEnrollment $target 'OfflineUserLogon'
         $command = '""' + $executable + '" -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + $encoded + '"'
         $result = Invoke-Cmd $command
         Assert ($result.ExitCode -eq 73) ("The $checkpoint crash was not reached: " + $result.Output)
+        if ($checkpoint -eq 'user.pem')
+        {
+            $stage = @(Get-ChildItem -LiteralPath $export.Path -Directory -Force)[0]
+            [IO.File]::Create((Join-Path $stage.FullName 'restore-user.pem')).Dispose()
+        }
         Assert (Test-Path -LiteralPath (Join-Path $export.Path '.craft-certificate.transaction.json')) `
             'A killed exporter left no durable recovery journal.'
         $before = $script:requests

@@ -14,6 +14,11 @@ set(CRAFT_CONFIG_DIR "/etc/craft" CACHE STRING "Root-owned configuration directo
 set(CRAFT_RUNTIME_DIR "/run/craft" CACHE STRING "Service account's private runtime directory")
 set(CRAFT_LAUNCHER "/usr/local/bin/craft" CACHE STRING "Installed path of the launcher")
 set(CRAFT_WORKER "/usr/local/libexec/craft-worker" CACHE STRING "Installed path of the worker")
+foreach(location IN ITEMS CRAFT_CONFIG_DIR CRAFT_RUNTIME_DIR CRAFT_LAUNCHER CRAFT_WORKER)
+  if(NOT IS_ABSOLUTE "${${location}}")
+    message(FATAL_ERROR "${location} must be an absolute path.")
+  endif()
+endforeach()
 
 # Fail early when the compiler library lacks the required C++20 facilities.
 include(CheckCXXSourceCompiles)
@@ -85,6 +90,7 @@ target_link_libraries(craft-worker PRIVATE PkgConfig::KRB5 PkgConfig::GSSAPI Pkg
 target_link_libraries(craft-maintain PRIVATE PkgConfig::KRB5)
 
 # Emit both optional wrappers executable whatever mode the checkout recorded.
+string(REPLACE "'" "'\\''" CRAFT_SHELL_LAUNCHER "${CRAFT_LAUNCHER}")
 foreach(wrapper IN ITEMS with-craft with-craft-gssproxy)
   configure_file("scripts/${wrapper}.in" "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${wrapper}"
                  @ONLY NEWLINE_STYLE UNIX)
@@ -99,12 +105,13 @@ if(BUILD_TESTING)
   add_executable(craft-tests tests/tests.cpp)
   target_link_libraries(craft-tests PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap Threads::Threads)
   # The tests collect audit records themselves: --wrap=connect points /dev/log at their own socket.
-  target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds,--wrap=connect)
+  target_link_options(craft-tests PRIVATE -Wl,--wrap=krb5_get_renewed_creds,--wrap=connect,--wrap=readdir)
   add_test(NAME offline-tests COMMAND craft-tests)
   add_executable(craft-key-trust-tests tests/key-trust.cpp)
   target_link_libraries(craft-key-trust-tests PRIVATE PkgConfig::KRB5 PkgConfig::WORKER craft-ldap)
   target_link_options(craft-key-trust-tests PRIVATE
     -Wl,--wrap=ldap_initialize,--wrap=ldap_set_option,--wrap=ldap_sasl_interactive_bind_s
+    -Wl,--wrap=ldap_search_ext_s,--wrap=ldap_count_entries,--wrap=ldap_msgfree
     -Wl,--wrap=ldap_modify_ext_s,--wrap=ldap_unbind_ext_s,--wrap=connect)
   add_test(NAME key-trust-cleanup COMMAND craft-key-trust-tests)
   add_executable(craft-delegation-tests tests/delegation.cpp)
